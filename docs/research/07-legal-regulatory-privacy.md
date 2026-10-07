@@ -829,34 +829,294 @@ The **"legal requirement"** column is what the law demands. The **"treatment"** 
 
 ## 12. Jurisdiction × feature risk matrix
 
-<!-- SECTION-12 -->
+Ratings are **inherent risk without guardrails** → **residual risk with the Section 13 MVP guardrails**.
+- **H** = likely claims or regulatory action with large exposure.
+- **M** = real but manageable.
+- **L** = low.
+- Confidence in the ratings is **Med**; they are analyst judgement built on Sections 2–11.
+
+| Feature ↓ / Jurisdiction → | US one-party states | US all-party states (CA, FL, IL, MD, MA, MT, NH, PA, WA, DE, MI*; split CT/NV/OR/MO) | India (v1) | EU (later) | UK (later) | Canada | Australia |
+|---|---|---|---|---|---|---|---|
+| **Always-on in-person recording** (work-only) | **M → L-M**. User is a party, so one-party consent holds. Risks: a recorder left running without the user present; crime-tort exception if the vendor uses the data; NY/CT/DE notice laws. | **H → M**. All-party consent needed for "confidential" conversations. Bystanders and visitors are the problem. CIPA $5,000 per violation. Wearer-only / consent mode is essential. | **M → L-M**. No all-party statute. SPDI now; DPDP consent or legitimate use from May 2027; outsiders need notice and consent. | **H → M-H**. GDPR Art. 13 notice, legitimate-interest balancing, works councils, DE §201 / FR 226-1 criminal laws. Emotion inference from voice prohibited. | **M-H → M**. ICO monitoring guidance; DPIA | **M → L-M**. One-party (Criminal Code), plus PIPEDA notice | **H → M**. NSW/WA/SA/Tas/ACT all-party-style rules; NSW workplace-surveillance notice |
+| **Meeting / call recording** (Teams) | **M → L**. Use Microsoft transcription or bots that signal `updateRecordingStatus`, which triggers the banner. | **H → M**. Host-only consent is insufficient (*Otter*). Announce to every participant; external meetings off by default. Bot-free silent capture → *Granola*-type claims. | **M → L**. Banner plus announcement plus policy; CERT-In logging | **M-H → M**. Art. 13 notice at the meeting; DPIA; works council | **M → L-M** | **M → L** | **M-H → M** |
+| **Voiceprints / speaker ID** | **M-H → L** (not built in MVP). TX CUBI and CO apply even in one-party states. | **H → L** (not built). IL **BIPA** with a private right of action; WA MHMDA for consumers. | **M → L**. SPDI biometrics need written consent. | **H → L**. Art. 9 explicit consent; possible AI Act "remote biometric identification" high-risk | **H → L** | **M → L** | **M → L** |
+| **Email / Teams ingestion** (persona learning) | **M → L**. Microsoft API Terms (express and specific grant); CCPA if CA residents; NY/CT/DE notice | **M → L**. CA: email contents = SPI; CPPA risk assessment | **M → L-M**. Third parties in old emails (new purpose) under DPDP; SPDI categories → mask at ingestion | **M-H → M**. Legitimate interests; Art. 14 notices; DPIA; works council | **M → L-M** | **M → L** | **M → L** |
+| **Persona drafting** (human-sent) | **L-M → L**. No AI-label law for human-sent mail; misuse/fraud is the main risk. | **L-M → L**. Same; CA SB 1001 only for misleading **bots** in sales or elections | **L-M → L**. IT Act s.66D / BNS s.319 for misuse | **M → L-M**. **Art. 50(2) machine-readable marking** of generated text likely; Art. 50(1) if autonomous | **L-M → L** | **L → L** | **L → L** |
+| **Autonomous sending** (not in v1) | **M** (UDAP, fraud, Utah disclosure on request) | **M-H** (SB 1001 for sales contexts) | **M** | **M-H** (Art. 50(1)) | **M** | **M** | **M** |
+| **Voice clone** (future) | **H** (ELVIS Act, NO FAKES if enacted, CA §3344/AB 2602, NY §50-51) | **H** | **H** (personality-rights injunctions) | **H** (Art. 50(4) deepfakes; GDPR) | **H** | **M-H** | **M-H** |
+
+\*Michigan: all-party consent at least for non-participant recorders.
+
+**Reading the matrix:**
+- The **two red zones in v1** are (1) in-person and meeting recording in US all-party states and (2) any voiceprint feature.
+- **India's risk is mostly regulatory and contractual readiness** (DPDP 2027, CERT-In, BFSI localisation) rather than litigation.
+- The EU is high-friction (works councils, the AI Act). Deferring it is the right call.
 
 ---
 
 ## 13. Recommendations for PersonaAgent
 
-<!-- SECTION-13 -->
+### 13.1 Legal-guardrail product requirements: MVP (≈3 months, 3–6 engineers) vs Enterprise
+
+| ID | Requirement | MVP | Enterprise | Driver (section) |
+|---|---|---|---|---|
+| **G1** | **No training or independent use** of customer content (no fine-tuning on tenant data, no cross-tenant learning, no human review without a ticketed customer instruction). Enforced in code, IAM and contracts; public trust-centre statement. | ✅ | ✅ plus third-party audit attestation | 3, 6.1 |
+| **G2** | **Admin-consent onboarding** that records the customer's **"express and specific" grant** for persona learning from email and Teams (Microsoft API Terms §3(c)); least-privilege scopes; a purpose statement | ✅ | ✅ | 6.8, 9.1 |
+| **G3** | **Never record silently.** Teams: use Microsoft transcripts or a bot that calls `updateRecordingStatus` (banner). Desktop/phone: persistent indicator. Wearable (later): hardware LED + physical mute. | ✅ | ✅ | 2, 9 |
+| **G4** | **Announcement + consent ledger** for every capture session (who, how and when notified; objections; actions) | ✅ (chat card + spoken notice in strict mode) | ✅ plus customer export and API | 2.4, 10 |
+| **G5** | **Strict-by-default jurisdiction profile**: treat every session as all-party consent. External-company meetings **OFF** by default. In-person capture **OFF** until an admin enables it. | ✅ | ✅ plus per-region policy overrides with an admin attestation | 2, 12 |
+| **G6** | **Wearer-only / consent mode** for in-person capture: drop non-wearer audio on device; no biometric templates | ✅ (heuristic wearer-only + manual "all consented" confirmation) | ✅ plus optional enrolled-consent mode (G10) | 2.4, 4.3 |
+| **G7** | **Auto-pause and hard blocks**: privileged / HR / medical / interview calendar tags; zones; "off the record" cues; minors; healthcare; public sector | ✅ (calendar tags + manual + cue words) | ✅ plus geofences and Purview-label triggers | 7, 10 |
+| **G8** | **Derivatives-only storage**: no raw audio; transcripts with TTL (30 days default); summaries and memories user-controlled | ✅ | ✅ plus optional encrypted raw vault (customer key) | 6.6 |
+| **G9** | **Phase-1 redaction (Section 11)**: Tier-R MASK-X/DELETE before persistence or LLM; Tier-P tokenize; Tier-S excluded from memory; attachments off | ✅ (US + India detectors) | ✅ plus tenant custom dictionaries (Tier-C), more locales | 11 |
+| **G10** | **No voiceprints in MVP.** Speaker labels from Teams metadata or manual tags only. | ✅ | Opt-in enrollment with BIPA-grade written release, public retention policy, ≤1-year destruction after purpose, state gating | 4 |
+| **G11** | **No emotion or intention inference from voice**; models run on text only; no per-employee performance analytics; AUP ban | ✅ | ✅ | 5.1 |
+| **G12** | **Persona anti-impersonation**: persona usable only by its owner; Entra ID session with MFA/Conditional Access; drafts only into the owner's compose window; **no autonomous send**; payment-instruction guard; generation audit log | ✅ | ✅ plus anomaly detection and tenant kill switch | 8.3 |
+| **G13** | **Offboarding**: freeze the persona on account disable; delete after 30 days (configurable); team knowledge stays in M365; no persona transfer | ✅ | ✅ plus HR-system triggers | 8.4 |
+| **G14** | **Deletion propagation**: mirror M365 deletions (delta queries); delete all on uninstall or abandonment; crypto-shredding per user | ✅ | ✅ | 6.6, 6.8 |
+| **G15** | **Legal hold** overrides all deletion (including crypto-shred and TTL); eDiscovery export with metadata (source, time, model version, AI flag) | ✅ (tenant-level hold + export) | ✅ plus per-custodian holds, Purview write-back, regulated-recordkeeping (WORM/journaling) mode for FS | 7.4, 7.2 |
+| **G16** | **AI disclosure**: Teams-Store-compliant AI disclaimer in the UI; "report output" button; invisible `X-AI-Assisted` marker on drafts; optional visible footer per tenant | ✅ | ✅ plus EU Art. 50(2) marking aligned with the Code of Practice | 5.1, 8.1, 9.1 |
+| **G17** | **Employee notice pack**: in-app acknowledgement (NY §52-c / CT / DE), CA notice-at-collection addendum, India policy clause; admin attestation | ✅ | ✅ plus works-council agreement template (EU) | 5.3 |
+| **G18** | **Data residency**: US tenants → US regions; India tenants → AWS Mumbai; **India-only processing flag** (in-region models, India logs), mandatory for BFSI | ✅ (storage + logs) | ✅ plus in-region inference for BFSI | 6.5, 11 |
+| **G19** | **Incident response**: CERT-In 6-hour path; customer notice for DPDP 72-hour, Reg S-P 72-hour, bank 36-hour and state-law deadlines; MSRC notice | ✅ (runbook + contacts) | ✅ plus tabletop tests and named PoC | 2.5, 7.2, 9.1 |
+| **G20** | **Third-party request portal** ("Were you recorded or mentioned?") routing to the controller tenant; DSAR tooling (search, export, erase across artefacts) | ✅ (email intake + admin tooling) | ✅ plus self-service portal and SLA reporting | 6.7 |
+| **G21** | **Tenant eligibility gates**: no consumer/personal accounts; no healthcare (until a BAA is in place), public sector, defence/CUI, or schools in v1 | ✅ | Healthcare tier (BAA) later | 6.1, 7 |
+
+### 13.2 Legal document set
+
+| Document | Purpose | Must-have clauses specific to PersonaAgent | When |
+|---|---|---|---|
+| **Master Subscription Agreement / ToS (B2B)** | Commercial terms | Customer is controller; customer **warrants it has given employee notices and obtained recording consents** and will use consent features; **AUP incorporated**; no performance-evaluation use; indemnity allocation for unlawful recording **by customer users**; our warranties: no training, security; suspension rights for misuse; persona non-transferability | Before the first paid pilot |
+| **Acceptable Use Policy** | Prohibited uses | No covert recording; no recording where prohibited; no use on minors or patients (unless the healthcare tier); no impersonation, fraud or BEC; no harassment; no performance or discipline scoring; no evading monitoring; no use with CUI/ITAR; no voice cloning of others | MVP |
+| **Data Processing Agreement (DPA)** | GDPR Art. 28 / CCPA service-provider / DPDP s.8(2) contract | Instructions; confidentiality; sub-processors with notice and objection; **security annex** (masking, encryption, keys); breach notice (**≤48h** to customer to support DPDP 72h; **≤72h** Reg S-P); assistance with DSARs, DPIAs and risk assessments; deletion and return; audits; SCCs/UK addendum (later); India annex (CERT-In, localisation options); **CCPA service-provider certifications** (no sell/share, no combining) | MVP |
+| **Sub-processor list** | Transparency | AWS (hosting, Bedrock), Anthropic via Bedrock (model; data not shared per AWS terms, to verify), STT vendor(s), Azure (if real-time media bots), email delivery, support tooling. Regions per tenant. 30-day change notice. | MVP |
+| **Privacy Policy** (website/app) | Our own controller processing + transparency about the product | Must be **at least as protective as Microsoft's privacy statement** and link to Microsoft consent-revocation pages (API Terms §5); third-party AI disclosure (Apple 5.1.2(i)); India grievance officer; data-principal rights | MVP |
+| **AI Transparency Notice / Model Card** | Explain AI functions and limits | What is generated, the models used, no training on customer data, known limits (hallucination), the human-send requirement, marking practice, a statement that text tone modelling does not infer emotions, how to report outputs (Teams Store) | MVP |
+| **Recording & Capture Notice templates** | For customers to give employees and outsiders | (a) Employee monitoring notice + acknowledgement (NY/CT/DE compliant); (b) meeting announcement text; (c) external-participant notice page (link in chat card); (d) office signage; (e) India notice in English + Hindi (others on request) | MVP |
+| **Customer DPIA / risk-assessment template** | Help customers meet GDPR Art. 35 / CPPA / DPDP SDF duties | See 13.3 | MVP (US/India version), EU version later |
+| **Biometric Policy + Written Release** | BIPA/CUBI/CO compliance if voice enrollment ships | Public retention schedule; purpose; destruction; e-sign release per person | Enterprise (only if G10 enrollment ships) |
+| **BAA** | HIPAA | Flow-down to AWS and STT; breach terms | Healthcare tier only |
+| **Regulated-customer annexes** | BFSI India/US | RBI outsourcing and audit rights; SEBI CSCRF/cloud localisation; IRDAI records; FINRA/SEC recordkeeping cooperation | Enterprise |
+| **Works-council agreement template** (EU later) | BetrVG §87(1) no. 6 | Purposes, exclusions (no performance monitoring), access, retention, evaluation bans | EU expansion |
+| **Security whitepaper / trust centre** | Sales enablement | Architecture, redaction, keys, residency, certifications (SOC 2 / ISO 27001 roadmap; ISO 27001 also helps as the SPDI Rule 8 safe harbour) | MVP (whitepaper), certs in 6–12 months |
+| **Trademark clearance memo** | Brand | "PersonaAgent" conflict check | Before public launch |
+
+### 13.3 Customer DPIA / risk-assessment template (outline)
+
+1. **Description**: features enabled (persona drafting, meeting notes, in-person capture); data categories (email and chat content, transcripts; Tier-R masked; no voiceprints); data subjects (employees, external contacts, bystanders); recipients and sub-processors; regions.
+2. **Purposes and lawful basis**: per jurisdiction (US notices/consents; India SPDI consent or DPDP s.7(i) / consent; EU legitimate interests with balancing).
+3. **Necessity and proportionality**: minimisation (user-authored content only; derivatives-only; TTLs); alternatives considered.
+4. **Risks to individuals**: covert recording; chilling effects on staff; profiling of colleagues ("memory"); impersonation; breach of a sensitive corpus; discrimination via misuse; non-users' rights.
+5. **Controls**: G1–G21 mapping; admin configuration chosen; consent ledger; DSAR process; legal hold.
+6. **Employee and representative consultation** (works council / unions where applicable).
+7. **Residual risk and sign-off**; review cadence (12 months; aligns with the DPDP SDF annual DPIA).
+
+### 13.4 Sequencing (what to do with counsel first)
+
+1. **US privacy/litigation counsel (first 4–6 weeks)**:
+   - CIPA/ECPA review of the meeting and in-person capture flows; the announcement wording;
+   - whether a summary of an unconsented recording is itself a §632 problem;
+   - the BIPA "filtering paradox";
+   - MSA/AUP/DPA drafting.
+2. **Indian counsel (parallel)**:
+   - DPDP readiness (May 2027);
+   - SPDI consent language now;
+   - Telecommunications Act interception question;
+   - SEBI/RBI/IRDAI localisation scope (storage vs inference);
+   - Aadhaar handling confirmation.
+3. **QSA** for PCI scoping of ingestion; **trademark counsel** for the name.
+4. Before EU launch: AI Act Art. 50 and remote-biometric classification; works-council templates; DPF certification.
 
 ---
 
 ## 14. Top 10 legal risks
 
-<!-- SECTION-14 -->
+Scale: **Likelihood (L)** and **Impact (I)** from 1 to 5; **score = L × I**. The score is **inherent** (without mitigations). **Residual** is after the Section 13 MVP guardrails. Ranking is analyst judgement (Med confidence).
+
+| # | Risk | L | I | Score | Why (evidence) | Key mitigations | Residual |
+|---|---|---|---|---|---|---|---|
+| 1 | **Wiretap / CIPA / all-party-consent class action** over meeting or in-person capture (users *and* PersonaAgent named) | 4 | 5 | **20** | *Otter* survived dismissal (Aug 2026); *Granola* targets bot-free capture (Jul 2026); CIPA $5,000 per violation; SB 690 left §§631/632 intact | G3–G7 (never silent, announcements, external meetings off, wearer-only, auto-pause), G1 (no independent use), consent ledger, AUP and customer warranties, privacy and cyber insurance | **M** (8–10) |
+| 2 | **Biometric (BIPA / CUBI / CO / WA) claims** from speaker ID, voice enrollment or "consent mode" | 3 | 5 | **15** | *Fireflies* and *Otter* BIPA counts; 7th Cir. *Clay* caps per-person damages, but class exposure remains | G10: no voiceprints in MVP; enrollment only with written release and state gating; counsel opinion on ephemeral filtering | **L** (3–4) |
+| 3 | **Losing the processor/"tool" position** through secondary use: training, cross-tenant analytics, human review, or retaining data after termination. This turns us into a "third-party eavesdropper" and controller, and breaks CCPA service-provider status. | 3 | 5 | **15** | *Otter*: training plausibly tortious and third-party; *Ambriz* capability test; FTC Amazon/Ring orders | G1 enforced technically and contractually; content-free telemetry; deletion on termination; annual third-party attestation | **L-M** (4–6) |
+| 4 | **Breach of the communications corpus or token vault** → 50-state + DPDP + CERT-In notices, class actions, Microsoft API termination | 3 | 5 | **15** | Customer mail is full of secrets (security track: Salesloft Drift 2025); India 6h / 72h clocks | G9 masking at ingestion (removes breach-law triggers); per-tenant keys; crypto-shredding; no standing access; G19 runbooks (security track details) | **M** (6–8) |
+| 5 | **Microsoft platform dependency**: API Terms purpose limits, admin-consent policy, external-bot labelling, media-bot rules, termination "in its sole discretion" | 3 | 4 | **12** | Verified ToU §§3(c), 5, 10; `updateRecordingStatus` restriction; MC1251206 [X] | G2 express grant at admin consent; least privilege; use Microsoft's own transcripts; Publisher Attestation / Certification; no silent media capture | **M** (6) |
+| 6 | **Persona misuse: impersonation / BEC fraud**, insider "act-as", ex-employee persona use | 3 | 4 | **12** | Persona = impersonation kit (50–100 emails) [X]; proposed FTC "means and instrumentalities" theory; IT Act s.66D | G12 (owner-only, MFA, no autonomous send, payment guard, audit), G13 offboarding, AUP, anomaly detection | **L-M** (4–6) |
+| 7 | **Workplace-monitoring and AI-governance violations**: NY/CT/DE notices; CPPA risk assessments; Colorado ADMT (2027); later EU works councils, the AI Act (voice emotion ban, Annex III) | 3 | 3 | **9** | Verified AI Act text and guidelines; CO SB 26-189; CPPA regs | G11 (no voice emotion, no performance analytics), G17 notice pack, AUP, DPIA template; EU deferred | **L-M** (4) |
+| 8 | **eDiscovery / spoliation / privilege** (auto-delete during a hold; privileged meetings captured; inaccurate AI summaries as evidence) | 3 | 3 | **9** | FRCP 37(e); AI-log preservation orders (2025); privilege-waiver arguments | G15 legal hold overrides all deletion; privileged mode (G7); AI-generated labels + source links; Purview write-back | **L-M** (4) |
+| 9 | **Sector non-compliance** (FINRA/SEC recordkeeping; HIPAA/CMIA; RBI/SEBI/IRDAI localisation and outsourcing rules) | 2 | 4 | **8** | FINRA 24-09 and 2026 report; SEC $63.1M sweep (Jan 2025); *Sharp* suit; RBI 2018 circular | G21 tenant gating (no healthcare/public sector in v1); regulated-recordkeeping mode; India-only processing flag; BFSI annexes | **L** (3–4) |
+| 10 | **India readiness**: CERT-In 6h / 180-day India logs now; DPDP (May 2027) consent and notice for third parties; SPDI written consent; penalties up to ₹250 crore | 2 | 4 | **8** | Verified CERT-In Directions and DLA Piper DPDP summary | G18 residency + India log copies; G19 CERT-In runbook; consent / notice texts (English + Hindi); DPDP gap assessment Q1 2027 | **L** (3) |
+| — | *Also track:* **trademark conflict** over "PersonaAgent" (L3 × I2 = 6) | | | 6 | ACL 2026 framework name [X] | Clearance search; rename early if needed | L |
 
 ---
 
 ## 15. Risks and watch-outs (dated calendar)
 
-<!-- SECTION-15 -->
+### 15.1 Dated calendar (as of 6 Oct 2026)
+
+| Date | Event | Relevance | Source / conf. |
+|---|---|---|---|
+| 28 Apr 2022 (in force) | CERT-In Directions: 6-hour reporting, 180-day logs in India | Applies now to India operations | [V] |
+| 2 Feb 2025 (in force) | EU AI Act prohibitions, including emotion recognition at work | Design constraint for EU | [V] |
+| 1 Jul 2025 (in force) | Colorado biometric amendment (HB24-1130) | Voice enrollment | [V] |
+| 1 Jan 2026 (in force) | CPPA regulations (ADMT, risk assessments, cybersecurity audits) effective; Illinois HB 3773 | CA customers' risk assessments | [V] / [K] |
+| 1 Apr 2026 | 7th Cir. *Clay v. Union Pacific*: BIPA damages amendment retroactive | Lower per-person exposure | [V secondary] |
+| 2 Aug 2026 (in force) | EU AI Act Art. 50 transparency | EU expansion: marking / disclosure | [V] |
+| 13 Aug 2026 | *Otter* motion-to-dismiss order (ECPA, CIPA §631, BIPA survive) | Litigation template | [V secondary] |
+| ~Sep–Oct 2026 | *Otter* amended complaint and renewed motions; *Granola* first response | Watch for rulings on bot-free capture and consent by announcement | [Unverified timing] |
+| By end Oct 2026 | Teams external-bot "Unverified" labelling GA completes | Bot strategy | [X] |
+| Oct 2026 | California SB 690 signed (pen-register claims → AG only; §§631/632 untouched); effective date likely 1 Jan 2027 | No relief for wiretap/recording claims | [V] signing; [K] effective date |
+| **13 Nov 2026** | DPDP: consent-manager provisions commence | India consent architecture | [V] |
+| **2 Dec 2026** | AI Act Art. 50(2) grace ends for legacy systems; new Art. 5 prohibitions (nudifier/CSAM) apply | EU marking | [V] |
+| **1 Jan 2027** | Colorado SB 26-189 (ADMT) effective; CCPA ADMT compliance date | AUP and employment-use ban | [V] / [K] |
+| **13 May 2027** | **DPDP Act: all substantive obligations apply**; SPDI regime/s.43A replaced | India v1 must be fully DPDP-ready | [V] |
+| 2 Dec 2027 | AI Act Annex III high-risk obligations (employment, biometrics) | EU intended-purpose discipline | [V] |
+| 31 Dec 2027 / Apr 2028 | CPPA: risk assessments for pre-2026 processing due; attestations from Apr 2028; first cybersecurity audits (largest businesses) Apr 2028 | Customer asks of us | [K, Med] |
+| 2 Aug 2028 | AI Act Annex I high-risk | Not core to us | [V] |
+
+### 15.2 Watch-outs (not dated)
+
+- **Note-taker litigation copycats.** Expect more suits against bot-free and wearable recorders. Any marketing line such as "invisible", "no bot", or "nobody will know" will be used as Exhibit A. **Never market stealth.**
+- **Plaintiffs' use of our own documents.** Privacy-policy wording about "improving our services" was central in *Otter*-style complaints. Keep the policy literal: **no training on customer data.**
+- **FTC.** Possible finalisation of the impersonation-rule extension to individuals and "means and instrumentalities". Continued scrutiny of AI data-retention claims (Alexa precedent).
+- **Federal preemption push** against state AI laws (Dec 2025 executive order). It is unlikely to touch wiretap or biometric statutes.
+- **India.**
+  - Significant Data Fiduciary designations, which would flow down to us through large customers.
+  - Any notified **transfer blacklist** under DPDP s.16.
+  - Final IT Rules on synthetic content (relevant to a voice clone).
+  - SEBI/RBI AI-governance guidance for regulated entities.
+  - MeitY AI Governance Guidelines (reported Nov 2025; principles-based, no new statute). [K, Med; not verified]
+- **EU.**
+  - CJEU appeal against the DPF (*Latombe*).
+  - Final Commission Art. 50 guidelines.
+  - Works-council practice on generative AI (German DPAs and labour courts).
+- **Microsoft.** Changes to the API Terms, metered/protected Teams APIs, and the bot-admission policy (MC1251206). Microsoft's own Copilot features competing on the same data, which also bear on platform-policy enforcement.
 
 ---
 
 ## 16. Open questions / could not verify
 
-<!-- SECTION-16 -->
+### 16.1 Could not verify this session
+
+The WebSearch budget ran out after about 15 searches. Several primary sites blocked fetching: Justia, CourtListener, Courthouse News PDFs, leginfo, ilga.gov, MeitY.
+
+| Item | Status | What to do |
+|---|---|---|
+| *In re Otter.AI* 13 Aug 2026 order: exact holdings and quotes | Taken from secondary reporting (recordinglaw.com, tl;dv, consentpixel); the docket and order PDF were not reachable | Counsel to pull the order (N.D. Cal. 5:25-cv-06911, ECF ~68) and the post-ruling docket |
+| *Chamberlain v. Granola* (3:26-cv-07926) details | Secondary sources only | Pull the complaint |
+| *Cruz v. Fireflies* court/district; *Fricker* filing details | The court was not identified by the source fetched | Docket search |
+| Suits against **Read.ai, Gong, Limitless, Plaud, Microsoft Teams/Recall, Meta glasses, Amazon/Bee** | Not searched (budget exhausted) | Docket / news search |
+| SB 690 **signing date and effective date** | Signing confirmed (KTS, 1 Oct 2026); dates not confirmed | Check leginfo |
+| *Project Veritas v. Schmidt* cert petition (No. 24-1061) outcome | Not verified | Check the SCOTUS docket |
+| **Missouri** in-person all-party rule (RCFP reading of §542.402) | Unusual; RCFP only | Counsel confirmation |
+| *United States v. Heppner* (S.D.N.Y. 2026, AI chats not privileged) | Background knowledge only | Verify before citing |
+| Google Assistant settlement (~$68M); CNIL *Amazon* appeal; Siri settlement details | Background knowledge | Verify before external use |
+| CPPA **phased deadlines** (ADMT 2027; risk assessments 2027/2028; audits 2028–2030) | Only the OAL approval date (22 Sep 2025) and the 1 Jan 2026 effective date were verified | Read the final regulation text |
+| Colorado HB24-1130 details (voiceprint inclusion, deletion deadlines, applicability below CPA thresholds) | Only the effective date was verified | Read the bill text |
+| **India**: DPDP Rules full text (transfer rule wording, rule numbers); Telecommunications Act 2023 interception offence applied to VoIP capture; UIDAI ADV duties for incidental receipt; SEBI CSCRF and IRDAI localisation wording; MeitY AI Governance Guidelines (Nov 2025); final IT Rules on synthetic content; *Vibhor Garg* citation | DLA Piper summary + background knowledge | Indian counsel review (Section 13.4) |
+| EU: DPF appeal status; final Art. 50 guidelines; Code of Practice text for **text** marking | Partially verified (Code adequacy 8 Jul 2026 via Jones Walker) | Re-check at EU expansion |
+| Microsoft "explicit recording consent" policy page (404); whether it governs third-party bots and device capture | Not verified | Check Microsoft Learn's new location |
+| AWS Bedrock statement that prompts and outputs are not shared with model providers | Background knowledge | Confirm against current AWS service terms (AWS track) |
+| Zoom RTMS / Marketplace consent rules | Not verified | Before the Zoom integration |
+| Washington, Oregon and Michigan civil-damages specifics | RCFP summaries + background knowledge | Counsel |
+
+### 16.2 Open legal questions for counsel (priority order)
+
+1. **CIPA §632 / all-party states.** Is a **text summary or memory** derived from an unconsented in-person conversation itself actionable? Does "wearer-only" capture with on-device discard of others' audio avoid "recording" those others?
+2. **BIPA "filtering paradox".** Are ephemeral, never-stored voice embeddings used only to **exclude** non-consenting speakers "biometric identifiers" that are "collected or captured"?
+3. **Consent by announcement.** Is implied consent from a recorded announcement plus continued participation sufficient in CA, FL, IL, MD, MA, PA and WA for (a) Teams meetings and (b) in-person meetings? Is a click-through needed for external participants?
+4. **Microsoft API Terms §3(c).** Is the admin-consent screen plus order-form language enough to be an "express and specific" grant for persona learning? Do we need a separate written instrument?
+5. **India DPDP.** Can **s.7(a)** (voluntarily provided, no objection) or **s.7(i)** (employment) cover third parties in meetings and historical emails, or is explicit consent needed? Does the **Telecommunications Act 2023** reach vendor capture of VoIP audio?
+6. **India sector rules.** Do SEBI/RBI/IRDAI localisation rules cover **transient LLM inference** abroad, or only storage?
+7. **Persona ownership.** Does an employee have any **publicity-right or moral claim** to their style model after leaving? Can the employer require deletion even where the employee wants a copy (DSAR)?
+8. **EU (later).** Is cross-meeting speaker ID "remote biometric identification" (Annex III(1)(a))? Does persona drafting fall within the Art. 50(2) "assistive function for standard editing" exception?
+9. **PCI.** Can transient PAN handling during ingestion be scoped out by a QSA?
+10. **Insurance.** Does cyber/tech E&O cover statutory wiretap and BIPA damages? Many policies exclude biometric and wiretap claims.
 
 ---
 
 ## 17. Sources
 
-<!-- SECTION-17 -->
+All accessed 5–6 Oct 2026. **[F]** = fetched and read this session. **[S]** = seen only as a search-result summary. **[R]** = reference for counsel, not fetched this session.
+
+**Litigation: AI note-takers, biometrics, CIPA**
+- [S] In re Otter.AI Privacy Litigation docket, N.D. Cal. 5:25-cv-06911: https://www.courtlistener.com/docket/71118721/brewer-v-otterai-inc/
+- [S] Justia: order granting in part the motion to dismiss (ECF 68): https://docs.justia.com/cases/federal/district-courts/california/candce/5:2025cv06911/454675/68
+- [F] RecordingLaw, Otter ruling explained: https://www.recordinglaw.com/news/otter-ai-wiretap-lawsuit-explained/
+- [S] Sheppard Mullin, "When AI Takes Notes": https://www.sheppard.com/insights/blogs/when-ai-takes-notes-court-allows-privacy-claims-against-otterai-to-proceed
+- [S] tl;dv, AI meeting recorder lawsuits 2026: https://tldv.io/blog/ai-meeting-recorder-lawsuits/
+- [S] Courthouse News, Otter filing PDF: https://www.courthousenews.com/wp-content/uploads/2026/08/otter-ai-privacy-class-action.pdf
+- [F] ConsentPixel, *Chamberlain v. Granola*: https://consentpixel.com/blogs/granola-ai-notetaker-wiretap-litigation/
+- [S] PPC Land, Granola suit: https://ppc.land/granola-sued-for-recording-meetings-without-consent-to-train-ai-models/
+- [S] Layer3 Labs, Granola lawsuit: https://www.layer3labs.io/guides/granola-lawsuit
+- [F] National Law Review, BIPA suit targets AI note-takers (Fireflies): https://natlawreview.com/article/illinois-bipa-suit-targets-ai-note-takers-practical-lessons-meeting-transcription
+- [S] Top Class Actions, Fireflies: https://topclassactions.com/lawsuit-settlements/lawsuit-news/fireflies-ai-sued-over-alleged-unlawful-data-collection-from-meeting-participants/
+- [S] SGR, AI note-takers and BIPA damages: https://www.sgrlaw.com/newsroom/publications/ai-note-takers-biometric-privacy-and-the-battle-over-bipa-damages-what-businesses-need-to-know-now
+- [S] Jackson Lewis, 7th Cir. BIPA retroactivity (*Clay v. Union Pacific*): https://www.jacksonlewis.com/insights/bipa-cases-7th-circuit-rules-change-illinois-laws-damages-provision-retroactively-limits-defendant-exposure
+- [S] SGR, 7th Cir. BIPA: https://www.sgrlaw.com/newsroom/publications/seventh-circuit-holds-bipa-damages-amendment-applies-retroactively
+- [S] Becker's, Sharp HealthCare ambient-AI suit: https://www.beckershospitalreview.com/healthcare-information-technology/ai/patient-sues-sharp-healthcare-over-ambient-ai-use/
+- [S] Fisher Phillips, healthcare AI recordings class action: https://www.fisherphillips.com/en/news-insights/new-class-action-targets-healthcare-ai-recordings.html
+- [S] ZwillGen, *Ambriz v. Google*: https://www.zwillgen.com/privacy/federal-judge-allows-google-customer-service-ai-class-action-to-proceed/
+- [S] Goodwin, AI voice products and CIPA: https://www.goodwinlaw.com/en/insights/publications/2025/02/alerts-practices-dpc-ftec-ai-voice-products-subject-to-california-invasion-of-privacy-claims
+
+**US recording law and CIPA reform**
+- [F] RCFP Reporter's Recording Guide (introduction): https://www.rcfp.org/introduction-to-reporters-recording-guide/
+- [F] RCFP state pages: https://www.rcfp.org/reporters-recording-guide/missouri/ · https://www.rcfp.org/reporters-recording-guide/oregon/ · https://www.rcfp.org/reporters-recording-guide/delaware/ · https://www.rcfp.org/reporters-recording-guide/michigan/
+- [S] Snell & Wilmer, Ninth Circuit upholds Oregon recording law: https://www.swlaw.com/publication/ninth-circuit-upholds-oregons-ban-on-unannounced-audio-recordings-rejects-first-amendment-challenge/
+- [S] Project Veritas cert petition (No. 24-1061): https://www.supremecourt.gov/DocketPDF/24/24-1061/354931/20250407155521527_24-%20Petition.pdf
+- [F] Kilpatrick (KTS), SB 690 signed: https://ktslaw.com/en/insights/alert/2026/10/what%20sb%20690%20means%20for%20pending%20pen%20register%20claims
+- [S] NatLawReview, SB 690 amended: https://natlawreview.com/article/senate-bill-690-amended-california-scales-back-its-proposed-cipa-overhaul
+- [S] Skadden, "CIPA Is Still a Mess": https://www.skadden.com/insights/publications/2026/06/cipa-is-still-a-mess
+- [S] Assembly committee analysis of SB 690: https://apcp.assembly.ca.gov/system/files/2026-06/sb-690-caballero-apcp-analysis.pdf
+
+**US privacy, biometrics, AI and employment statutes**
+- [F] Washington MHMDA definitions, RCW 19.373.010: https://app.leg.wa.gov/RCW/default.aspx?cite=19.373.010
+- [F] Colorado HB24-1130: https://leg.colorado.gov/bills/hb24-1130
+- [F] Holland & Knight, Colorado SB 26-189: https://www.hklaw.com/en/insights/publications/2026/05/colorado-governor-signs-sb-189
+- [S] Baker Botts, Colorado repeals and replaces AI Act: https://ourtake.bakerbotts.com/post/102msga/colorado-repeals-and-replaces-ai-act
+- [F] CPPA, CCPA regulation updates: https://cppa.ca.gov/regulations/ccpa_updates.html
+- [R] BIPA, 740 ILCS 14: https://www.ilga.gov/legislation/ilcs/ilcs3.asp?ActID=3004&ChapterID=57
+- [R] Cal. Penal Code §632: https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?lawCode=PEN&sectionNum=632
+- [R] 18 U.S.C. §2511: https://www.law.cornell.edu/uscode/text/18/2511
+- [R] NY Civil Rights Law §52-c: https://www.nysenate.gov/legislation/laws/CVR/52-C
+- [R] HIPAA de-identification, 45 CFR 164.514: https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-E/section-164.514
+- [R] ABA Formal Opinion 512: https://www.americanbar.org/content/dam/aba/administrative/professional_responsibility/ethics-opinions/aba-formal-opinion-512.pdf
+
+**Financial services**
+- [F] FINRA Regulatory Notice 24-09: https://www.finra.org/rules-guidance/notices/24-09
+- [F] FINRA 2026 Annual Regulatory Oversight Report, GenAI: https://www.finra.org/rules-guidance/guidance/reports/2026-finra-annual-regulatory-oversight-report/gen-ai
+- [F] SEC press release 2025-6 (off-channel, $63.1M): https://www.sec.gov/newsroom/press-releases/2025-6
+
+**EU AI Act**
+- [F] Article 50: https://artificialintelligenceact.eu/article/50/
+- [F] Annex III: https://artificialintelligenceact.eu/annex/3/
+- [F] Article 3 (definitions): https://artificialintelligenceact.eu/article/3/
+- [F] Cooley, Digital AI Omnibus (Reg. (EU) 2026/1744): https://cdp.cooley.com/digital-ai-omnibus-delays-key-deadlines-introduces-new-rules/
+- [F] Jones Walker, "August 2 still matters": https://www.joneswalker.com/en/insights/blogs/ai-law-blog/yes-august-2-still-matters-the-eu-approved-a-high-risk-ai-delay-but-most-trans.html?id=102nbon
+- [F] CMS, Commission guidelines on prohibited AI practices (part II): https://cms.law/en/gbr/legal-updates/eu-commission-issues-guidelines-on-prohibited-ai-practices-part-ii
+- [R] Commission guidelines on prohibited AI practices: https://digital-strategy.ec.europa.eu/en/library/commission-publishes-guidelines-prohibited-artificial-intelligence-practices-defined-ai-act
+- [R] EDPB Guidelines 02/2021 on virtual voice assistants: https://www.edpb.europa.eu/our-work-tools/our-documents/guidelines/guidelines-022021-virtual-voice-assistants_en
+- [R] ICO, Monitoring workers: https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/employment/monitoring-workers/
+- [R] German StGB §201: https://www.gesetze-im-internet.de/stgb/__201.html
+- [R] BetrVG §87: https://www.gesetze-im-internet.de/betrvg/__87.html
+
+**India**
+- [F] DLA Piper Data Protection Laws of the World, India (DPDP Act and Rules 2025): https://www.dlapiperdataprotection.com/index.html?t=law&c=IN
+- [F] CERT-In Directions under s.70B(6), 28 Apr 2022 (primary PDF): https://www.cert-in.org.in/PDF/CERT-In_Directions_70B_28.04.2022.pdf
+- [F] RBI, Storage of Payment System Data (6 Apr 2018): https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11244&Mode=0
+- [F] SEBI CSCRF circular (20 Aug 2024): https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html
+
+**Platforms**
+- [F] Microsoft Graph `call: updateRecordingStatus` (media restriction): https://learn.microsoft.com/en-us/graph/api/call-updaterecordingstatus?view=graph-rest-1.0
+- [F] Microsoft APIs Terms of Use (Oct 2025): https://learn.microsoft.com/en-us/legal/microsoft-apis/terms-of-use
+- [F] Teams Store validation guidelines: https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/appsource/prepare/teams-store-validation-guidelines
+- [F] Application-hosted media bots (Azure/Windows requirement): https://learn.microsoft.com/en-us/microsoftteams/platform/bots/calls-and-meetings/requirements-considerations-application-hosted-media-bots
+- [R] Teams explicit recording consent (returned 404): https://learn.microsoft.com/en-us/microsoftteams/explicit-recording-consent
+- [F] Apple App Store Review Guidelines (2.5.4, 2.5.14, 5.1.2(i)): https://developer.apple.com/app-store/review/guidelines/
+- [F] Google Play Malware policy (spyware, stalkerware): https://support.google.com/googleplay/android-developer/answer/9888380
+- [F] Google Meet Media API overview: https://developers.google.com/workspace/meet/media-api/guides/overview
+
+**Cross-track PersonaAgent documents** [X]
+- `docs/research/02-integration-surfaces-and-meeting-capture.md`: Teams bot detection MC1251206, admin consent
+- `docs/research/10-security-threats-and-redaction.md`: Tier-R/P/S/C model, Aadhaar Verhoeff detection, FF3 withdrawal, CPRA email-contents SPI
+- `docs/research/_raw/08c-ai-memory-wearables-factsheet.md`: Bee LED/no-audio-storage, Limitless wind-down
+- Coordinator-relayed cross-track facts: DPDP dates, Microsoft consent policy, India in-region model availability, persona-impersonation threshold, the "PersonaAgent" ACL 2026 name collision

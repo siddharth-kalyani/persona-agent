@@ -1,7 +1,7 @@
-# PersonaAgent — Product Strategy (v0.1)
+# PersonaAgent — Product Strategy (v0.2)
 
-> **Date:** 2026-10-06 · **Founder decisions:** M365 mid-market & enterprise buyers · US + India · 3–6 engineers, ~3-month MVP · work-only, company-governed recorder · Phase-1 redaction precise to US + Indian regulation.
-> **Sources:** research tracks in `docs/research/` cited as [R01]…[R10]; Humane/Rabbit/wearables fact sheets in `docs/research/_raw/`. Market numbers and prices were checked in Oct 2026 where marked in [R09]; estimates are labelled.
+> **Date:** 2026-10-06, updated 2026-10-09 (India model routing F6, user data controls F7) and 2026-10-11 (company context F8) · **Founder decisions:** M365 mid-market & enterprise buyers · US + India · 3–6 engineers, ~3-month MVP · work-only, company-governed recorder · Phase-1 redaction precise to US + Indian regulation.
+> **Sources:** research tracks in `docs/research/` cited as [R01]…[R12]; Humane/Rabbit/wearables fact sheets in `docs/research/_raw/`. Market numbers and prices were checked in Oct 2026 where marked in [R09]; estimates are labelled.
 
 ---
 
@@ -10,11 +10,11 @@
 | Question | Answer |
 |---|---|
 | **The bet** | Knowledge workers in Microsoft 365 will pay for an assistant that **writes exactly like them, per relationship**, and **remembers and follows through** on what they said across email, Teams and meetings — governed tightly enough that their IT, security and legal teams say yes. |
-| **Why now** | Copilot is in only ~6.5% of M365 commercial seats (30M+ of ~450M, Jul 2026) and its "sound like you" works from typed instructions — it does not learn from sent mail or adapt per recipient [R09]. Buyers already pay above Copilot's $30 for inbox AI (Fyxer $37–64/user, $1M→$17M ARR in ~8 months of 2025). India's DPDP obligations start **13 May 2027** — a buying trigger for "India-resident, DPDP-ready AI" [R07, R09]. |
+| **Why now** | Copilot is in only ~6.5% of M365 commercial seats (30M+ of ~450M, Jul 2026) and its "sound like you" works from typed instructions — it does not learn from sent mail or adapt per recipient [R09]. Buyers already pay above Copilot's $30 for inbox AI (Fyxer $37–64/user, $1M→$17M ARR in ~8 months of 2025). India's DPDP obligations start **13 May 2027** — a buying trigger for "India-resident, DPDP-ready AI" [R07, R09]. *(MVP: India data is stored in India but model calls are global-routed — founder decision F6; in-country AI processing is the Phase-2 residency option, possible on Bedrock since 29 Sep 2026.)* |
 | **Beachhead (one segment, two countries)** | **Client-facing delivery, account and leadership teams (and their EAs) at M365-standardised IT-services and technology-consulting firms** — US mid-market (500–10,000 employees); India mid-tier IT services (1,000–20,000) and GCC delivery centres. Scored 4.3 / 4.1 of 5, highest of ten segments [R09 §8]. |
 | **Wedge** | **"Persona + Follow-through" for client communication in Outlook and Teams:** relationship-aware drafts, approval-first, pre-send safety, a commitments ledger, light EA/delegate mode. Then Teams meeting memory, then an IT-services Delivery Pack, then governed work-mode capture [R09 §8.3]. |
 | **Positioning** | **"The voice and follow-through layer for Microsoft 365 — works with or without Copilot."** Ship as a Copilot Chat agent, register in Agent 365, expose an MCP memory API [R09 §9]. |
-| **Pricing (annual, per user/month)** | US: **Persona $35 · Pro $49 · Enterprise from $65**. India (excl. 18% GST, India-resident processing): **Lite ₹1,499 · Persona ₹2,199 · Pro ₹3,299 · Enterprise from ₹3,999**. Add-ons: Capture+, Delivery Pack, Power user, dedicated/BYOC. No freemium — 30-day pilots credited to annual contracts [R09 §6]. |
+| **Pricing (annual, per user/month)** | US: **Persona $35 · Pro $49 · Enterprise from $65**. India (excl. 18% GST; India-resident storage, with in-country AI processing from the Phase-2 residency option): **Lite ₹1,499 · Persona ₹2,199 · Pro ₹3,299 · Enterprise from ₹3,999**. Add-ons: Capture+, Delivery Pack, Power user, dedicated/BYOC. No freemium — 30-day pilots credited to annual contracts [R09 §6]. |
 | **Unit economics** | ~49–58% gross margin at today's AI costs → **~64–70% (US) and ~55–60% (India) after optimisation** (model routing, caching, batch, drafting on demand, self-hosted STT) [R09 §6.4, R03, R06]. |
 | **GTM** | Admin-approval-led growth (users can no longer self-consent to mail/chat scopes [R01]); 6–8 design-partner LOIs before the MVP ships; first 3–5 paid by month 5, 10 by month 9, 15+ (~$0.3M ARR) by month 12; AWS Marketplace private offers + co-sell first [R09 §7]. |
 | **3-year outlook (exit ARR)** | Conservative ~$2.7M · **Base ~$13.4M (~35k seats, ~50/50 US/India)** · Aggressive ~$49M [R09 §8.6]. |
@@ -73,7 +73,7 @@
 1. **In place, not instead** — Outlook and Teams stay the tools; we add voice and memory (`02-solution-architecture.md` §3).
 2. **Approval-first** — the human sends; delegate actions are visible to the principal.
 3. **Measured fidelity** — every user sees their own send-without-edit and edit-distance trend; we publish a Voice Fidelity Benchmark.
-4. **Governance is a feature** — residency, redaction profiles, capture policies, audit, legal hold are sold, not hidden.
+4. **Governance is a feature** — residency, redaction profiles, capture policies, audit, legal hold are sold, not hidden. And **every user controls what is learned**: exclude any person, chat, group, thread or meeting, and keep a never-send word list — in every tier, never upsold.
 5. **Consent-first memory** — Microsoft's own transcripts before our own capture; capture is user-started and visible.
 
 ### 3.2 Pillar 1 — Persona + Follow-through (the wedge)
@@ -86,6 +86,7 @@
 | **Delegate / EA mode** | Lite | Full (exec approves on mobile, audit trail) | — |
 | Persona Snapshot ("how you write to your manager vs clients") — the onboarding "aha" | ✅ | — | — |
 | Learned-rules digest (confirm/reject what the agent learned) | ✅ | — | — |
+| **My data controls** — search your DMs (by person), group chats (by name), email (by address or thread) and meetings, and exclude them from everything; **never-send words** that are never stored or sent to any AI model and show as `[removed]` in drafts unless you allow them; reviewed at onboarding *before* any content is read (`02-solution-architecture.md` §6.5) | ✅ | "See what the AI sees" preview; channels; transliterated/fuzzy word variants; finer scopes (memory yes, style no) | Team-shared exclusion lists |
 
 ### 3.3 Pillar 2 — Work memory
 **Language matters:** describe Pillar 2 as **"always-ready, policy-governed work capture — on during your work sessions, visibly indicated, instantly mutable,"** not "always listening." "Always listening" invites the backlash that hit Friend, Google Glass and Meta's glasses, and phones can't start the mic in the background anyway [R08 §4, R06].
@@ -96,7 +97,7 @@
 | 2 | **Pre-meeting briefs** and **post-meeting follow-ups drafted in your voice** | v1.5 | Ties memory back to the persona — our unique combination |
 | 3 | **Governed work-mode capture** on the phone (user-started work sessions, calendar-prompted meeting capture, quick capture; consent prompt → full or self-only) | Beta after MVP; Capture+ add-on | Highest legal risk; needs self-hosted STT to be margin-positive [R06, R07, R09] |
 | 4 | **Windows companion** recorder for other companies' meetings (disclosure + indicator + ledger) | Phase 2 | *Granola*-type risk managed by design |
-| 5 | **Team / account memory** (shared spaces per client account) | Year 2 | Org-level network effects; Viven competition |
+| 5 | **Company context** (founder decision F8): shared-by-access processing (Phase 2) → **opt-in team spaces** with sub-contexts per team, manager and client account (Phase 3 → Year 2) → **company graph** with GraphRAG-style account summaries and consented "who knows whom" (Year 2, Enterprise add-on) — strict boundaries in `02-solution-architecture.md` §8.6 | Phase 2 → Year 2 | Org-level network effects; graph cost shared across the company; Viven/Glean competition |
 | 6 | **Work wearable** (partner device first) | Year 2–3, gated (§9) | Humane/Rabbit lessons |
 
 The founders' example questions map directly: *"What was that good idea I was talking about at 2 pm?"* → work-session capture → episode at ~2 pm → `idea` atoms; *"In the 4 pm meeting, what were the client's requirements?"* → calendar lookup → Teams transcript (internal) or captured session (external) → `requirement` atoms with citations and an audio snippet while audio is retained.
@@ -118,7 +119,7 @@ Scores 1–5 for willingness to pay (WTP), defensibility (Def), fit with both pi
 | 10 | **Knowledge handover / offboarding pack** | 4 | 4 | 5 | 3 | 3 | 19 | Year 2 | ~$250 per handover |
 | 11 | RFP / proposal drafting from memory | 4 | 3 | 4 | 3 | 5 | 19 | Year 2 | Delivery Pack add-on |
 | 12 | Activity-based timesheet / billable-time suggestions | 5 | 3 | 4 | 2 | 4 | 18 | Year 2 | Time Capture Pack (+$15–20) |
-| 13 | Team / account "org memory" | 4 | 5 | 5 | 1 | 3 | 18 | Year 2 | Enterprise |
+| 13 | Team / account "org memory" (now the company-context plan, F8) | 4 | 5 | 5 | 1 | 3 | 18 | Year 2 | Enterprise |
 | 14 | Inbox triage / daily brief (table stakes) | 2 | 2 | 4 | 5 | 5 | 18 | v1.5 | Included |
 | 15 | CRM / ServiceNow auto-updates | 4 | 2 | 3 | 3 | 4 | 16 | Year 2 | Sales pack |
 | 16 | Communication-coaching analytics (personal first) | 3 | 3 | 4 | 3 | 2 | 15 | Year 2 | L&D add-on |
@@ -126,7 +127,7 @@ Scores 1–5 for willingness to pay (WTP), defensibility (Def), fit with both pi
 | 18 | Finance compliance recordkeeping | 4 | 4 | 2 | 1 | 1 | 12 | Partner/export only | Connector fee |
 | 19 | Frontline / field hands-free notes | 3 | 2 | 3 | 1 | 3 | 12 | Year 3 (with hardware) | Device + capture plan |
 
-Also demanded in 2025–26: **agent governance** (register in Agent 365; Copilot Chat presence), **CFO-grade ROI dashboards** (adoption, time saved, send-without-edit), **bring-your-own-model / residency** for regulated buyers, and **AI-draft authenticity and impersonation controls** [R09 §5].
+Also demanded in 2025–26: **agent governance** (register in Agent 365; Copilot Chat presence), **CFO-grade ROI dashboards** (adoption, time saved, send-without-edit), **bring-your-own-model / residency** for regulated buyers, and **AI-draft authenticity and impersonation controls** [R09 §5]. **Added 2026-10-11:** company-level relationship intelligence ("who knows whom at the client", relationship strength from consented metadata) as part of the company graph — comparable products sell at premium prices (Affinity ≈ $2,000–2,700 per user per year; Salesforce Einstein Relationship Insights ≈ $50–150 per user per month) [R11 §11].
 
 ### 3.5 What we will deliberately not build (now)
 A mail/Teams clone; a standalone notetaker or meeting bot; consumer lifelogging; voiceprints; autonomous sending; an out-of-office twin before trust is earned; finance archiving (partner instead); our own hardware before the gates in §9.
@@ -147,7 +148,9 @@ A mail/Teams clone; a standalone notetaker or meeting bot; consumer lifelogging;
 | **Plaud** | Recorder hardware + subscription | Software-first, M365-integrated memory; Plaud is a possible device partner (SDK) |
 | **Viven** | Employee digital twins | Narrower, trust-first scope (owner-only persona, approvals); IT-services vertical |
 
-**Moats to build** [R09 §8.7]: org-level relationship graph and shared account context · a proprietary Voice Fidelity Benchmark + per-tenant evals · workflow lock-in (approvals, commitments, Delivery Pack templates, handover) · **US + India compliance moat** (precise redaction profiles, in-India inference, capture policies, BYOK, certifications) · verticalisation (IT services first) · distribution (AWS Marketplace/co-sell, Agent 365/Copilot Chat, IT-services firms as resellers) · memory portability via MCP (become the system of record for persona + commitments).
+*India residency claims in this table apply once the Phase-2 India residency option ships. MVP pilots store Indian data in Mumbai but route model calls globally (founder decision F6, 2026-10-09) — sales material must say so.*
+
+**Moats to build** [R09 §8.7]: org-level relationship graph and shared account context (company context, F8 — every new seat adds shared context for colleagues) · a proprietary Voice Fidelity Benchmark + per-tenant evals · workflow lock-in (approvals, commitments, Delivery Pack templates, handover) · **US + India compliance moat** (precise redaction profiles, in-India inference, capture policies, BYOK, certifications) · verticalisation (IT services first) · distribution (AWS Marketplace/co-sell, Agent 365/Copilot Chat, IT-services firms as resellers) · memory portability via MCP (become the system of record for persona + commitments).
 
 ---
 
@@ -163,13 +166,14 @@ A mail/Teams clone; a standalone notetaker or meeting bot; consumer lifelogging;
 
 *Memory horizon applies to memory atoms; raw audio is deleted after transcription by default and transcripts are kept 30 days (`02-solution-architecture.md` §8.4). "Premium drafts" = Sonnet-class drafts; everything else routes to Haiku by default (§5.4).*
 
-### 5.2 India (INR per user per month, excl. 18% GST, India-resident processing)
+### 5.2 India (INR per user per month, excl. 18% GST, India-resident storage)
+*MVP and pilots: model calls use Bedrock global routing (founder decision F6). In-country AI processing (Claude Haiku 4.5 / Sonnet 5 / Opus 5 in Mumbai + Hyderabad) arrives with the Phase-2 India residency option, and becomes the default for Enterprise and mandatory for BFSI.*
 | Tier | Annual | Monthly | ≈ USD (₹88/$) | Notes |
 |---|---|---|---|---|
 | **Persona Lite** | **₹1,499** | ₹1,799 | ≈ $17 | Reply drafting + basic follow-through; Haiku-only; 6-month memory — for IT-services/GCC volume programmes |
-| **Persona** | **₹2,199** | ₹2,599 | ≈ $25 | US Persona scope; capped premium (in-India Opus 5) drafts |
+| **Persona** | **₹2,199** | ₹2,599 | ≈ $25 | US Persona scope; capped premium drafts (Sonnet 5.5 via global routing in the MVP; in-country Sonnet 5 / Opus 5 for residency tenants) |
 | **Persona Pro** | **₹3,299** | ₹3,899 | ≈ $37.5 | US Pro scope |
-| **Enterprise** | **from ₹3,999** (≥ 250 seats) | Annual only | ≈ $45 | In-India processing default; DPDP/CERT-In pack |
+| **Enterprise** | **from ₹3,999** (≥ 250 seats) | Annual only | ≈ $45 | In-India processing default once the residency option ships (Phase 2); DPDP/CERT-In pack |
 | Volume | −10% at 500+, −15% at 1,000+, floor −20% at 5,000+ | | | Never below ~40% GM on optimised COGS; move buyers to Lite rather than discounting |
 
 ### 5.3 Add-ons
@@ -180,6 +184,7 @@ A mail/Teams clone; a standalone notetaker or meeting bot; consumer lifelogging;
 | **Power user** (2× AI actions, +500 premium drafts) | +$15 | +₹999 | Moves heavy-user cost onto heavy users |
 | Sales Follow-through Pack (Y2) · Time Capture Pack (Y2) · Knowledge Handover (Y2, ~$250/handover) | — | — | Expansion |
 | **Dedicated tenancy / BYOC** | Platform fee $4–10k/month + seats (min 500) | ₹3–8 lakh/month | Regulated buyers, BFSI |
+| **Company context** (Year 2, F8): team spaces + company graph, account summaries, "who knows whom" | TBD — benchmarks $50–150/user/month (Salesforce ERI) or ≈ $2,000–2,700/user/year (Affinity) [R11 §11]; research item RB-7 | TBD | Monetises shared context; Neptune cost (≥ $350/month per company) priced in |
 
 ### 5.4 Margin math (summary) [R09 §6.4]
 | SKU (~10k users) | Price | GM at today's COGS | GM optimised |
@@ -187,9 +192,11 @@ A mail/Teams clone; a standalone notetaker or meeting bot; consumer lifelogging;
 | US Persona | $35 | 49% | ~64% |
 | US Persona Pro | $49 | 54% | ~69% |
 | US Enterprise | $65 | 58% | ~70% |
-| India Persona (₹2,199) | ≈ $25 | 36% (44% with usage capped, Haiku-only) | 55–60% |
+| India Persona (₹2,199) | ≈ $25 | 36% (44% with usage capped, Haiku-only)* | 55–60% |
 | India Persona Lite (₹1,499) | ≈ $17 | 45% | ~59% |
 | Capture+ add-on | $15 | **−62% on Transcribe** | **~73% on self-hosted STT** |
+
+\* India rows were modelled on in-India (`in.`) pricing, which carries a 10% geo premium. The MVP's global routing (F6) is list price, so India model cost per token is ~9% lower until residency tenants move to the India profile; capped Sonnet 5.5 premium drafts are inside the tier quotas. Re-run the India COGS model with pilot data.
 
 **Implications:** don't price US Persona below $30; India seats run at ~55–60% GM until model prices fall (COGS is in USD and similar to the US — so use Lite + caps + annual prepay, not deep discounts); recording must run on self-hosted STT or Teams' own transcripts (self-hosting breaks even at ~25–65 recorder users per region); qualify pilots tightly because each onboarded user costs ~$25 up front; plan for ~10–15% annual price compression in horizontal tiers and shift the mix to packs and Enterprise.
 
@@ -207,7 +214,7 @@ A mail/Teams clone; a standalone notetaker or meeting bot; consumer lifelogging;
 |---|---|---|---|
 | **M0–M3** (Oct–Dec 2026) | MVP (see `03-mvp-plan-and-roadmap.md`) | **6–8 design-partner LOIs** (~4 India mid-tier IT services/GCC delivery orgs; ~3–4 US mid-market IT services/consulting, ideally one via an MSP); security pack v1; SOC 2 Type I readiness; pentest booked; DPA + DPDP notice; publisher verification; **name + trademark decision** | MVP live in 2 internal tenants; 6+ LOIs |
 | **M3–M5** | Fidelity fixes; relationship-aware styles; pre-send safety; Persona Snapshot | **30-day pilots** (10–50 seats; $2–5k US / ₹1.5–4 lakh India, credited) | ≥ 4 pilots meet criteria; **first 3–5 paid annual contracts** |
-| **M5–M9** | **Persona Pro** (meeting memory, briefs, follow-ups, delegate mode), **Delivery Pack beta**, MCP v0; self-hosted STT when recorder users justify it | **AWS Marketplace listing + FTR**; Microsoft Marketplace/Teams Store (certification started); hire founding AE/SE (India) + CS lead; 2 channel partners (1 India CSP/LSP, 1 US MSP); SOC 2 Type II window | **10 paying customers** (~600–900 seats); ≥ 60% WAU; ≥ 25–30% send-without-edit |
+| **M5–M9** | **Persona Pro** (meeting memory, briefs, follow-ups, delegate mode), **Delivery Pack beta**, MCP v0; **India residency option** (in-country inference, F6); self-hosted STT when recorder users justify it | **AWS Marketplace listing + FTR**; Microsoft Marketplace/Teams Store (certification started); hire founding AE/SE (India) + CS lead; 2 channel partners (1 India CSP/LSP, 1 US MSP); SOC 2 Type II window | **10 paying customers** (~600–900 seats); ≥ 60% WAU; ≥ 25–30% send-without-edit |
 | **M9–M12** | Enterprise policy engine v1; India in-region stack hardened; work-mode capture beta (consent-first) | ISV Accelerate application; US AE; first 1,000+-seat proposal; first GCC → US-parent expansion | **15+ customers, ≈ $0.3M ARR (base)**; ≥ 20% seat growth within accounts |
 
 **First 10 customers (target mix):** 6 India (4 mid-tier IT services, 2 GCCs) + 4 US (2 mid-market IT services/consulting, 1 MSP-referred professional-services firm, 1 exec/EA-led deployment); 50–100 client-facing seats each.
@@ -219,7 +226,7 @@ A mail/Teams clone; a standalone notetaker or meeting bot; consumer lifelogging;
 4. **M365 MSPs/CSPs and IT-services firms as resellers** (partner programme after month 9).
 
 ### 6.4 Region specifics
-- **India:** sell to delivery/practice heads and account leaders (CIO/CISO approve); lead with client-communication quality in your own voice, status/BRD/SOW speed, attrition-proof handover and **in-India processing + DPDP readiness**; Indian entity with GSTIN (customers claim input tax credit on 18% GST); INR invoices against POs; expect net 45–90 and TDS; get tax advice on structure.
+- **India:** sell to delivery/practice heads and account leaders (CIO/CISO approve); lead with client-communication quality in your own voice, status/BRD/SOW speed, attrition-proof handover and **India-resident storage + DPDP readiness** (in-country AI processing from the Phase-2 residency option; until then, say plainly that model calls may be processed outside India — F6); Indian entity with GSTIN (customers claim input tax credit on 18% GST); INR invoices against POs; expect net 45–90 and TDS; get tax advice on structure.
 - **US:** sell to COO, delivery heads, client-services leaders and executive offices (EAs); lead with measured time saved, voice fidelity, follow-through, Copilot coexistence, SOC 2 and US residency; AWS Marketplace for procurement; MSPs for the 100–1,000-employee mid-market.
 
 ---

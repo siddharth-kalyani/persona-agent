@@ -8,6 +8,10 @@
 
 > Method note: the session's web-search budget ran out mid-run, so the second half of the research relied on fetching known primary URLs (docs.aws.amazon.com pages and their table-of-contents JSON, the **AWS Price List API** bulk files for `us-east-1`/`ap-south-1`, AgentCore/Bedrock pricing pages, Anthropic docs). All Bedrock/AgentCore prices below come from the AWS Price List API files published 2026-09-15 → 2026-10-03 unless stated otherwise.
 
+> **Update 2026-10-09 (after this report was written):**
+> 1. **AWS What's New, 29 Sep 2026:** Amazon Bedrock now offers **Claude Opus 5, Claude Sonnet 5 and Claude Haiku 4.5** with in-country inference in India, through geographic cross-Region inference across Mumbai and Hyderabad. Anthropic announced it on 5 Oct 2026; Reliance and CRED tested it in private preview. Sonnet 5.5 and Opus 5.5 are not included. The post says data is processed "in India Regions" but does not use the "never leaves the Region" wording it uses for Seoul and Singapore — confirm the exact guarantee and profile IDs before contracting residency. **[High for the model list; Med for the residency wording]** Sources: https://aws.amazon.com/about-aws/whats-new/2026/09/claude-region-expansion-in-sk/ · https://www.businesstoday.in/amp/technology/news/story/anthropic-claude-models-get-local-inference-in-india-via-amazon-bedrock-what-it-means-for-you-559534-2026-10-05
+> 2. **Founder decision F6 (2026-10-09):** the MVP does **not** need India model residency. India tenants use Bedrock global profiles; the in-country profile becomes the Phase-2 "India residency" option. The statements below that "only Haiku 4.5 and Opus 5" run in India, and the India-resident cost rows, describe that option rather than the MVP default (`../02-solution-architecture.md` §0 #5, §9.1).
+
 ---
 
 ## Executive summary

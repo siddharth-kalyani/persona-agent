@@ -3,6 +3,7 @@
 > **Date:** 2026-10-06. **Scope:** `README.md` and `docs/01`–`05`, checked against the ten research reports in `docs/research/`.
 > **Who did it:** an independent review subagent was started but was stopped before it saved anything, and stopped agents can't be resumed. The lead agent then ran the same adversarial checklist itself: fidelity to evidence, internal consistency, feasibility, unit economics, security/privacy/legal gaps, strategic blind spots, completeness against the founders' brief, and missing risks. Treat it as a self-review. A fresh independent reviewer can still be commissioned.
 > **Status:** every Critical and Major finding below has been **fixed in the documents** (39 edits on 2026-10-06). Minor findings are listed with their status.
+> **Later decisions (2026-10-09):** founder question 3 below is answered by **F6 — no India model residency in the MVP** (global routing; in-country Haiku 4.5 / Sonnet 5 / Opus 5 became available on 29 Sep 2026 and is now the Phase-2 residency option). User data controls (F7) and the company-context graph plan (F8) were added afterwards; see `05-decisions-and-open-questions.md`. This review describes the pack as of 2026-10-06.
 
 ---
 

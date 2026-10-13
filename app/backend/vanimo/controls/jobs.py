@@ -68,7 +68,13 @@ async def scrub_index(engine: AsyncEngine, vault: Vault, ref: UserRef) -> int:
 
 async def run_job(engine: AsyncEngine, vault: Vault, ref: UserRef, job_id: str, reason: str) -> None:
     async with user_tx(engine, ref) as conn:
-        await conn.execute(text("update vanimo.purge_jobs set status = 'running' where id = :id"), {"id": job_id})
+        await conn.execute(
+            text(
+                "update vanimo.purge_jobs set status = 'running', lease_until = now() + interval '10 minutes' "
+                "where id = :id"
+            ),
+            {"id": job_id},
+        )
     try:
         counts: dict[str, Any] = {}
         if reason == "term_added":

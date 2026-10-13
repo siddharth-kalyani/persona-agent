@@ -111,7 +111,7 @@ async def start_scan(user: CurrentUser, source: UserSource, state: State, reques
             await conn.execute(
                 text(
                     "select 1 from vanimo.source_scans where status = 'running' "
-                    "and started_at > now() - interval '30 minutes' limit 1"
+                    "and started_at > now() - interval '120 minutes' limit 1"
                 )
             )
         ).first()
@@ -154,7 +154,22 @@ async def _context(state: AppState, user: UserRef) -> tuple[idx.IndexView, idx.E
         matcher = await load_matcher(conn, state.vault, user)
         accounts = (await conn.execute(text("select id, name_enc from vanimo.client_accounts"))).all()
     names = {str(a.id): state.vault.decrypt_tenant(user.tenant_id, a.name_enc, "account_name") or "" for a in accounts}
-    return view, idx.Evaluator(view, engine, names), matcher
+    return view, idx.Evaluator(view, engine, names, display_masker(matcher)), matcher
+
+
+def display_masker(matcher: Matcher):  # type: ignore[no-untyped-def]
+    """Addresses are stored (encrypted) as identifiers; a never-send word inside one is still
+    masked wherever it is displayed."""
+
+    def shown(value: str) -> str:
+        return idx.render_removed(matcher.mask(value)[0]) or value
+
+    return shown
+
+
+async def _matcher(state: AppState, user: UserRef) -> Matcher:
+    async with user_tx(state.engine, user) as conn:
+        return await load_matcher(conn, state.vault, user)
 
 
 def _item(kind: RuleKind, item_id: Any, label: str, st: idx.Status, **kw: Any) -> SourceItem:
@@ -164,21 +179,38 @@ def _item(kind: RuleKind, item_id: Any, label: str, st: idx.Status, **kw: Any) -
     )  # fmt: skip
 
 
+async def _index_matches_source(state: AppState, user: UserRef, source_kind: str) -> bool:
+    async with user_tx(state.engine, user) as conn:
+        latest = (
+            await conn.execute(
+                text(
+                    "select source_kind from vanimo.source_scans where status = 'done' "
+                    "order by finished_at desc limit 1"
+                )
+            )
+        ).scalar_one_or_none()
+    return latest is None or latest == source_kind
+
+
 @router.get("/sources", response_model=list[SourceItem])
-async def list_sources(user: CurrentUser, state: State, kind: Annotated[SourceKind, Query()]) -> list[SourceItem]:
+async def list_sources(
+    user: CurrentUser, source: UserSource, state: State, kind: Annotated[SourceKind, Query()]
+) -> list[SourceItem]:
     view, ev, matcher = await _context(state, user)
+    if not await _index_matches_source(state, user, source.kind):
+        return []  # the index belongs to the other data source; a new scan replaces it
+    mask = display_masker(matcher)
 
     def shown(value: str | None) -> str | None:
-        # Addresses are stored (encrypted) as identifiers; a never-send word inside one is still
-        # masked wherever it is displayed.
-        return idx.render_removed(matcher.mask(value)[0]) if value else value
+        return mask(value) if value else value
 
     items: list[SourceItem] = []
     if kind == "people":
         for p in sorted(view.people.values(), key=lambda p: -(p.sent + p.chats + p.meetings)):
             flags = (["personal email"] if p.consumer else []) + ([] if p.internal else ["external"])
             items.append(
-                _item("person", p.id, p.label, ev.person(p), detail=shown(p.email), lastActivity=p.last, flags=flags,
+                _item("person", p.id, shown(p.label) or p.label, ev.person(p), detail=shown(p.email),
+                      lastActivity=p.last, flags=flags,
                       counts={"emails": p.sent, "chats": p.chats, "meetings": p.meetings})
             )  # fmt: skip
     elif kind == "domains":
@@ -327,7 +359,8 @@ async def add_rule(body: RuleIn, user: CurrentUser, state: State, request: Reque
         job_id = await add_purge_job(conn, user, "exclusion_added")
     _start_job(state, user, job_id, "exclusion_added")
     log.info("controls.rule_added", count=len(exceptions))
-    return RuleOut(id=str(row.id), kind=body.kind, label=view.by_hash().get((body.kind, key_hash), body.kind),
+    matcher_labels = view.by_hash(display_masker(await _matcher(state, user)))
+    return RuleOut(id=str(row.id), kind=body.kind, label=matcher_labels.get((body.kind, key_hash), body.kind),
                    createdAt=row.created_at, exceptions=len(exceptions))  # fmt: skip
 
 
@@ -344,7 +377,7 @@ async def list_rules(user: CurrentUser, state: State) -> list[RuleOut]:
                 )
             )
         ).all()
-    labels = view.by_hash()
+    labels = view.by_hash(display_masker(await _matcher(state, user)))
     return [
         RuleOut(id=str(r.id), kind=r.kind, label=labels.get((r.kind, r.key_hash), "(no longer in your sources)"),
                 createdAt=r.created_at, exceptions=r.n)
@@ -546,7 +579,8 @@ async def complete_review(
         await conn.execute(
             text(
                 "update vanimo.users set onboarding_state = 'review_done', review_outcome = :o, "
-                "review_completed_at = now(), reviewed_source_kind = :k"
+                "review_completed_at = now(), reviewed_source_kind = :k, "
+                "reviewed_sources = (select array_agg(distinct s) from unnest(reviewed_sources || cast(:k as text)) s)"
             ),
             {"o": body.outcome, "k": source.kind},
         )

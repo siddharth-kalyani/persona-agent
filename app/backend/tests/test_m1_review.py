@@ -268,19 +268,116 @@ async def test_sweeper_resumes_jobs_and_fails_stale_scans(
 ) -> None:
     import psycopg
 
+    from vanimo.auth.local import resolve_session
     from vanimo.controls.sweeper import sweep_once
 
     owner = database["owner"].replace("postgresql+psycopg://", "postgresql://")
+    ref = (await resolve_session(app_state.engine, scanned["Authorization"].split()[1])).local_user
     await client.post("/api/controls/never-send", json={"text": "Monsoon"}, headers=scanned)
     await _settle(app_state)
     with psycopg.connect(owner) as conn:
-        conn.execute("update vanimo.purge_jobs set status = 'pending', requested_at = now() - interval '1 hour'")
+        conn.execute(
+            "update vanimo.purge_jobs set status = 'pending', requested_at = now() - interval '1 hour' "
+            "where owner_user_id = %s",
+            (ref.user_id,),
+        )
         conn.execute(
             "insert into vanimo.source_scans (tenant_id, owner_user_id, source_kind, status, started_at) "
-            "select tenant_id, owner_user_id, 'sample', 'running', now() - interval '2 hours' "
-            "from vanimo.purge_jobs limit 1"
+            "values (%s, %s, 'sample', 'running', now() - interval '3 hours')",
+            (ref.tenant_id, ref.user_id),
         )
     failed, resumed = await sweep_once(app_state.engine, app_state.vault)
     assert failed >= 1 and resumed >= 1
     with psycopg.connect(owner) as conn:
-        assert conn.execute("select count(*) from vanimo.purge_jobs where status = 'pending'").fetchone() == (0,)
+        pending = conn.execute(
+            "select count(*) from vanimo.purge_jobs where status = 'pending' and owner_user_id = %s", (ref.user_id,)
+        )
+        assert pending.fetchone() == (0,)
+
+
+async def test_addresses_are_masked_in_rule_labels_and_via(client: httpx.AsyncClient, scanned: dict) -> None:
+    await client.post("/api/controls/never-send", json={"text": "nisha", "kind": "codename"}, headers=scanned)
+    domains = await _sources(client, scanned, "domains")
+    gmail = _find(domains, "gmail.com")
+    rule = (
+        await client.post("/api/controls/rules", json={"kind": "domain", "id": gmail["id"]}, headers=scanned)
+    ).json()
+    assert rule["label"] == "gmail.com"
+    people = await _sources(client, scanned, "people")
+    home = next(p for p in people if "gmail.com" in (p["detail"] or ""))
+    assert "nisha" not in (home["detail"] or "").lower() and "[removed]" in home["detail"]
+    assert "nisha" not in home["label"].lower()
+    rules = (await client.get("/api/controls/rules", headers=scanned)).json()
+    assert all("nisha" not in r["label"].lower() for r in rules)
+
+
+async def test_sweeper_claims_each_job_once(
+    client: httpx.AsyncClient, scanned: dict, app_state: AppState, database: dict[str, str]
+) -> None:
+    import psycopg
+
+    from vanimo.auth.local import resolve_session
+    from vanimo.controls.sweeper import sweep_once
+
+    owner = database["owner"].replace("postgresql+psycopg://", "postgresql://")
+    ref = (await resolve_session(app_state.engine, scanned["Authorization"].split()[1])).local_user
+    await client.post("/api/controls/never-send", json={"text": "Monsoon"}, headers=scanned)
+    await _settle(app_state)
+    mine = "select max(attempts), count(*) from vanimo.purge_jobs where owner_user_id = %s"
+    with psycopg.connect(owner) as conn:
+        conn.execute(
+            "update vanimo.purge_jobs set status = 'pending', requested_at = now() - interval '1 hour' "
+            "where owner_user_id = %s",
+            (ref.user_id,),
+        )
+    # Two sweepers at once (e.g. two API tasks): each job is claimed and run exactly once.
+    await asyncio.gather(sweep_once(app_state.engine, app_state.vault), sweep_once(app_state.engine, app_state.vault))
+    with psycopg.connect(owner) as conn:
+        attempts, n = conn.execute(mine, (ref.user_id,)).fetchone()
+        assert n >= 1 and attempts == 1
+        done = conn.execute(
+            "select count(*) from vanimo.purge_jobs where owner_user_id = %s and status = 'done'", (ref.user_id,)
+        ).fetchone()[0]
+        assert done == n
+        # A failed job is retried by the next sweep (up to 3 attempts).
+        conn.execute("update vanimo.purge_jobs set status = 'failed' where owner_user_id = %s", (ref.user_id,))
+    await sweep_once(app_state.engine, app_state.vault)
+    with psycopg.connect(owner) as conn:
+        assert conn.execute(mine, (ref.user_id,)).fetchone()[0] == 2
+
+
+async def test_sample_scans_never_record_domains_in_a_real_tenant(database: dict[str, str], settings: Settings) -> None:
+    import psycopg
+
+    engine = create_async_engine(database["app"])
+    vault = Vault(settings.vault_master_key.get_secret_value())
+    real_tenant = str(uuid.uuid4())
+    ref = await provision_user(engine, entra_tenant_id=real_tenant, entra_oid=str(uuid.uuid4()), cell="in",
+                               data_region="IN")  # fmt: skip
+    await run_scan(engine, vault, ref, SampleSource("someone@contoso.example"))
+    with psycopg.connect(database["owner"].replace("postgresql+psycopg://", "postgresql://")) as conn:
+        n = conn.execute("select count(*) from vanimo.tenant_org_domains where tenant_id = %s", (ref.tenant_id,))
+        assert n.fetchone() == (0,)
+    await engine.dispose()
+
+
+async def test_reviews_are_remembered_per_source_and_index_is_hidden_after_a_switch(
+    client: httpx.AsyncClient, scanned: dict, app_state: AppState, database: dict[str, str]
+) -> None:
+    import psycopg
+
+    from vanimo.auth.local import resolve_session
+    from vanimo.gates import require_review_done
+
+    await client.post("/api/controls/review", json={"outcome": "finished"}, headers=scanned)
+    ref = (await resolve_session(app_state.engine, scanned["Authorization"].split()[1])).local_user
+    with psycopg.connect(database["owner"].replace("postgresql+psycopg://", "postgresql://")) as conn:
+        # As if this user had also reviewed their Microsoft 365 sources earlier.
+        conn.execute("update vanimo.users set reviewed_sources = '{graph,sample}' where id = %s", (ref.user_id,))
+    await client.post("/api/controls/review", json={"outcome": "skipped"}, headers=scanned)
+    await require_review_done(app_state.engine, ref, "graph")  # reviewing sample again didn't re-lock graph
+    await require_review_done(app_state.engine, ref, "sample")
+    with psycopg.connect(database["owner"].replace("postgresql+psycopg://", "postgresql://")) as conn:
+        conn.execute("update vanimo.source_scans set source_kind = 'graph' where owner_user_id = %s", (ref.user_id,))
+    # The stored index now belongs to another source: it isn't shown until a new scan replaces it.
+    assert await _sources(client, scanned, "people") == []

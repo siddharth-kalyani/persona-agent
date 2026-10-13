@@ -154,7 +154,7 @@ async def run_scan(engine: AsyncEngine, vault: Vault, ref: UserRef, source: Work
         profile = await source.profile()
         org_domains = await source.org_domains()
         idx = await _collect(source, profile.email or "", datetime.now(UTC))
-        counts = await _store(engine, vault, ref, idx, org_domains, scan_id)
+        counts = await _store(engine, vault, ref, idx, org_domains, scan_id, record_org=source.kind == "graph")
     except Exception as exc:
         async with user_tx(engine, ref) as conn:
             await conn.execute(
@@ -177,13 +177,20 @@ async def _store(
     idx: _Index,
     org_domains: frozenset[str],
     scan_id: Any,
+    *,
+    record_org: bool,
 ) -> dict[str, Any]:
     async with user_tx(engine, ref) as conn:
         # Under the per-user lock, with the words as they are *now*: a word added while the
         # header pass ran is applied here, and a scrub can't interleave with this replace.
         await lock_user_controls(conn, ref)
         matcher = await load_matcher(conn, vault, ref)
-        return await _replace_index(conn, vault, ref, idx, matcher, org_domains, scan_id)
+        if not record_org:
+            # The sample workspace's fictional domain is recorded only in the local (password) tenant,
+            # never in a real organisation's tenant.
+            tenant_key = (await conn.execute(text("select entra_tenant_id from vanimo.tenants"))).scalar_one()
+            record_org = tenant_key == "local"
+        return await _replace_index(conn, vault, ref, idx, matcher, org_domains, scan_id, record_org)
 
 
 async def _replace_index(
@@ -194,6 +201,7 @@ async def _replace_index(
     matcher: Matcher,
     org_domains: frozenset[str],
     scan_id: Any,
+    record_org: bool,
 ) -> dict[str, Any]:
     h = hasher_for(vault, ref)
     t, u = ref.tenant_id, ref.user_id
@@ -342,9 +350,10 @@ async def _replace_index(
     for sql, rows in inserts:
         if rows:
             await conn.execute(text(sql), rows)
-    await conn.execute(
-        text("select vanimo_private.record_org_domains(cast(:h as text[]))"), {"h": counts["org_domain_hashes"]}
-    )
+    if record_org:
+        await conn.execute(
+            text("select vanimo_private.record_org_domains(cast(:h as text[]))"), {"h": counts["org_domain_hashes"]}
+        )
     await conn.execute(
         text(
             "update vanimo.source_scans set status = 'done', finished_at = now(), counts = cast(:c as jsonb) "

@@ -1,6 +1,6 @@
 """Keeps background work durable across restarts (in-process tasks die with the process).
 
-Every few minutes: scans still "running" after 30 minutes are marked failed (so the UI offers a
+Every few minutes: scans still "running" after 2 hours are marked failed (so the UI offers a
 retry instead of spinning), and purge/scrub jobs left pending or running are run again (they are
 idempotent). Uses SECURITY DEFINER functions from migration 0005, which return IDs only.
 """
@@ -18,7 +18,7 @@ from vanimo.logs import get_logger
 from vanimo.vault import Vault
 
 log = get_logger("vanimo.sweeper")
-STALE_SCAN_MINUTES = 30
+STALE_SCAN_MINUTES = 120  # throttled Graph passes can be slow; the advisory lock makes overlap safe
 STALE_JOB_MINUTES = 2
 INTERVAL_S = 300
 
@@ -29,7 +29,7 @@ async def sweep_once(engine: AsyncEngine, vault: Vault) -> tuple[int, int]:
             await conn.execute(text("select vanimo_private.fail_stale_scans(:m)"), {"m": STALE_SCAN_MINUTES})
         ).scalar_one()
         jobs = (
-            await conn.execute(text("select * from vanimo_private.stale_purge_jobs(:m)"), {"m": STALE_JOB_MINUTES})
+            await conn.execute(text("select * from vanimo_private.claim_purge_jobs(:m)"), {"m": STALE_JOB_MINUTES})
         ).all()
     for job in jobs:
         await run_job(engine, vault, UserRef(job.tenant_id, job.user_id), str(job.job_id), job.reason)

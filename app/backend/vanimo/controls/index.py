@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -84,12 +85,13 @@ class IndexView:
     chats: dict[uuid.UUID, ChatRow]
     meetings: dict[uuid.UUID, Meeting]
 
-    def by_hash(self) -> dict[tuple[str, str], str]:
-        """(kind, key hash) → display label, to show what each rule excludes."""
+    def by_hash(self, shown: Callable[[str], str] = lambda s: s) -> dict[tuple[str, str], str]:
+        """(kind, key hash) → display label, to show what each rule excludes. `shown` masks
+        never-send words inside addresses and domains for display."""
         out: dict[tuple[str, str], str] = {}
         for p in self.people.values():
-            out[("person", p.key_hash)] = p.label
-            out[("domain", p.domain_hash)] = p.domain
+            out[("person", p.key_hash)] = shown(p.label)
+            out[("domain", p.domain_hash)] = shown(p.domain)
         for t in self.threads.values():
             out[("thread", t.key_hash)] = render_removed(t.subject) or "(no subject)"
         for c in self.chats.values():
@@ -159,11 +161,17 @@ class Status:
 
 
 class Evaluator:
-    def __init__(self, view: IndexView, engine: ExclusionEngine, account_names: dict[str, str]) -> None:
+    def __init__(
+        self,
+        view: IndexView,
+        engine: ExclusionEngine,
+        account_names: dict[str, str],
+        shown: Callable[[str], str] = lambda s: s,
+    ) -> None:
         self.view = view
         self.engine = engine
         self.account_names = account_names
-        self.labels = view.by_hash()
+        self.labels = view.by_hash(shown)
         self.rule_labels = {r.id: self.labels.get((r.kind, r.key_hash), r.kind) for r in engine.user_rules}
 
     def _describe(self, reasons: list[Reason], direct_kind: str | None, direct_key: str | None = None) -> Status:

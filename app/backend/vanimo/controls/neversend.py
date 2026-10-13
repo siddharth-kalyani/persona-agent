@@ -45,7 +45,7 @@ _CONFUSABLES = {
     "ԁ": "d", "ӏ": "l", "к": "k", "м": "m", "т": "t", "в": "b", "н": "h",
     "α": "a", "ο": "o", "ρ": "p", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "τ": "t", "υ": "u", "χ": "x",
 }  # fmt: skip
-_NAME_SUFFIXES = ("ji", "jee", "sahab", "saheb", "bhai", "'s", "’s", "s")
+_NAME_SUFFIXES = ("ji", "jee", "sahab", "saheb", "bhai", "'s", "’s", "s", "जी", "भाई", "साहब")
 _SEPARATORS = re.compile(r"[\s\-_./]+")
 _PLACEHOLDER = re.compile(r"⟦NS_[0-9a-f]{8}⟧")
 
@@ -126,6 +126,36 @@ def _fold(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
     return "".join(out), org
 
 
+def _strip_marks(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
+    """Latin letters with their accents removed (UTS #39-style skeleton step), so a mark glued on
+    to dodge the filter ("falcońs") doesn't hide the word. Non-Latin text is left as is."""
+    out: list[str] = []
+    org: list[Span] = []
+    for c, o in zip(shadow, origin, strict=True):
+        d = unicodedata.normalize("NFD", c)
+        if d[0].isascii():
+            d = "".join(ch for ch in d if unicodedata.category(ch) != "Mn")
+        for ch in d:
+            out.append(ch)
+            org.append(o)
+    return "".join(out), org
+
+
+def _strip_marks(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
+    """Latin letters with their accents removed (UTS #39-style skeleton step), so a mark glued on
+    to dodge the filter ("falcońs") doesn't hide the word. Non-Latin text is left as is."""
+    out: list[str] = []
+    org: list[Span] = []
+    for c, o in zip(shadow, origin, strict=True):
+        d = unicodedata.normalize("NFD", c)
+        if d[0].isascii():
+            d = "".join(ch for ch in d if unicodedata.category(ch) != "Mn")
+        for ch in d:
+            out.append(ch)
+            org.append(o)
+    return "".join(out), org
+
+
 def _squash(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
     keep = [(c, o) for c, o in zip(shadow, origin, strict=True) if not _SEPARATORS.fullmatch(c)]
     return "".join(c for c, _ in keep), [o for _, o in keep]
@@ -185,7 +215,7 @@ def variants(text: str, kind: TermKind) -> list[str]:
 class _Pattern:
     term: Term
     needle: str
-    space: Literal["plain", "folded", "squashed"]
+    space: Literal["plain", "stripped", "folded", "squashed"]
     boundary: bool
 
 
@@ -205,6 +235,12 @@ class Matcher:
             for form in dict.fromkeys(forms):
                 boundary = not substring
                 self._patterns.append(_Pattern(term, form, "plain", boundary))
+                stripped, _ = _strip_marks(form, [(k, k) for k in range(len(form))])
+                if _ascii_latin(stripped):
+                    self._patterns.append(_Pattern(term, stripped, "stripped", boundary))
+                stripped, _ = _strip_marks(form, [(k, k) for k in range(len(form))])
+                if _ascii_latin(stripped):
+                    self._patterns.append(_Pattern(term, stripped, "stripped", boundary))
                 if term.folds and _ascii_latin(form) and len(form) >= 4:
                     # Matched against the folded copy of the text even when folding leaves the
                     # term unchanged: the *text* may fold ("Sharmaa" → "sharma").
@@ -222,7 +258,7 @@ class Matcher:
 
     def _spans(self, text: str) -> list[tuple[int, int, Term]]:
         plain, plain_map = normalise(text)
-        spaces = {"plain": (plain, plain_map)}
+        spaces = {"plain": (plain, plain_map), "stripped": _strip_marks(plain, plain_map)}
         spaces["folded"] = _fold(plain, plain_map)
         spaces["squashed"] = _squash(plain, plain_map)
         hits: list[tuple[int, int, Term]] = []

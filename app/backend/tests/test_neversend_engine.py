@@ -98,6 +98,16 @@ def test_existing_placeholders_are_never_rematched() -> None:
     assert masked == "x ⟦NS_abcd1234⟧ and ⟦NS_deadbeef⟧ ⟦NS_00000013⟧ ⟦NS_00000012⟧"
 
 
+def test_accents_glued_on_to_dodge_the_filter_are_ignored() -> None:
+    assert _m(FALCON).count("falcońs launch") == 1
+    assert _m(FALCON).count("Fálcon") == 1
+    assert _m(Term("00000015", "café", "word")).count("cafe menu") == 1  # accent-insensitive both ways
+
+
+def test_devanagari_honorifics_on_names() -> None:
+    assert _m(SHARMA).count("शर्माजी आए") == 1
+
+
 def test_short_codenames_match_whole_words_only() -> None:
     m = _m(Term("00000014", "ace", "codename"))
     assert m.mask("Place an ace") == ("Place an ⟦NS_00000014⟧", 1)

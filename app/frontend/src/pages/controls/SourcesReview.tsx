@@ -204,9 +204,10 @@ export function SourcesReview({ onChange }: { onChange?: () => void }) {
         <ExcludeDialog
           item={pending}
           onClose={() => setPending(null)}
-          onDone={async () => {
+          onDone={async (warning) => {
             setPending(null);
             await load();
+            if (warning) setError(warning);
             onChange?.();
           }}
         />
@@ -215,7 +216,15 @@ export function SourcesReview({ onChange }: { onChange?: () => void }) {
   );
 }
 
-function ExcludeDialog({ item, onClose, onDone }: { item: SourceItem; onClose: () => void; onDone: () => Promise<void> }) {
+function ExcludeDialog({
+  item,
+  onClose,
+  onDone,
+}: {
+  item: SourceItem;
+  onClose: () => void;
+  onDone: (warning?: string) => Promise<void>;
+}) {
   const styles = useStyles();
   const api = useApi();
   const [impact, setImpact] = useState<Impact | null>(null);
@@ -243,9 +252,8 @@ function ExcludeDialog({ item, onClose, onDone }: { item: SourceItem; onClose: (
       try {
         await api.addWord(item.label, "name", [], false);
       } catch {
-        // The exclusion is saved; say so rather than failing the whole action.
-        setError(`Excluded. Adding "${item.label}" to never-send words didn't work; add it on the Never-send words tab.`);
-        setBusy(false);
+        // The exclusion is saved: close the dialog and say what's left to do.
+        await onDone(`Excluded. Adding "${item.label}" to never-send words didn't work; add it on the Never-send words tab.`);
         return;
       }
     }

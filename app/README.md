@@ -60,6 +60,12 @@ Entra and Graph access may come late, so every feature also runs on a **sample w
   - This is a backstop against bugs, not a second security boundary: code that can run arbitrary SQL as the API role could set the flag itself.
   - All queries are parameterised.
 
+### Carried into M2 (from the M1 reviews)
+
+- Every content read calls `require_review_done(engine, ref, source.kind)`.
+- The fetch path builds the engine with `load_engine(..., self_email=...)`.
+- Every new derived store (L1 text, vectors, style cards) registers its purge in `vanimo/controls/jobs.py`.
+
 ## Guarantees built in from M0
 
 - **Tenant and user isolation in the database.**
@@ -164,6 +170,8 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Purge | Step Functions job across all stores (§6.5 X7) | In-process job. M1 has no derived content yet, so it re-masks the Sources index and writes receipts | M2 registers each new store (L1 text, vectors, style cards) |
 | Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |
 | Background work | Step Functions / durable queues | In-process tasks, plus a sweeper every 5 minutes that resumes interrupted purge jobs and fails scans cut off by a restart (`vanimo/controls/sweeper.py`) | Move to a queue when there is more than one API task |
+| Housekeeping functions | Separate sweeper role | `vanimo_private.fail_stale_scans` / `claim_purge_jobs` are SECURITY DEFINER functions the API role can call. They act across tenants and return only IDs. `record_org_domains` accepts domains from Microsoft 365 scans, plus the sample domain in the local tenant only | Give the sweeper its own database role; add an admin view of recorded organisation domains |
+| Sources index | One index per data source | One index per user. After switching between the sample workspace and Microsoft 365, the old index is hidden until the new scan finishes. Reviews are remembered per source | Split the index by source if both are used side by side |
 | Sign-in | Entra only | Also email + password, local/dev only, for testing while the Entra app is pending | Removed or kept off in prod (the settings refuse it) |
 
 ## M0 demo and week-1 spikes

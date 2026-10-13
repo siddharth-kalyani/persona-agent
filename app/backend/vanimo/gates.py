@@ -21,18 +21,18 @@ class ReviewPending(AuthError):
         super().__init__("review_pending", 409)
 
 
-def effective_state(onboarding_state: str, reviewed_source_kind: str | None, source_kind: str) -> str:
+def effective_state(onboarding_state: str, reviewed_sources: list[str] | None, source_kind: str) -> str:
     """'review_done' only when the review was completed for the source in use now."""
-    if onboarding_state == "review_done" and reviewed_source_kind == source_kind:
+    if onboarding_state == "review_done" and source_kind in (reviewed_sources or []):
         return "review_done"
     return "review_pending"
 
 
 async def onboarding_state(conn: AsyncConnection, source_kind: str) -> tuple[str, str | None]:
     row = (
-        await conn.execute(text("select onboarding_state, review_outcome, reviewed_source_kind from vanimo.users"))
+        await conn.execute(text("select onboarding_state, review_outcome, reviewed_sources from vanimo.users"))
     ).one()
-    state = effective_state(row.onboarding_state, row.reviewed_source_kind, source_kind)
+    state = effective_state(row.onboarding_state, row.reviewed_sources, source_kind)
     return state, row.review_outcome if state == "review_done" else None
 
 

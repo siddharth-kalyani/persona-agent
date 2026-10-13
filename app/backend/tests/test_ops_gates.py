@@ -49,7 +49,7 @@ async def test_content_gate(database: dict[str, str]) -> None:
         await conn.execute(
             text(
                 "update vanimo.users set onboarding_state = 'review_done', review_outcome = 'skipped', "
-                "review_completed_at = now(), reviewed_source_kind = 'sample'"
+                "review_completed_at = now(), reviewed_sources = '{sample}'"
             )
         )
     await require_review_done(engine, ref, "sample")

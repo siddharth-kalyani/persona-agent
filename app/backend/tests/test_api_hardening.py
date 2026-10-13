@@ -136,7 +136,7 @@ async def test_bedrock_latency_reports_min_median_max(
     resp = await client.post("/api/admin/diagnostics/bedrock-latency", json={"runs": 3}, headers=headers)
     assert resp.status_code == 200, resp.text
     by_model = {r["modelId"]: r for r in resp.json()}
-    assert set(by_model) == {"anthropic.claude-haiku-4-5", "anthropic.claude-sonnet-5-5"}
+    assert set(by_model) == {"anthropic.claude-haiku-5-5", "anthropic.claude-sonnet-5-5"}
     for r in by_model.values():
         if r["ttftMinMs"] is not None:
             assert r["ttftMinMs"] <= r["ttftMedianMs"] <= r["ttftMaxMs"]

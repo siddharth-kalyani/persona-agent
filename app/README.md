@@ -84,7 +84,7 @@ Entra and Graph access may come late, so every feature also runs on a **sample w
 - **Single-tenant Entra.**
   - The API only accepts v2 tokens for this tenant that carry the `access_as_user` scope and a Vanimo app role.
   - Graph calls are made as the user (On-Behalf-Of).
-- **Models only from the cell's allow-list** (Claude on Bedrock: Haiku 4.5 by default, Sonnet 5.5 for premium drafts).
+- **Models only from the cell's allow-list** (Claude on Bedrock: Haiku 5.5 by default, Sonnet 5.5 for premium drafts).
 - **Canaries and evals from day one** (`vanimo/canary.py`, `vanimo/evals/`).
 
 ## Local development (Windows, PowerShell or Git Bash)
@@ -130,7 +130,7 @@ CI runs the same steps (`.github/workflows/ci.yml`) against Postgres 18 and 17.
 
 1. **AWS credentials.**
    - `aws configure sso` (or keys) for the target account.
-   - In the Bedrock console (ap-south-1), check that **Claude Haiku 4.5** and **Claude Sonnet 5.5** are enabled.
+   - In the Bedrock console (ap-south-1), check that **Claude Haiku 5.5** and **Claude Sonnet 5.5** are enabled.
 2. **Bootstrap CDK once:** `cdk bootstrap aws://<account>/ap-south-1`.
 3. **Build the frontend:** `cd app/frontend && npm run build`.
 4. **Deploy:**
@@ -187,5 +187,5 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | 3 | Graph delta details, `MSIP_Labels` | Diagnostics → *Run checks*: `sent_headers` and `sent_delta_headers` rows. **`uniqueBody` in delta moves to M2:** it needs a message body, and no body is read before the user's review step. The quote-stripper fallback is planned anyway |
 | 4 | Transcript access as organiser/attendee | Diagnostics → `meeting_transcripts` row |
 | 5 | Drafts on Outlook mobile | Diagnostics → *Create test draft*, check the phone, then *Delete* |
-| 7 | Latency from Mumbai | Diagnostics → *Measure latency* (Haiku 4.5, Sonnet 5.5) |
+| 7 | Latency from Mumbai | Diagnostics → *Measure latency* (Haiku 5.5, Sonnet 5.5) |
 | 11 | Data-control Graph checks | Diagnostics:<ul><li>*Run checks*: chat roster, `chatType` and `topic` filters, `conversationId` on forwards, calendar</li><li>*Time the header pass*: how long the M1 metadata review takes to build</li></ul>Header-only subscriptions wait for M1, because they need a public webhook |

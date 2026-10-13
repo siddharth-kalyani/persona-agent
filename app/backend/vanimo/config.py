@@ -34,7 +34,7 @@ CELLS: dict[str, Cell] = {
         aws_region="ap-south-1",
         data_region="IN",
         bedrock_region="ap-south-1",
-        model_allow_list=("anthropic.claude-haiku-4-5", "anthropic.claude-sonnet-5-5"),
+        model_allow_list=("anthropic.claude-haiku-5-5", "anthropic.claude-sonnet-5-5"),
     ),
     # Added later without code changes (D2): deploy the same stacks with VANIMO_CELL=us.
     "us": Cell(
@@ -42,7 +42,7 @@ CELLS: dict[str, Cell] = {
         aws_region="us-east-1",
         data_region="US",
         bedrock_region="us-east-1",
-        model_allow_list=("anthropic.claude-haiku-4-5", "anthropic.claude-sonnet-5-5"),
+        model_allow_list=("anthropic.claude-haiku-5-5", "anthropic.claude-sonnet-5-5"),
     ),
 }
 
@@ -76,8 +76,8 @@ class Settings(BaseSettings):
     graph_base_url: str = "https://graph.microsoft.com/v1.0"
     graph_timeout_s: float = 20.0
 
-    # Models (D7: Claude on Bedrock only). Haiku by default; Sonnet for premium drafts.
-    model_default: str = "anthropic.claude-haiku-4-5"
+    # Models (D7: Claude on Bedrock only). Haiku 5.5 by default (founder, 2026-10-13); Sonnet 5.5 for premium drafts.
+    model_default: str = "anthropic.claude-haiku-5-5"
     model_premium: str = "anthropic.claude-sonnet-5-5"
 
     # Key for opaque references to identifiers (audit targets, later exclusion rules) so

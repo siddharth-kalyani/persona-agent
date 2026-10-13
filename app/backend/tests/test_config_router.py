@@ -9,7 +9,7 @@ from vanimo.llm.router import ModelNotAllowed, ModelRouter
 
 def test_defaults_route_haiku_then_sonnet() -> None:
     router = ModelRouter(Settings(env="test"))
-    assert router.model_for("default") == "anthropic.claude-haiku-4-5"
+    assert router.model_for("default") == "anthropic.claude-haiku-5-5"
     assert router.model_for("premium") == "anthropic.claude-sonnet-5-5"
 
 

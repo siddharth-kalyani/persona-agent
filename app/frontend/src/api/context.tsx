@@ -10,7 +10,9 @@ export function ApiProvider({ config, children }: { config: AppConfig; children:
   const api = useMemo(
     () =>
       new Api(config.apiBase, auth.token, (code) => {
-        if (auth.method === "password" && ["session_expired", "password_signin_disabled"].includes(code)) auth.expire();
+        if (auth.method !== "password") return;
+        if (code === "password_change_required") auth.requirePasswordChange();
+        else if (["session_expired", "password_signin_disabled"].includes(code)) auth.expire();
       }),
     [auth, config.apiBase],
   );

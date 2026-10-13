@@ -28,6 +28,9 @@ from vanimo.llm.router import ModelRouter
 from vanimo.ops.bootstrap_db import bootstrap
 from vanimo.state import AppState
 
+# Tests never read a developer's app/backend/.env (it may enable features the tests assert on).
+Settings.model_config["env_file"] = None
+
 BACKEND = Path(__file__).resolve().parents[1]
 TENANT = "11111111-1111-1111-1111-111111111111"
 CLIENT_ID = "22222222-2222-2222-2222-222222222222"

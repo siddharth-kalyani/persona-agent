@@ -161,3 +161,8 @@ async def test_obo_error_mapping(unit_settings: Settings) -> None:
     with pytest.raises(AuthError) as exc:
         await obo.graph_token(p)
     assert exc.value.code == "obo_failed" and exc.value.status == 502
+
+
+async def test_superadmin_is_never_taken_from_entra(validator: TokenValidator, make_token: TokenFactory) -> None:
+    p = await validator.validate(make_token(roles=("Vanimo.SuperAdmin", "Vanimo.User")))
+    assert p.roles == {"Vanimo.User"} and not p.is_superadmin and not p.is_admin

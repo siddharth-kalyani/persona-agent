@@ -19,4 +19,7 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH=/app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).status == 200 else 1)"
-CMD ["uvicorn", "vanimo.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# X-Forwarded-For is trusted only from FORWARDED_ALLOW_IPS (set by CDK to the VPC range, where the
+# ALB lives); anything a client puts in the header is ignored. Never use "*".
+ENV FORWARDED_ALLOW_IPS=127.0.0.1
+CMD ["uvicorn", "vanimo.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers"]

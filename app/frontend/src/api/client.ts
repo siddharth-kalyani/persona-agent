@@ -91,7 +91,7 @@ export class Api {
     }
     if (!res.ok) {
       const code = String(json.error ?? "error");
-      if (res.status === 401) this.onUnauthorized?.(code);
+      if (res.status === 401 || code === "password_change_required") this.onUnauthorized?.(code);
       throw new ApiError(res.status, code, json);
     }
     return json as T;

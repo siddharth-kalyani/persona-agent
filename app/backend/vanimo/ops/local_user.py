@@ -6,7 +6,8 @@ A one-time password is printed once; the user must replace it at first sign-in.
     uv run python -m vanimo.ops.local_user --email someone@example.com --role superadmin
     uv run python -m vanimo.ops.local_user --email someone@example.com --reset
 
-Runs as the schema owner (VANIMO_DB_OWNER_URL), like migrations.
+Runs as the schema owner (VANIMO_DB_OWNER_URL), like migrations. It prints a password: run
+it from your own terminal, never as a task whose output goes to a log (CloudWatch etc.).
 """
 
 from __future__ import annotations
@@ -27,17 +28,18 @@ ROLE_SETS = {
     "admin": [ROLE_USER, ROLE_ADMIN],
     "superadmin": [ROLE_USER, ROLE_ADMIN, ROLE_SUPERADMIN],
 }
-# Tenant key for local accounts when no Entra tenant is configured yet.
+# Local accounts always live in their own tenant, never in a real Entra tenant: a password
+# sign-in must not reach tenant-wide admin data that is otherwise behind Entra MFA.
 LOCAL_TENANT_KEY = "local"
 
 
-def upsert_local_user(owner_url: str, email: str, role: str, *, reset: bool, settings: Settings) -> str:
+def upsert_local_user(owner_url: str, email: str, role: str | None, *, reset: bool, settings: Settings) -> str:
     email = email.strip().lower()
     if "@" not in email:
         raise SystemExit("not an email address")
     one_time = new_one_time_password()
     pw_hash = hash_password(one_time)
-    tenant_key = settings.entra_tenant_id or LOCAL_TENANT_KEY
+    tenant_key = LOCAL_TENANT_KEY
     url = owner_url.replace("postgresql+psycopg://", "postgresql://")
     with psycopg.connect(url) as conn, conn.transaction():
         conn.execute("set local search_path = vanimo, pg_temp")
@@ -45,10 +47,11 @@ def upsert_local_user(owner_url: str, email: str, role: str, *, reset: bool, set
         if existing:
             if not reset:
                 raise SystemExit(f"{email} already exists; use --reset to issue a new one-time password")
+            # Reset keeps the account's roles unless a new --role is given explicitly.
             conn.execute(
                 "update local_credentials set password_hash = %s, must_change_password = true, "
-                "failed_attempts = 0, locked_until = null, roles = %s where user_id = %s",
-                (pw_hash, ROLE_SETS[role], existing[0]),
+                "failed_attempts = 0, locked_until = null, roles = coalesce(%s, roles) where user_id = %s",
+                (pw_hash, ROLE_SETS[role] if role else None, existing[0]),
             )
             conn.execute("update sessions set revoked_at = now() where user_id = %s and revoked_at is null", existing)
             return one_time
@@ -68,7 +71,7 @@ def upsert_local_user(owner_url: str, email: str, role: str, *, reset: bool, set
         conn.execute(
             "insert into local_credentials (user_id, email, password_hash, must_change_password, roles) "
             "values (%s, %s, %s, true, %s)",
-            (user_id, email, pw_hash, ROLE_SETS[role]),
+            (user_id, email, pw_hash, ROLE_SETS[role or "user"]),
         )
     return one_time
 
@@ -76,14 +79,15 @@ def upsert_local_user(owner_url: str, email: str, role: str, *, reset: bool, set
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vanimo.ops.local_user")
     parser.add_argument("--email", required=True)
-    parser.add_argument("--role", choices=sorted(ROLE_SETS), default="user")
-    parser.add_argument("--reset", action="store_true", help="issue a new one-time password (and set --role)")
+    parser.add_argument("--role", choices=sorted(ROLE_SETS), help="new accounts default to 'user'; reset keeps roles")
+    parser.add_argument("--reset", action="store_true", help="issue a new one-time password")
     args = parser.parse_args(argv)
     owner_url = os.environ.get("VANIMO_DB_OWNER_URL")
     if not owner_url:
         raise SystemExit("set VANIMO_DB_OWNER_URL")
     one_time = upsert_local_user(owner_url, args.email, args.role, reset=args.reset, settings=Settings())
-    print(f"{'Reset' if args.reset else 'Created'} {args.email.strip().lower()} ({args.role}).")
+    role_note = args.role or ("roles unchanged" if args.reset else "user")
+    print(f"{'Reset' if args.reset else 'Created'} {args.email.strip().lower()} ({role_note}).")
     print(f"One-time password (shown once; must be changed at first sign-in): {one_time}")
     return 0
 

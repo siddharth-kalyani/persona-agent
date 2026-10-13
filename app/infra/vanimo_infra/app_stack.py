@@ -150,6 +150,8 @@ class AppStack(Stack):
                 "VANIMO_ENTRA_CLIENT_ID": cfg.entra_client_id,
                 "VANIMO_CORS_ORIGINS": "[]",  # same origin through CloudFront
                 "VANIMO_ENABLE_DIAGNOSTICS": "true",
+                # uvicorn trusts X-Forwarded-For only from the ALB (inside the VPC).
+                "FORWARDED_ALLOW_IPS": data.vpc.vpc_cidr_block,
             },
             secrets={
                 "VANIMO_DB_APP_PASSWORD": ecs.Secret.from_secrets_manager(app_password),

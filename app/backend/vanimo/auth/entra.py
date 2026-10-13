@@ -149,7 +149,9 @@ class TokenValidator:
         if self._s.api_scope_name not in scopes:
             # App-only tokens (no `scp`) are never accepted on user endpoints.
             raise AuthError("missing_scope", 403)
-        roles = frozenset(r for r in claims.get("roles", []) if r in KNOWN_ROLES)
+        # Super-admin is a platform (Vanimo staff) role: never taken from a customer's Entra token,
+        # where that customer's own admin could assign it. It comes only from server-side accounts.
+        roles = frozenset(r for r in claims.get("roles", []) if r in KNOWN_ROLES and r != ROLE_SUPERADMIN)
         if not roles:
             # "Assignment required" in Entra should stop this earlier; enforce it here too.
             raise AuthError("not_assigned", 403)

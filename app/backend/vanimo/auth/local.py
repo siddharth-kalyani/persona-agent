@@ -1,12 +1,13 @@
 """Local email + password sign-in: sessions and credentials, through the SECURITY DEFINER
-functions of migration 0002 (the API role can't touch the tables directly)."""
+functions of migrations 0002-0003 (the API role can't touch the tables directly)."""
 
 from __future__ import annotations
 
+import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 import anyio
 from sqlalchemy import text
@@ -18,41 +19,60 @@ from vanimo.db.session import UserRef
 
 
 @dataclass(frozen=True)
-class LoginRow:
-    user_id: object
-    tenant_id: object
-    password_hash: str
+class LoginResult:
+    user: UserRef
     must_change: bool
-    locked_until: datetime | None
     roles: list[str]
+    # Single-use proof of this successful check; session_create consumes it (migration 0003).
+    nonce: str
 
 
-async def check_credentials(engine: AsyncEngine, email: str, password: str) -> LoginRow:
-    """Verify a password. Same work and same error whether or not the email exists."""
+class LoginFailed(AuthError):
+    """Wrong password, unknown email or locked account — deliberately indistinguishable."""
+
+    def __init__(self, user: UserRef | None = None, *, locked: bool = False) -> None:
+        super().__init__("invalid_credentials")
+        self.user = user  # set when the email exists, for the audit log only
+        self.locked = locked
+
+
+# scrypt needs 32 MiB per call; cap concurrent hashes so a burst of logins can't exhaust memory.
+_SCRYPT_SLOTS = anyio.Semaphore(2)
+
+
+async def run_scrypt(fn, *args):  # type: ignore[no-untyped-def]
+    async with _SCRYPT_SLOTS:
+        return await anyio.to_thread.run_sync(fn, *args)
+
+
+async def check_credentials(engine: AsyncEngine, email: str, password: str) -> LoginResult:
+    """Verify a password. Same work, same error and same number of database round trips whether
+    the email is unknown, the password is wrong or the account is locked."""
     async with engine.begin() as conn:
         row = (
-            await conn.execute(text("select * from vanimo_private.password_login_lookup(:e)"), {"e": email.lower()})
+            await conn.execute(text("select * from vanimo_private.password_login_begin(:e)"), {"e": email.lower()})
         ).first()
-    stored = row.password_hash if row else DUMMY_HASH
-    ok = await anyio.to_thread.run_sync(verify_password, password, stored)
+    usable = row is not None and not row.locked
+    ok = await run_scrypt(verify_password, password, row.password_hash if usable else DUMMY_HASH)
     if row is None:
-        raise AuthError("invalid_credentials")
-    login = LoginRow(row.user_id, row.tenant_id, row.password_hash, row.must_change, row.locked_until, list(row.roles))
-    if login.locked_until and login.locked_until > datetime.now(UTC):
-        raise AuthError("account_locked", 423)
+        raise LoginFailed()
+    user = UserRef(tenant_id=row.tenant_id, user_id=row.user_id)
+    if not usable or not ok:
+        raise LoginFailed(user, locked=bool(row.locked or row.now_locked))
+    nonce = secrets.token_urlsafe(32)
     async with engine.begin() as conn:
-        await conn.execute(text("select vanimo_private.password_login_result(:u, :ok)"), {"u": login.user_id, "ok": ok})
-    if not ok:
-        raise AuthError("invalid_credentials")
-    return login
+        await conn.execute(
+            text("select vanimo_private.password_login_succeeded(:u, :n)"), {"u": row.user_id, "n": token_hash(nonce)}
+        )
+    return LoginResult(user=user, must_change=row.must_change, roles=list(row.roles), nonce=nonce)
 
 
-async def create_session(engine: AsyncEngine, user_id: object, token: str, ttl_s: int) -> datetime:
+async def create_session(engine: AsyncEngine, login: LoginResult, token: str, ttl_s: int) -> datetime:
     async with engine.begin() as conn:
         return (
             await conn.execute(
-                text("select vanimo_private.session_create(:u, :h, :ttl)"),
-                {"u": user_id, "h": token_hash(token), "ttl": ttl_s},
+                text("select vanimo_private.session_create(:u, :n, :h, :ttl)"),
+                {"u": login.user.user_id, "n": token_hash(login.nonce), "h": token_hash(token), "ttl": ttl_s},
             )
         ).scalar_one()
 
@@ -111,5 +131,6 @@ class LoginThrottle:
         if len(hits) >= self._limit:
             raise AuthError("too_many_attempts", 429)
         hits.append(now)
-        if len(self._hits) > 10_000:  # bound memory under a spray from many addresses
-            self._hits.clear()
+        if len(self._hits) > 10_000:  # bound memory: evict the oldest keys, never reset everyone
+            for stale in list(self._hits)[:1000]:
+                del self._hits[stale]

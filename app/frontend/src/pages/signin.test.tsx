@@ -23,6 +23,7 @@ function authState(overrides: Partial<AuthState> = {}): AuthState {
     signInWithMicrosoft: vi.fn(async () => undefined),
     signOut: vi.fn(async () => undefined),
     expire: vi.fn(),
+    requirePasswordChange: vi.fn(),
     ...overrides,
   };
 }
@@ -57,7 +58,7 @@ describe("sign-in", () => {
     await userEvent.type(screen.getByLabelText(/Password/), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(signIn).toHaveBeenCalledWith("me@example.com", "wrong");
-    expect(await screen.findByText("That email and password don't match.")).toBeInTheDocument();
+    expect(await screen.findByText(/That email and password don't match/)).toBeInTheDocument();
   });
 
   it("forces a password change before anything else", async () => {

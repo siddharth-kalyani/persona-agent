@@ -102,7 +102,11 @@ def test_api_tasks_private_with_secrets_injected(templates: tuple[Template, Temp
     container = task["Properties"]["ContainerDefinitions"][0]
     secret_names = {s["Name"] for s in container["Secrets"]}
     assert secret_names == {"VANIMO_DB_APP_PASSWORD", "VANIMO_ENTRA_CLIENT_SECRET", "VANIMO_REF_HMAC_KEY"}
-    env_names = {e["Name"] for e in container["Environment"]}
+    env = {e["Name"]: e["Value"] for e in container["Environment"]}
+    env_names = set(env)
+    # Proxy headers are trusted only from inside the VPC (the ALB), never "*".
+    assert "FORWARDED_ALLOW_IPS" in env and env["FORWARDED_ALLOW_IPS"] != "*"
+    assert "VANIMO_ENABLE_PASSWORD_AUTH" not in env
     assert not any("PASSWORD" in n or "SECRET" in n for n in env_names)
     assert container["ReadonlyRootFilesystem"] is True
 

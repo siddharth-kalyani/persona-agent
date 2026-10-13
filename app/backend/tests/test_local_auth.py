@@ -133,8 +133,9 @@ async def test_lockout_after_five_failures(client: httpx.AsyncClient, account: t
     email, one_time = account
     for _ in range(5):
         assert (await _login(client, email, "wrong-password")).status_code == 401
+    # Even the right password fails while locked, with the same answer as a wrong one (no enumeration).
     locked = await _login(client, email, one_time)
-    assert locked.status_code == 423 and locked.json() == {"error": "account_locked"}
+    assert locked.status_code == 401 and locked.json() == {"error": "invalid_credentials"}
 
 
 async def test_login_throttle_per_address(client: httpx.AsyncClient) -> None:
@@ -174,3 +175,121 @@ def test_reset_issues_new_one_time_password(
         upsert_local_user(database["owner"], email, "user", reset=False, settings=settings)
     second = upsert_local_user(database["owner"], email, "superadmin", reset=True, settings=settings)
     assert second != first
+
+
+async def test_parallel_guesses_cannot_exceed_the_lockout(
+    client: httpx.AsyncClient, app_state: AppState, account: tuple[str, str]
+) -> None:
+    import asyncio
+
+    from vanimo.auth.local import LoginThrottle
+
+    email, one_time = account
+    app_state.login_throttle = LoginThrottle(limit=1000)  # isolate the database lockout
+    await asyncio.gather(*(_login(client, email, f"guess-{i}") for i in range(12)))
+    assert (await _login(client, email, one_time)).status_code == 401  # locked after 5, not 12
+
+
+async def test_expired_lock_starts_a_fresh_window(
+    client: httpx.AsyncClient, database: dict[str, str], account: tuple[str, str]
+) -> None:
+    import psycopg
+
+    email, one_time = account
+    for _ in range(5):
+        await _login(client, email, "wrong-password")
+    with psycopg.connect(database["owner"].replace("postgresql+psycopg://", "postgresql://")) as conn:
+        conn.execute(
+            "update vanimo.local_credentials set locked_until = now() - interval '1 second' where email = %s",
+            (email.lower(),),
+        )
+    # One more wrong attempt after expiry must not re-lock immediately.
+    assert (await _login(client, email, "wrong-password")).status_code == 401
+    assert (await _login(client, email, one_time)).status_code == 200
+
+
+async def test_non_ascii_passwords(client: httpx.AsyncClient, account: tuple[str, str]) -> None:
+    email, one_time = account
+    token = (await _login(client, email, one_time)).json()["token"]
+    phrase = "café crème brûlée ☕ 2026"
+    resp = await client.post(
+        "/api/auth/change-password", headers=_bearer(token), json={"currentPassword": one_time, "newPassword": phrase}
+    )
+    assert resp.status_code == 200, resp.text
+    # NFKC: a decomposed "é" (e + combining accent) is the same password.
+    decomposed = phrase.replace("é", "é")
+    assert (await _login(client, email, decomposed)).status_code == 200
+
+
+async def test_password_change_gate_covers_admin_routes(client: httpx.AsyncClient, account: tuple[str, str]) -> None:
+    email, one_time = account
+    token = (await _login(client, email, one_time)).json()["token"]
+    for method, path in [
+        ("POST", "/api/admin/diagnostics/run"),
+        ("POST", "/api/admin/diagnostics/draft-probe"),
+        ("GET", "/api/me"),
+        ("POST", "/api/auth/change-password/"),
+    ]:
+        resp = await client.request(method, path, headers=_bearer(token))
+        assert resp.status_code in (403, 307), (path, resp.status_code)
+        if resp.status_code == 403:
+            assert resp.json() == {"error": "password_change_required"}
+
+
+async def test_sessions_need_a_fresh_login_nonce(database: dict[str, str], account: tuple[str, str]) -> None:
+    """The API role can't mint a session for a user without a successful password check."""
+    from sqlalchemy.exc import DBAPIError
+
+    email, _ = account
+    engine = create_async_engine(database["app"])
+    async with engine.connect() as conn:
+        user_id = (
+            await conn.execute(text("select user_id from vanimo_private.password_login_begin(:e)"), {"e": email})
+        ).scalar_one()
+        await conn.commit()
+        with pytest.raises(DBAPIError, match="cannot create session"):
+            await conn.execute(
+                text("select vanimo_private.session_create(:u, :n, :h, 60)"),
+                {"u": user_id, "n": "0" * 64, "h": "1" * 64},
+            )
+    await engine.dispose()
+
+
+async def test_session_ttl_is_capped(client: httpx.AsyncClient, app_state: AppState, account: tuple[str, str]) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    email, one_time = account
+    app_state.settings = app_state.settings.model_copy(update={"session_ttl_s": 10 * 24 * 3600})
+    body = (await _login(client, email, one_time)).json()
+    expires = datetime.fromisoformat(body["expiresAt"])
+    assert expires - datetime.now(UTC) <= timedelta(hours=12, minutes=1)
+
+
+def test_reset_keeps_roles_unless_given(database: dict[str, str], settings: Settings, account: tuple[str, str]) -> None:
+    import psycopg
+
+    email, _ = account
+    upsert_local_user(database["owner"], email, None, reset=True, settings=settings)
+    with psycopg.connect(database["owner"].replace("postgresql+psycopg://", "postgresql://")) as conn:
+        roles = conn.execute("select roles from vanimo.local_credentials where email = %s", (email.lower(),)).fetchone()
+    assert roles == (["Vanimo.User", "Vanimo.Admin", "Vanimo.SuperAdmin"],)
+
+
+async def test_failed_logins_are_audited(
+    client: httpx.AsyncClient, database: dict[str, str], account: tuple[str, str]
+) -> None:
+    import psycopg
+
+    email, _ = account
+    for _ in range(5):
+        await _login(client, email, "wrong-password")
+    with psycopg.connect(database["owner"].replace("postgresql+psycopg://", "postgresql://")) as conn:
+        actions = [
+            r[0]
+            for r in conn.execute(
+                "select a.action from vanimo.audit_events a join vanimo.local_credentials c on c.user_id = a.user_id "
+                "where c.email = %s order by a.id",
+                (email.lower(),),
+            )
+        ]
+    assert actions == ["auth.password_login_failed"] * 4 + ["auth.account_locked"]

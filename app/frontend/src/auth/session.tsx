@@ -30,6 +30,8 @@ export interface AuthState {
   signOut: () => Promise<void>;
   /** Drop a local session the API no longer accepts (expired, revoked). */
   expire: () => void;
+  /** The API says this session must set a new password first. */
+  requirePasswordChange: () => void;
 }
 
 export class AuthFailure extends Error {
@@ -142,6 +144,9 @@ export function AuthProvider({
       },
       signOut,
       expire: () => save(null),
+      requirePasswordChange: () => {
+        if (session && !session.mustChangePassword) save({ ...session, mustChangePassword: true });
+      },
     };
   }, [changePassword, config, msal, msalAccount, options, save, session, signInWithPassword, signOut]);
 

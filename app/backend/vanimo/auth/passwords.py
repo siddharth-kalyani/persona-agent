@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import secrets
+import unicodedata
 
 SESSION_PREFIX = "vnm_s_"
 _N, _R, _P, _DKLEN = 2**15, 8, 1, 32
@@ -30,9 +31,14 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def _normalise(password: str) -> bytes:
+    # NFKC so the same passphrase typed on different keyboards/OSes hashes the same (NIST 800-63B).
+    return unicodedata.normalize("NFKC", password).encode("utf-8")
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(password.encode(), salt=salt, n=_N, r=_R, p=_P, dklen=_DKLEN, maxmem=_MAXMEM)
+    digest = hashlib.scrypt(_normalise(password), salt=salt, n=_N, r=_R, p=_P, dklen=_DKLEN, maxmem=_MAXMEM)
     return f"scrypt${_N}${_R}${_P}${_b64(salt)}${_b64(digest)}"
 
 
@@ -43,7 +49,7 @@ def verify_password(password: str, stored: str) -> bool:
             return False
         expected = _unb64(digest)
         actual = hashlib.scrypt(
-            password.encode(), salt=_unb64(salt), n=int(n), r=int(r), p=int(p), dklen=len(expected), maxmem=_MAXMEM
+            _normalise(password), salt=_unb64(salt), n=int(n), r=int(r), p=int(p), dklen=len(expected), maxmem=_MAXMEM
         )
     except (ValueError, TypeError):
         return False
@@ -64,6 +70,7 @@ class WeakPassword(ValueError):
 
 def check_new_password(new: str, *, email: str, current: str | None = None) -> None:
     """NIST SP 800-63B style: length and a blocklist, no composition rules."""
+    new = unicodedata.normalize("NFKC", new)
     if len(new) < MIN_LENGTH:
         raise WeakPassword("password_too_short")
     if len(new) > MAX_LENGTH:
@@ -74,7 +81,7 @@ def check_new_password(new: str, *, email: str, current: str | None = None) -> N
     local_part = email.split("@", 1)[0].lower()
     if len(local_part) >= 4 and local_part in lowered:
         raise WeakPassword("password_contains_email")
-    if current is not None and hmac.compare_digest(new, current):
+    if current is not None and _normalise(new) == _normalise(current):
         raise WeakPassword("password_unchanged")
 
 

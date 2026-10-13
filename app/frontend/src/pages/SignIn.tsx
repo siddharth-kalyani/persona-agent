@@ -23,9 +23,7 @@ const useStyles = makeStyles({
 export function signInError(code: string): string {
   switch (code) {
     case "invalid_credentials":
-      return "That email and password don't match.";
-    case "account_locked":
-      return "Too many attempts. The account is locked for 15 minutes.";
+      return "That email and password don't match. After 5 wrong attempts the account is locked for 15 minutes.";
     case "too_many_attempts":
       return "Too many attempts from this device. Wait a minute and try again.";
     default:

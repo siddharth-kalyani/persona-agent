@@ -96,12 +96,30 @@ describe("loadConfig", () => {
     await expect(loadConfig()).resolves.toEqual({ tenantId: "t1", clientId: "c1", apiBase: "" });
   });
 
-  it("ignores an HTML fallback page and fails clearly without settings", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>", { headers: { "content-type": "text/html" } })));
+  it("ignores an HTML fallback page; offers password sign-in when only the API allows it", async () => {
     vi.stubEnv("VITE_ENTRA_TENANT_ID", "");
     vi.stubEnv("VITE_ENTRA_CLIENT_ID", "");
-    const { loadConfig } = await import("../config");
-    await expect(loadConfig()).rejects.toThrow("Missing Entra configuration");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/config.json"
+          ? new Response("<html>", { headers: { "content-type": "text/html" } })
+          : new Response(JSON.stringify({ passwordSignIn: true, microsoftSignIn: false })),
+      ),
+    );
+    const { loadConfig, loadSignInOptions } = await import("../config");
+    const config = await loadConfig();
+    expect(config.tenantId).toBe("");
+    await expect(loadSignInOptions(config)).resolves.toEqual({ microsoft: false, password: true });
+    vi.unstubAllEnvs();
+  });
+
+  it("fails clearly when no sign-in method is available", async () => {
+    vi.stubEnv("VITE_ENTRA_TENANT_ID", "");
+    vi.stubEnv("VITE_ENTRA_CLIENT_ID", "");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    const { loadConfig, loadSignInOptions } = await import("../config");
+    await expect(loadSignInOptions(await loadConfig())).rejects.toThrow("No sign-in method");
     vi.unstubAllEnvs();
   });
 });

@@ -8,6 +8,8 @@ import structlog
 from fastapi import Depends, Request
 
 from vanimo.auth.entra import AuthError, Principal
+from vanimo.auth.local import resolve_session
+from vanimo.auth.passwords import SESSION_PREFIX
 from vanimo.db.session import UserRef, provision_user
 from vanimo.graph.client import GraphClient
 from vanimo.state import AppState
@@ -20,12 +22,24 @@ def get_state(request: Request) -> AppState:
 State = Annotated[AppState, Depends(get_state)]
 
 
+# Endpoints a password user may call before replacing their one-time password.
+PASSWORD_CHANGE_ALLOWED = frozenset({"/api/auth/change-password", "/api/auth/session", "/api/auth/logout"})
+
+
 async def get_principal(request: Request, state: State) -> Principal:
     header = request.headers.get("authorization", "")
     scheme, _, token = header.partition(" ")
+    token = token.strip()
     if scheme.lower() != "bearer" or not token:
         raise AuthError("missing_token")
-    return await state.validator.validate(token.strip())
+    if token.startswith(SESSION_PREFIX):
+        if not state.settings.enable_password_auth:
+            raise AuthError("password_signin_disabled")
+        principal = await resolve_session(state.engine, token)
+        if principal.must_change_password and request.url.path not in PASSWORD_CHANGE_ALLOWED:
+            raise AuthError("password_change_required", 403)
+        return principal
+    return await state.validator.validate(token)
 
 
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
@@ -33,6 +47,10 @@ CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
 
 async def get_user(principal: CurrentPrincipal, state: State) -> UserRef:
     """Find or create the caller's tenant + user rows (self-onboarding, D3)."""
+    if principal.local_user is not None:  # password sessions are already bound to a user
+        ref = principal.local_user
+        structlog.contextvars.bind_contextvars(tenant_ref=str(ref.tenant_id), user_ref=str(ref.user_id))
+        return ref
     ref = await provision_user(
         state.engine,
         entra_tenant_id=principal.entra_tenant_id,
@@ -58,6 +76,9 @@ AdminPrincipal = Annotated[Principal, Depends(require_admin)]
 
 
 async def get_graph(principal: CurrentPrincipal, state: State) -> GraphClient:
+    if principal.auth_method != "entra":
+        # Reading Microsoft 365 as the user needs their Microsoft sign-in (On-Behalf-Of).
+        raise AuthError("microsoft_signin_required", 409)
     if state.obo is None:
         raise AuthError("graph_not_configured", 503)
     token = await state.obo.graph_token(principal)

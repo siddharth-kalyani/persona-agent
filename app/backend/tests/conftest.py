@@ -95,6 +95,7 @@ def settings(database: dict[str, str]) -> Settings:
         entra_tenant_id=TENANT,
         entra_client_id=CLIENT_ID,
         cors_origins=[],
+        enable_password_auth=True,
     )
 
 

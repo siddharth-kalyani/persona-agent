@@ -8,6 +8,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from vanimo.auth.entra import JwksCache, TokenValidator
+from vanimo.auth.local import LoginThrottle
 from vanimo.auth.obo import OboClient
 from vanimo.config import Settings
 from vanimo.db.session import make_engine
@@ -22,6 +23,7 @@ class AppState:
     validator: TokenValidator
     router: ModelRouter
     obo: OboClient | None = None
+    login_throttle: LoginThrottle = field(default_factory=LoginThrottle)
     _llm: LlmClient | None = field(default=None, repr=False)
 
     @property

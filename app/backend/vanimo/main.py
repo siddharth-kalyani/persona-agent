@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from vanimo.api import diagnostics, me
+from vanimo.api import auth, diagnostics, me
 from vanimo.auth.entra import AuthError
 from vanimo.config import Settings, get_settings
 from vanimo.graph.client import GraphError
@@ -132,6 +132,7 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
             return JSONResponse({"status": "db_unavailable"}, status_code=503)
         return JSONResponse({"status": "ready"})
 
+    app.include_router(auth.router)
     app.include_router(me.router)
     app.include_router(diagnostics.router)
     return app

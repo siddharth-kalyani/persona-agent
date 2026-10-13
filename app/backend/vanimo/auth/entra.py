@@ -15,10 +15,14 @@ import jwt
 from jwt import PyJWK
 
 from vanimo.config import Settings
+from vanimo.db.session import UserRef
 
 ROLE_USER = "Vanimo.User"
 ROLE_ADMIN = "Vanimo.Admin"
-KNOWN_ROLES = frozenset({ROLE_USER, ROLE_ADMIN})
+# Platform super-admin (architecture §5.3): tenant lifecycle, flags, model routing — never content.
+# No super-admin console exists yet (operator scripts until external tenants); it implies admin.
+ROLE_SUPERADMIN = "Vanimo.SuperAdmin"
+KNOWN_ROLES = frozenset({ROLE_USER, ROLE_ADMIN, ROLE_SUPERADMIN})
 
 
 class AuthError(Exception):
@@ -38,10 +42,20 @@ class Principal:
     scopes: frozenset[str]
     # Kept only in memory for the On-Behalf-Of exchange; never logged or stored.
     access_token: str = field(repr=False)
+    # "entra" (Microsoft sign-in) or "password" (local/dev email + password sign-in).
+    auth_method: str = "entra"
+    # Password sessions already know their user; Entra principals are provisioned on first use.
+    local_user: UserRef | None = None
+    email: str | None = field(default=None, repr=False)
+    must_change_password: bool = False
 
     @property
     def is_admin(self) -> bool:
-        return ROLE_ADMIN in self.roles
+        return ROLE_ADMIN in self.roles or ROLE_SUPERADMIN in self.roles
+
+    @property
+    def is_superadmin(self) -> bool:
+        return ROLE_SUPERADMIN in self.roles
 
 
 class JwksCache:
@@ -99,6 +113,8 @@ class TokenValidator:
         self._jwks = jwks
 
     async def validate(self, token: str) -> Principal:
+        if not (self._s.entra_tenant_id and self._s.entra_client_id):
+            raise AuthError("microsoft_signin_not_configured")
         try:
             header = jwt.get_unverified_header(token)
         except jwt.PyJWTError as exc:

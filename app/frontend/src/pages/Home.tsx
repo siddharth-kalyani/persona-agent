@@ -62,6 +62,24 @@ export function Home() {
     );
   if (!me) return <Spinner label="Loading your profile…" />;
 
+  if (!me.microsoft365Connected)
+    return (
+      <div className={styles.grid}>
+        <Card>
+          <CardHeader header={<Text weight="semibold">Your account</Text>} description={<Caption1>Email and password sign-in</Caption1>} />
+          <Body1>{me.email}</Body1>
+          <Caption1>Roles: {me.roles.join(", ")}</Caption1>
+        </Card>
+        <Card>
+          <CardHeader header={<Text weight="semibold">Microsoft 365 not connected yet</Text>} />
+          <Body1>
+            Your profile, manager and sent emails appear when you sign in with Microsoft. That needs the Vanimo app
+            registered in your organisation's Entra ID (see app/infra/entra/README.md).
+          </Body1>
+        </Card>
+      </div>
+    );
+
   return (
     <div className={styles.grid}>
       <Card>

@@ -12,6 +12,8 @@ const ME: Me = {
   recentSent: [{ subject: "Re: SOW", sentDateTime: "2026-10-12T10:00:00Z", recipientCount: 2 }],
   roles: ["Vanimo.User"],
   onboardingState: "review_pending",
+  signInMethod: "entra",
+  microsoft365Connected: true,
 };
 
 function renderWith(api: Api, ui: React.ReactElement) {

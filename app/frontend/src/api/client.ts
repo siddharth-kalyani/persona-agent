@@ -30,6 +30,9 @@ export interface Me {
   recentSent: SentHeader[];
   roles: string[];
   onboardingState: string;
+  signInMethod: "entra" | "password";
+  email?: string | null;
+  microsoft365Connected: boolean;
 }
 
 export type Outcome = "ok" | "warn" | "fail" | "skipped";
@@ -67,6 +70,8 @@ export class Api {
   constructor(
     private readonly base: string,
     private readonly token: TokenProvider,
+    /** Called when the API rejects the credentials (expired/revoked session). */
+    private readonly onUnauthorized?: (code: string) => void,
   ) {}
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -84,7 +89,11 @@ export class Api {
     } catch {
       // Non-JSON error page (e.g. a proxy); fall through with an empty body.
     }
-    if (!res.ok) throw new ApiError(res.status, String(json.error ?? "error"), json);
+    if (!res.ok) {
+      const code = String(json.error ?? "error");
+      if (res.status === 401) this.onUnauthorized?.(code);
+      throw new ApiError(res.status, code, json);
+    }
     return json as T;
   }
 

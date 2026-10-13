@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     ref_hmac_key: SecretStr = SecretStr("local-dev-only-ref-key-change-me")
 
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    # Email + password sign-in for local development and internal testing before the Entra app
+    # exists. Never in prod (validator below). Accounts are created by an operator script.
+    enable_password_auth: bool = False
+    session_ttl_s: int = 8 * 3600
+
     # Admin diagnostics (week-1 spikes, live health checks). Admin role is still required.
     enable_diagnostics: bool = True
     log_level: str = "INFO"
@@ -121,17 +126,22 @@ class Settings(BaseSettings):
         for model in (self.model_default, self.model_premium):
             if model not in allowed:
                 raise ValueError(f"model {model!r} is not on the {self.cell} cell allow-list")
+        if self.enable_password_auth and self.env == "prod":
+            raise ValueError("password sign-in is for local/dev only; disable VANIMO_ENABLE_PASSWORD_AUTH in prod")
         if self.env in ("dev", "prod"):
-            missing = [
-                name
-                for name, value in (
-                    ("VANIMO_ENTRA_TENANT_ID", self.entra_tenant_id),
-                    ("VANIMO_ENTRA_CLIENT_ID", self.entra_client_id),
-                )
-                if not value
-            ]
-            if not (self.entra_client_secret or self.entra_client_secret_arn):
-                missing.append("VANIMO_ENTRA_CLIENT_SECRET or VANIMO_ENTRA_CLIENT_SECRET_ARN")
+            missing: list[str] = []
+            # A dev cell may run on password sign-in alone until the Entra app exists; prod never.
+            if self.env == "prod" or not self.enable_password_auth:
+                missing += [
+                    name
+                    for name, value in (
+                        ("VANIMO_ENTRA_TENANT_ID", self.entra_tenant_id),
+                        ("VANIMO_ENTRA_CLIENT_ID", self.entra_client_id),
+                    )
+                    if not value
+                ]
+                if not (self.entra_client_secret or self.entra_client_secret_arn):
+                    missing.append("VANIMO_ENTRA_CLIENT_SECRET or VANIMO_ENTRA_CLIENT_SECRET_ARN")
             if self.ref_hmac_key.get_secret_value().startswith("local-dev-only"):
                 missing.append("VANIMO_REF_HMAC_KEY")
             if missing:

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -13,6 +16,7 @@ from vanimo.auth.obo import OboClient
 from vanimo.config import Settings
 from vanimo.db.session import make_engine
 from vanimo.llm.router import LlmClient, ModelRouter
+from vanimo.vault import Vault
 
 
 @dataclass
@@ -24,6 +28,16 @@ class AppState:
     router: ModelRouter
     obo: OboClient | None = None
     login_throttle: LoginThrottle = field(default_factory=LoginThrottle)
+    _vault: Vault | None = field(default=None, repr=False)
+    # Background work started by requests (scans, purge jobs); kept referenced until done.
+    tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
+
+    def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coro)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
+
     _llm: LlmClient | None = field(default=None, repr=False)
 
     @property
@@ -33,7 +47,15 @@ class AppState:
             self._llm = LlmClient(self.settings, self.router)
         return self._llm
 
+    @property
+    def vault(self) -> Vault:
+        if self._vault is None:
+            self._vault = Vault(self.settings.vault_master_key.get_secret_value())
+        return self._vault
+
     async def aclose(self) -> None:
+        for task in list(self.tasks):
+            task.cancel()
         await self.http.aclose()
         await self.engine.dispose()
 

@@ -1,7 +1,10 @@
 import { Badge, Button, Caption1, makeStyles, Tab, TabList, Title2, tokens } from "@fluentui/react-components";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/session";
+import { ClientScoping } from "./pages/admin/ClientScoping";
 import { ChangePassword } from "./pages/ChangePassword";
+import { MyData } from "./pages/controls/MyData";
+import { Setup } from "./pages/controls/Setup";
 import { Diagnostics } from "./pages/Diagnostics";
 import { Home } from "./pages/Home";
 import { SignIn } from "./pages/SignIn";
@@ -28,11 +31,8 @@ export function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const ready = auth.signedIn && !auth.mustChangePassword;
-  const tab = location.pathname.startsWith("/admin")
-    ? "/admin/diagnostics"
-    : location.pathname.startsWith("/spikes")
-      ? "/spikes/teams"
-      : "/";
+  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup"];
+  const tab = TAB_PATHS.find((p) => location.pathname.startsWith(p)) ?? "/";
 
   return (
     <div className={styles.shell}>
@@ -41,6 +41,8 @@ export function App() {
         {ready && (
           <TabList selectedValue={tab} onTabSelect={(_, d) => navigate(String(d.value))}>
             <Tab value="/">Home</Tab>
+            <Tab value="/controls">My data</Tab>
+            {auth.isAdmin && <Tab value="/admin/scoping">Client scoping</Tab>}
             {auth.isAdmin && <Tab value="/admin/diagnostics">Diagnostics</Tab>}
             {auth.isAdmin && <Tab value="/spikes/teams">Teams prefill test</Tab>}
           </TabList>
@@ -64,6 +66,9 @@ export function App() {
         ) : (
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/setup" element={<Setup />} />
+            <Route path="/controls" element={<MyData />} />
+            <Route path="/admin/scoping" element={auth.isAdmin ? <ClientScoping /> : <Navigate to="/" />} />
             <Route path="/admin/diagnostics" element={auth.isAdmin ? <Diagnostics /> : <Navigate to="/" />} />
             <Route path="/spikes/teams" element={auth.isAdmin ? <TeamsPrefill /> : <Navigate to="/" />} />
             <Route path="*" element={<Navigate to="/" />} />

@@ -44,5 +44,6 @@ def test_deployed_envs_require_entra_and_keys() -> None:
         entra_client_id="c",
         entra_client_secret_arn="arn:aws:secretsmanager:x",
         ref_hmac_key="k" * 32,
+        vault_master_key="v" * 32,
     )
     assert ok.entra_issuer.endswith("/t/v2.0")

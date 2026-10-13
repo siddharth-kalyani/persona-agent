@@ -1,5 +1,6 @@
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { Api, ApiError, type Me } from "../api/client";
 import { ApiTestProvider } from "../api/context";
@@ -13,13 +14,16 @@ const ME: Me = {
   roles: ["Vanimo.User"],
   onboardingState: "review_pending",
   signInMethod: "entra",
+  dataSource: "graph",
   microsoft365Connected: true,
 };
 
 function renderWith(api: Api, ui: React.ReactElement) {
   return render(
     <FluentProvider theme={webLightTheme}>
-      <ApiTestProvider api={api}>{ui}</ApiTestProvider>
+      <ApiTestProvider api={api}>
+        <MemoryRouter>{ui}</MemoryRouter>
+      </ApiTestProvider>
     </FluentProvider>,
   );
 }
@@ -32,7 +36,7 @@ describe("Home", () => {
     expect(await screen.findByText("Asha Rao")).toBeInTheDocument();
     expect(screen.getByText("No manager listed in your directory.")).toBeInTheDocument();
     expect(screen.getByText("Re: SOW")).toBeInTheDocument();
-    expect(screen.getByText(/Vanimo stores none of this/)).toBeInTheDocument();
+    expect(screen.getByText(/Vanimo doesn't store them/)).toBeInTheDocument();
   });
 
   it("explains a missing assignment", async () => {

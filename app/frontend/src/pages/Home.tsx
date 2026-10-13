@@ -3,6 +3,7 @@ import {
   Caption1,
   Card,
   CardHeader,
+  Link,
   makeStyles,
   MessageBar,
   MessageBarBody,
@@ -17,6 +18,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ApiError, type Me } from "../api/client";
 import { useApi } from "../api/context";
 
@@ -40,6 +42,7 @@ export function errorText(err: unknown): string {
 export function Home() {
   const styles = useStyles();
   const api = useApi();
+  const navigate = useNavigate();
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,28 +65,30 @@ export function Home() {
     );
   if (!me) return <Spinner label="Loading your profile…" />;
 
-  if (!me.microsoft365Connected)
-    return (
-      <div className={styles.grid}>
-        <Card>
-          <CardHeader header={<Text weight="semibold">Your account</Text>} description={<Caption1>Email and password sign-in</Caption1>} />
-          <Body1>{me.email}</Body1>
-          <Caption1>Roles: {me.roles.join(", ")}</Caption1>
-        </Card>
-        <Card>
-          <CardHeader header={<Text weight="semibold">Microsoft 365 not connected yet</Text>} />
-          <Body1>
-            Your profile, manager and sent emails appear when you sign in with Microsoft. That needs the Vanimo app
-            registered in your organisation's Entra ID (see app/infra/entra/README.md).
-          </Body1>
-        </Card>
-      </div>
-    );
-
+  const sourceLabel = me.dataSource === "sample" ? "From the sample workspace" : "From Microsoft 365";
   return (
     <div className={styles.grid}>
+      {me.dataSource === "sample" && (
+        <MessageBar intent="info" className={styles.wide}>
+          <MessageBarBody>
+            You're seeing the sample workspace — a fictional company, Kestrel Analytics. Your own Microsoft 365 data
+            appears when you sign in with Microsoft.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {me.onboardingState === "review_pending" && (
+        <Card className={styles.wide}>
+          <CardHeader
+            header={<Text weight="semibold">Before Vanimo learns anything</Text>}
+            description={<Caption1>Nothing is read beyond headers until you finish or skip this step.</Caption1>}
+          />
+          <Link as="a" href="/setup" onClick={(e) => { e.preventDefault(); navigate("/setup"); }}>
+            Choose what Vanimo learns from
+          </Link>
+        </Card>
+      )}
       <Card>
-        <CardHeader header={<Text weight="semibold">You</Text>} description={<Caption1>From Microsoft 365</Caption1>} />
+        <CardHeader header={<Text weight="semibold">You</Text>} description={<Caption1>{sourceLabel}</Caption1>} />
         <Body1>{me.user.displayName ?? "—"}</Body1>
         <Caption1>{[me.user.jobTitle, me.user.department].filter(Boolean).join(" · ") || "No job title"}</Caption1>
       </Card>
@@ -101,7 +106,7 @@ export function Home() {
       <Card className={styles.wide}>
         <CardHeader
           header={<Text weight="semibold">Your last 5 sent emails</Text>}
-          description={<Caption1>Subjects only, read live from Microsoft 365. Vanimo stores none of this.</Caption1>}
+          description={<Caption1>Subjects only, read live. Vanimo doesn't store them.</Caption1>}
         />
         <Table size="small" aria-label="Last sent emails">
           <TableHeader>
@@ -127,9 +132,7 @@ export function Home() {
           </TableBody>
         </Table>
       </Card>
-      <Caption1 className={styles.wide}>
-        Roles: {me.roles.join(", ")} · Setup: {me.onboardingState === "review_pending" ? "choose what Vanimo learns from (coming in M1)" : "done"}
-      </Caption1>
+      <Caption1 className={styles.wide}>Roles: {me.roles.join(", ")}</Caption1>
     </div>
   );
 }

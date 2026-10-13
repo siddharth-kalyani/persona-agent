@@ -39,8 +39,11 @@ def _mock_profile(graph_mock: respx.MockRouter) -> respx.Route:
                         "subject": "Re: SOW",
                         "sentDateTime": "2026-10-11T09:00:00Z",
                         "toRecipients": [],
-                        "ccRecipients": [{}, {}],
-                        "bccRecipients": [{}],
+                        "ccRecipients": [
+                            {"emailAddress": {"address": "b@example.com"}},
+                            {"emailAddress": {"address": "c@example.com"}},
+                        ],
+                        "bccRecipients": [{"emailAddress": {"address": "d@example.com"}}],
                     },
                 ]
             },

@@ -12,6 +12,9 @@ from vanimo.auth.local import resolve_session
 from vanimo.auth.passwords import SESSION_PREFIX
 from vanimo.db.session import UserRef, provision_user
 from vanimo.graph.client import GraphClient
+from vanimo.sources.base import WorkspaceSource
+from vanimo.sources.graph import GraphSource
+from vanimo.sources.sample import SampleSource
 from vanimo.state import AppState
 
 
@@ -90,3 +93,14 @@ async def get_graph(principal: CurrentPrincipal, state: State) -> GraphClient:
 
 
 UserGraph = Annotated[GraphClient, Depends(get_graph)]
+
+
+async def get_source(principal: CurrentPrincipal, state: State) -> WorkspaceSource:
+    """The user's workspace metadata: Microsoft Graph, or the sample workspace when Entra/Graph
+    isn't available (password sign-in) or sample data is forced (founder decision, 2026-10-13)."""
+    if state.settings.sample_data == "always" or principal.auth_method != "entra":
+        return SampleSource(principal.email)
+    return GraphSource(await get_graph(principal, state))
+
+
+UserSource = Annotated[WorkspaceSource, Depends(get_source)]

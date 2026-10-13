@@ -34,13 +34,18 @@ def make_engine(settings: Settings) -> AsyncEngine:
 
 
 @asynccontextmanager
-async def user_tx(engine: AsyncEngine, ref: UserRef) -> AsyncIterator[AsyncConnection]:
+async def user_tx(engine: AsyncEngine, ref: UserRef, *, admin: bool = False) -> AsyncIterator[AsyncConnection]:
+    """`admin=True` only after the API checked the admin role: it lets this transaction change
+    organisation-wide rows (client scoping) in the caller's own tenant."""
     async with engine.begin() as conn:
         # Transaction-local (is_local = true): settings vanish at commit/rollback, so a
         # pooled connection never carries one user's identity into another request.
         await conn.execute(
-            text("select set_config('app.tenant_id', :t, true), set_config('app.user_id', :u, true)"),
-            {"t": str(ref.tenant_id), "u": str(ref.user_id)},
+            text(
+                "select set_config('app.tenant_id', :t, true), set_config('app.user_id', :u, true), "
+                "set_config('app.is_admin', :a, true)"
+            ),
+            {"t": str(ref.tenant_id), "u": str(ref.user_id), "a": "true" if admin else "false"},
         )
         yield conn
 

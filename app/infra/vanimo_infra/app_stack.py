@@ -79,6 +79,7 @@ class AppStack(Stack):
         app_password = secret("DbAppPasswordRef", data.app_password)
         owner_password = secret("DbOwnerPasswordRef", data.owner_password)
         ref_hmac_key = secret("RefHmacKeyRef", data.ref_hmac_key)
+        vault_master_key = secret("VaultMasterKeyRef", data.vault_master_key)
         entra_client_secret = secret("EntraClientSecretRef", data.entra_client_secret)
         db_admin = secret("DbAdminRef", data.db.secret)
 
@@ -157,6 +158,7 @@ class AppStack(Stack):
                 "VANIMO_DB_APP_PASSWORD": ecs.Secret.from_secrets_manager(app_password),
                 "VANIMO_ENTRA_CLIENT_SECRET": ecs.Secret.from_secrets_manager(entra_client_secret),
                 "VANIMO_REF_HMAC_KEY": ecs.Secret.from_secrets_manager(ref_hmac_key),
+                "VANIMO_VAULT_MASTER_KEY": ecs.Secret.from_secrets_manager(vault_master_key),
             },
         )
         # Claude on Bedrock (D7) via the Messages-API endpoint. No ARN format is published for

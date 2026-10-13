@@ -122,6 +122,8 @@ class DataStack(Stack):
         self.owner_password = generated("DbOwnerPassword", 40)
         self.app_password = generated("DbAppPassword", 40)
         self.ref_hmac_key = generated("RefHmacKey", 64)
+        # M1 vault master key (field encryption + rule-key HMACs); KMS data keys replace it later.
+        self.vault_master_key = generated("VaultMasterKey", 64)
         # Placeholder: set the real value from the Entra app registration after the first deploy
         # (aws secretsmanager put-secret-value ...; see app/README.md).
         self.entra_client_secret = sm.Secret(

@@ -11,6 +11,53 @@ The build plan is `docs/03-mvp-plan-and-roadmap.md` §0 (solo track M0–M6). Th
 | `surfaces/outlook-addin/` | Outlook add-in manifest (XML) | — |
 | `docker-compose.yml` | Local Postgres 18 (port 5433) | Docker |
 
+## Sample data: works without Microsoft 365
+
+Entra and Graph access may come late, so every feature also runs on a **sample workspace**: Kestrel Analytics, a fictional IT-services firm (`backend/vanimo/sources/sample.py`). It includes:
+- clients Acme Retail, Bluefin Bank and Orion Health;
+- a 62-person group chat, a hidden chat and an unnamed chat;
+- forwards, Hinglish subjects, personal email, a private event and recurring meetings.
+
+**Who sees it:**
+- Password sign-ins always use the sample workspace.
+- Microsoft sign-ins use their real data (Graph), unless `VANIMO_SAMPLE_DATA=always`.
+- Both go through the same interface (`vanimo/sources/base.py`), so screens don't change when real data arrives.
+
+**Local sign-in (local/dev only):**
+- `VANIMO_ENABLE_PASSWORD_AUTH=true`.
+- Accounts are made with `uv run python -m vanimo.ops.local_user --email … --role user|admin|superadmin`, which prints a one-time password the person must replace at first sign-in. `--reset` issues a new one.
+- Production refuses this setting.
+
+## M1: Choose what Vanimo learns from
+
+**What it does** (architecture §6.5):
+- **Header pass.** Lists people, domains, threads, chats and meetings from headers only.
+- **Review screen.** Shows the impact before you confirm: "7 emails in 5 threads, 4 chats, 1 meeting".
+- **Person exclusions.** Cover every chat the person is in; you can untick big group chats (D5).
+- **Never-send words.** Matched by a deterministic matcher, never by an AI model:
+  - it catches case, full-width and zero-width tricks, Cyrillic look-alikes, separators, plurals, Hinglish spellings, honorifics, and spellings you type yourself (e.g. Devanagari);
+  - words are replaced before storage and shown as `[removed]`.
+- **Finish/Skip gate.** No message content is read before you choose.
+- **My data controls.** Change anything later; every change gets a receipt.
+- **Admin client scoping (D9).** Exclude client accounts by domain, or allow approved clients only. Users see these rules as locked.
+
+**How it's built:**
+
+| Piece | Where |
+|---|---|
+| One exclusion engine for user and organisation rules | `vanimo/controls/engine.py` |
+| Matcher | `vanimo/controls/neversend.py` |
+| Header pass | `vanimo/controls/scan.py` |
+| Field encryption + rule-key HMACs | `vanimo/vault.py` |
+| Purge and scrub jobs | `vanimo/controls/jobs.py` |
+| APIs | `vanimo/api/controls.py`, `vanimo/api/admin_scoping.py` |
+
+**At rest:**
+- Names, addresses, subjects and chat names are encrypted per user.
+- Rules store only keyed hashes of identifiers.
+- Never-send words are encrypted per user and never logged.
+- Organisation rules can only be written in a transaction the API flagged as admin, and the database enforces it.
+
 ## Guarantees built in from M0
 
 - **Tenant and user isolation in the database.**
@@ -111,6 +158,9 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Entra | Read app + Compose app; certificate in KMS, no client secret (§5.1–5.2) | One app with a client secret in Secrets Manager (D8) | Split the apps; switch to a certificate |
 | Add-in CSP | Enforced | Report-only until the add-in spike confirms Outlook's hosts | Enforce in M3 |
 | Stores | S3 Vectors, DynamoDB, Valkey | Aurora only | Added when M2/M4 need them |
+| Vault | Separate vault account; KMS per-tenant CMK with per-user data keys, so deleting a user's key crypto-shreds their data (§7.2 S8, §8.2) | AES-256-GCM keys derived (HKDF) from one master key in Secrets Manager | Move to KMS data keys before external customers |
+| Purge | Step Functions job across all stores (§6.5 X7) | In-process job. M1 has no derived content yet, so it re-masks the Sources index and writes receipts | M2 registers each new store (L1 text, vectors, style cards) |
+| Sign-in | Entra only | Also email + password, local/dev only, for testing while the Entra app is pending | Removed or kept off in prod (the settings refuse it) |
 
 ## M0 demo and week-1 spikes
 

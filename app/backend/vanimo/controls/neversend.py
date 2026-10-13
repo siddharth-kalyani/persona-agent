@@ -1,0 +1,254 @@
+"""Never-send words: a deterministic matcher (no AI model ever sees the terms).
+
+Design from docs/research/12 §6 and §9.6, rules-only variants (D5):
+  1. Normalise text and terms identically on a *shadow copy* with an offset map back to the
+     original: strip invisible/bidi characters, NFKC, case-fold, Devanagari digits → ASCII,
+     common Cyrillic/Greek look-alikes → Latin, whitespace collapsed.
+  2. Match every variant of every term. Word boundaries treat letters, combining marks and
+     digits as word characters (so Devanagari matras stay attached — Python's `\\b` splits them).
+  3. Replace each hit in the *original* text with the term's placeholder ⟦NS_xxxxxxxx⟧.
+
+Term kinds:
+  word      exact phrase + separator forms + plural/possessive, on word boundaries
+  name      as word, plus glued honorifics/possessives (Sharma-ji, Sharmaji, Sharma's)
+  codename  substring match, also on a "squashed" copy (project-falcon = projectfalcon)
+A Hinglish-folded copy (aa→a, ee→i, oo→u, w→v, ph→f, doubled letters collapsed) is matched
+too, for Roman-script terms of 4+ characters.
+
+The matcher never logs or returns term text; callers get counts and placeholders only.
+"""
+
+from __future__ import annotations
+
+import re
+import secrets
+import unicodedata
+from dataclasses import dataclass, field
+from typing import Literal
+
+TermKind = Literal["word", "name", "codename"]
+
+_INVISIBLE = frozenset(
+    [0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F]
+    + list(range(0x202A, 0x202F))
+    + list(range(0x2060, 0x2070))
+    + [0x3164, 0xFEFF, 0xFFA0]
+    + list(range(0xFE00, 0xFE10))
+    + list(range(0xE0000, 0xE0080))
+)
+_DEVANAGARI_DIGITS = {0x0966 + i: str(i) for i in range(10)}
+# A pragmatic subset of UTS #39 confusables: lookalikes used to dodge filters.
+_CONFUSABLES = {
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
+    "ԁ": "d", "ӏ": "l", "к": "k", "м": "m", "т": "t", "в": "b", "н": "h",
+    "α": "a", "ο": "o", "ρ": "p", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "τ": "t", "υ": "u", "χ": "x",
+}  # fmt: skip
+_NAME_SUFFIXES = ("ji", "jee", "sahab", "saheb", "bhai", "'s", "’s", "s")
+_SEPARATORS = re.compile(r"[\s\-_./]+")
+
+
+def _is_word_char(ch: str) -> bool:
+    return unicodedata.category(ch)[0] in "LMN"
+
+
+# For every shadow character: (index of the first, index of the last) source character it came from.
+Span = tuple[int, int]
+
+
+def normalise(text: str) -> tuple[str, list[Span]]:
+    """Shadow copy of `text` plus, for every shadow character, the source characters it came from."""
+    out: list[str] = []
+    origin: list[Span] = []
+    for i, ch in enumerate(text):
+        cp = ord(ch)
+        if cp in _INVISIBLE or unicodedata.category(ch) == "Cf":
+            continue
+        piece = unicodedata.normalize("NFKC", ch).casefold()
+        for c in piece:
+            c = _DEVANAGARI_DIGITS.get(ord(c), c)
+            c = _CONFUSABLES.get(c, c)
+            if c.isspace():
+                if out and out[-1] == " ":
+                    continue
+                c = " "
+            out.append(c)
+            origin.append((i, i))
+    return "".join(out), origin
+
+
+def _fold(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
+    """Hinglish folds on an already-normalised shadow copy, keeping the offset map."""
+    rules = (("aa", "a"), ("ee", "i"), ("ii", "i"), ("oo", "u"), ("uu", "u"), ("ph", "f"))
+    out: list[str] = []
+    org: list[Span] = []
+    i = 0
+    while i < len(shadow):
+        for src, dst in rules:
+            if shadow.startswith(src, i):
+                out.append(dst)
+                org.append((origin[i][0], origin[i + len(src) - 1][1]))
+                i += len(src)
+                break
+        else:
+            c = "v" if shadow[i] == "w" else shadow[i]
+            if out and out[-1] == c and c.isalpha() and c.isascii():
+                org[-1] = (org[-1][0], origin[i][1])  # doubled letter folds into the previous one
+            else:
+                out.append(c)
+                org.append(origin[i])
+            i += 1
+    return "".join(out), org
+
+
+def _squash(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
+    keep = [(c, o) for c, o in zip(shadow, origin, strict=True) if not _SEPARATORS.fullmatch(c)]
+    return "".join(c for c, _ in keep), [o for _, o in keep]
+
+
+def _ascii_latin(s: str) -> bool:
+    return all(c.isascii() for c in s)
+
+
+@dataclass(frozen=True)
+class Term:
+    id: str
+    text: str = field(repr=False)
+    kind: TermKind = "word"
+    extra_variants: tuple[str, ...] = field(default=(), repr=False)  # spellings the user typed or confirmed
+
+    @property
+    def placeholder(self) -> str:
+        return f"⟦NS_{self.id}⟧"
+
+
+def new_term_id() -> str:
+    return secrets.token_hex(4)
+
+
+def variants(text: str, kind: TermKind) -> list[str]:
+    """Rule-based variants shown to the user for confirmation (normalised form)."""
+    base, _ = normalise(text.strip())
+    base = base.strip()
+    if not base:
+        return []
+    tokens = [t for t in _SEPARATORS.split(base) if t]
+    out = [base]
+    if len(tokens) > 1:
+        out += [" ".join(tokens), "-".join(tokens), "_".join(tokens), "".join(tokens)]
+    if kind in ("word", "codename") and _ascii_latin(base) and base[-1].isalpha():
+        out += [base + "s", base + "es", base + "'s", base + "’s"]
+    seen: set[str] = set()
+    return [v for v in out if not (v in seen or seen.add(v))]
+
+
+@dataclass
+class _Pattern:
+    term: Term
+    needle: str
+    space: Literal["plain", "folded", "squashed"]
+    boundary: bool
+
+
+class Matcher:
+    """Compiled from a user's terms; hold in memory only, never log."""
+
+    def __init__(self, terms: list[Term]) -> None:
+        self.terms = terms
+        self._patterns: list[_Pattern] = []
+        for term in terms:
+            forms = variants(term.text, term.kind)
+            for extra in term.extra_variants:
+                norm, _ = normalise(extra.strip())
+                if norm.strip():
+                    forms.append(norm.strip())
+            for form in dict.fromkeys(forms):
+                boundary = term.kind != "codename"
+                self._patterns.append(_Pattern(term, form, "plain", boundary))
+                if _ascii_latin(form) and len(form) >= 4:
+                    # Matched against the folded copy of the text even when folding leaves the
+                    # term unchanged: the *text* may fold ("Sharmaa" → "sharma").
+                    folded, _ = _fold(form, [(k, k) for k in range(len(form))])
+                    self._patterns.append(_Pattern(term, folded, "folded", boundary))
+                if term.kind == "codename":
+                    squashed, _ = _squash(form, [(k, k) for k in range(len(form))])
+                    if len(squashed) >= 3:
+                        self._patterns.append(_Pattern(term, squashed, "squashed", False))
+        # Longest needles first, so "project falcon" wins over "falcon".
+        self._patterns.sort(key=lambda p: len(p.needle), reverse=True)
+
+    def __bool__(self) -> bool:
+        return bool(self._patterns)
+
+    def _spans(self, text: str) -> list[tuple[int, int, Term]]:
+        plain, plain_map = normalise(text)
+        spaces = {"plain": (plain, plain_map)}
+        spaces["folded"] = _fold(plain, plain_map)
+        spaces["squashed"] = _squash(plain, plain_map)
+        hits: list[tuple[int, int, Term]] = []
+        for p in self._patterns:
+            shadow, origin = spaces[p.space]
+            start = shadow.find(p.needle)
+            while start != -1:
+                end = start + len(p.needle)
+                if p.boundary:
+                    end = self._accept(shadow, start, end, p.term.kind)
+                if end is not None:
+                    s, e = origin[start][0], origin[end - 1][1] + 1
+                    if p.term.kind == "codename":
+                        # Substring hits mask the whole word they sit in ("Falconry" → [removed]).
+                        while s > 0 and _is_word_char(text[s - 1]):
+                            s -= 1
+                        while e < len(text) and _is_word_char(text[e]):
+                            e += 1
+                    hits.append((s, e, p.term))
+                start = shadow.find(p.needle, start + 1)
+        return hits
+
+    @staticmethod
+    def _accept(shadow: str, start: int, end: int, kind: TermKind) -> int | None:
+        if start > 0 and _is_word_char(shadow[start - 1]):
+            return None
+        if end == len(shadow) or not _is_word_char(shadow[end]):
+            return end
+        if kind == "name":  # glued honorific or possessive: Sharmaji, Sharma-ji is separator anyway
+            for suffix in _NAME_SUFFIXES:
+                if shadow.startswith(suffix, end):
+                    after = end + len(suffix)
+                    if after == len(shadow) or not _is_word_char(shadow[after]):
+                        return after
+        return None
+
+    def mask(self, text: str | None) -> tuple[str | None, int]:
+        """Replace every hit with its term's placeholder. Returns (masked text, number of hits)."""
+        if not text or not self._patterns:
+            return text, 0
+        hits = sorted(self._spans(text), key=lambda h: (h[0], -(h[1] - h[0])))
+        merged: list[tuple[int, int, Term]] = []
+        for s, e, t in hits:
+            if merged and s < merged[-1][1]:
+                ps, pe, pt = merged[-1]
+                merged[-1] = (ps, max(pe, e), pt)
+            else:
+                merged.append((s, e, t))
+        if not merged:
+            return text, 0
+        out: list[str] = []
+        pos = 0
+        for s, e, t in merged:
+            out.append(text[pos:s])
+            out.append(t.placeholder)
+            pos = e
+        out.append(text[pos:])
+        return "".join(out), len(merged)
+
+    def count(self, text: str | None) -> int:
+        return self.mask(text)[1]
+
+
+REMOVED = "[removed]"
+_PLACEHOLDER = re.compile(r"⟦NS_[0-9a-f]{8}⟧")
+
+
+def render_removed(text: str | None) -> str | None:
+    """How masked text is shown: every never-send placeholder becomes [removed]."""
+    return _PLACEHOLDER.sub(REMOVED, text) if text else text

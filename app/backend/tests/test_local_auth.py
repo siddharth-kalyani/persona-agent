@@ -63,7 +63,9 @@ def test_password_auth_never_in_prod() -> None:
     with pytest.raises(ValidationError, match="local/dev only"):
         Settings(env="prod", enable_password_auth=True)
     # A dev cell may run on password sign-in alone before the Entra app exists.
-    assert Settings(env="dev", enable_password_auth=True, ref_hmac_key="k" * 32).enable_password_auth
+    assert Settings(
+        env="dev", enable_password_auth=True, ref_hmac_key="k" * 32, vault_master_key="v" * 32
+    ).enable_password_auth
 
 
 async def test_auth_config(client: httpx.AsyncClient) -> None:
@@ -111,7 +113,10 @@ async def test_first_sign_in_forces_password_change(client: httpx.AsyncClient, a
     me = await client.get("/api/me", headers=_bearer(new_token))
     assert me.status_code == 200, me.text
     assert me.json()["signInMethod"] == "password" and me.json()["microsoft365Connected"] is False
-    assert me.json()["recentSent"] == [] and me.json()["onboardingState"] == "review_pending"
+    # Password users work on the sample workspace (Entra/Graph may come later).
+    assert me.json()["dataSource"] == "sample" and len(me.json()["recentSent"]) == 5
+    assert me.json()["manager"]["displayName"] == "Meera Iyer"
+    assert me.json()["onboardingState"] == "review_pending"
 
     # Super-admin implies admin, but Microsoft 365 checks need a Microsoft sign-in.
     diag = await client.post("/api/admin/diagnostics/run", headers=_bearer(new_token))

@@ -83,11 +83,17 @@ class Settings(BaseSettings):
     # Key for opaque references to identifiers (audit targets, later exclusion rules) so
     # raw IDs and addresses are never stored. Per-tenant KMS-derived keys replace this in M1.
     ref_hmac_key: SecretStr = SecretStr("local-dev-only-ref-key-change-me")
+    # Master key for the M1 vault (field encryption + rule-key HMACs). KMS replaces it before
+    # external customers (app/README.md, "Known deviations").
+    vault_master_key: SecretStr = SecretStr("local-dev-only-vault-master-key-change-me")
 
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     # Email + password sign-in for local development and internal testing before the Entra app
     # exists. Never in prod (validator below). Accounts are created by an operator script.
     enable_password_auth: bool = False
+    # Where workspace data comes from: "auto" = Microsoft Graph for Microsoft sign-ins, the sample
+    # workspace for password sign-ins; "always" = sample workspace for everyone (demos, Entra pending).
+    sample_data: Literal["auto", "always"] = "auto"
     session_ttl_s: int = 8 * 3600
 
     # Admin diagnostics (week-1 spikes, live health checks). Admin role is still required.
@@ -144,6 +150,8 @@ class Settings(BaseSettings):
                     missing.append("VANIMO_ENTRA_CLIENT_SECRET or VANIMO_ENTRA_CLIENT_SECRET_ARN")
             if self.ref_hmac_key.get_secret_value().startswith("local-dev-only"):
                 missing.append("VANIMO_REF_HMAC_KEY")
+            if self.vault_master_key.get_secret_value().startswith("local-dev-only"):
+                missing.append("VANIMO_VAULT_MASTER_KEY")
             if missing:
                 raise ValueError(f"missing required settings: {', '.join(missing)}")
         return self

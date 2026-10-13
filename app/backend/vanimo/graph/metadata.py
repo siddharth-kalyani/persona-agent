@@ -23,7 +23,8 @@ SENT_HEADER_FIELDS = (
     "bccRecipients",
     "internetMessageId",
 )
-ME_FIELDS = ("id", "displayName", "jobTitle", "department")
+# mail/userPrincipalName are used in memory only, to leave the user out of their own Sources index.
+ME_FIELDS = ("id", "displayName", "jobTitle", "department", "mail", "userPrincipalName")
 MANAGER_FIELDS = ("id", "displayName", "jobTitle")
 
 

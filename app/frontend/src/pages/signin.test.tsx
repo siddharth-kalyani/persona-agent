@@ -80,13 +80,14 @@ describe("sign-in", () => {
   it("super-admins see the admin tabs and a Microsoft 365 notice", async () => {
     const api = new Api("", async () => "t");
     const me: Me = {
-      user: { displayName: "me@example.com", jobTitle: null },
-      manager: null,
-      recentSent: [],
+      user: { displayName: "Me Example", jobTitle: "Engagement Manager" },
+      manager: { displayName: "Meera Iyer", jobTitle: "Director, Delivery" },
+      recentSent: [{ subject: "Weekly status: Acme replatforming", sentDateTime: "2026-10-12T10:00:00Z", recipientCount: 2 }],
       roles: ["Vanimo.Admin", "Vanimo.SuperAdmin", "Vanimo.User"],
       onboardingState: "review_pending",
       signInMethod: "password",
       email: "me@example.com",
+      dataSource: "sample",
       microsoft365Connected: false,
     };
     vi.spyOn(api, "me").mockResolvedValue(me);
@@ -96,6 +97,8 @@ describe("sign-in", () => {
     );
     expect(screen.getByRole("tab", { name: "Diagnostics" })).toBeInTheDocument();
     expect(screen.getByText("Super-admin")).toBeInTheDocument();
-    expect(await screen.findByText("Microsoft 365 not connected yet")).toBeInTheDocument();
+    expect(await screen.findByText(/You're seeing the sample workspace/)).toBeInTheDocument();
+    expect(screen.getByText("Meera Iyer")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Choose what Vanimo learns from/ })).toBeInTheDocument();
   });
 });

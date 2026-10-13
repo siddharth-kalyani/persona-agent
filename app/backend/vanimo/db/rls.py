@@ -28,6 +28,20 @@ def owner_scoped(table: str, *, user_column: str = "owner_user_id") -> list[str]
     ]
 
 
+def tenant_admin_writable(table: str) -> list[str]:
+    """Organisation-wide rows: every user of the tenant reads them (the exclusion engine needs
+    them); only a transaction the API flagged as admin (`app.is_admin`) can change them."""
+    tenant = "tenant_id = vanimo.current_tenant_id()"
+    admin = f"{tenant} and current_setting('app.is_admin', true) = 'true'"
+    return [
+        *force_rls(table),
+        f"create policy app_read on {table} for select to {APP_ROLE} using ({tenant})",
+        f"create policy app_admin_insert on {table} for insert to {APP_ROLE} with check ({admin})",
+        f"create policy app_admin_update on {table} for update to {APP_ROLE} using ({admin}) with check ({admin})",
+        f"create policy app_admin_delete on {table} for delete to {APP_ROLE} using ({admin})",
+    ]
+
+
 def tenant_scoped(table: str) -> list[str]:
     """Tenant-wide rows (for example admin client scoping rules): any user of the tenant may read;
     writes are further limited by GRANTs and by the API's admin role check."""

@@ -12,8 +12,10 @@ Term kinds:
   word      exact phrase + separator forms + plural/possessive, on word boundaries
   name      as word, plus glued honorifics/possessives (Sharma-ji, Sharmaji, Sharma's)
   codename  substring match, also on a "squashed" copy (project-falcon = projectfalcon)
-A Hinglish-folded copy (aa→a, ee→i, oo→u, w→v, ph→f, doubled letters collapsed) is matched
-too, for Roman-script terms of 4+ characters.
+Hinglish folding (aa→a, ee→i, oo→u, w→v, ph→f, doubled letters collapsed) is opt-in per word
+(`Term.folds`) and its effect is shown to the user before saving: it catches "Sharmaa" for
+"Sharma" but would also make "week" catch "Vik". Codenames shorter than 4 characters match as
+whole words only. Text that is already masked (⟦NS_…⟧ placeholders) is never matched again.
 
 The matcher never logs or returns term text; callers get counts and placeholders only.
 """
@@ -45,6 +47,7 @@ _CONFUSABLES = {
 }  # fmt: skip
 _NAME_SUFFIXES = ("ji", "jee", "sahab", "saheb", "bhai", "'s", "’s", "s")
 _SEPARATORS = re.compile(r"[\s\-_./]+")
+_PLACEHOLDER = re.compile(r"⟦NS_[0-9a-f]{8}⟧")
 
 
 def _is_word_char(ch: str) -> bool:
@@ -55,15 +58,38 @@ def _is_word_char(ch: str) -> bool:
 Span = tuple[int, int]
 
 
+def _clusters(text: str) -> list[tuple[int, int, str]]:
+    """(first index, last index, characters) per base character plus its combining marks, with
+    invisible characters dropped — so "e" + U+0301 normalises like "é", and matras stay attached."""
+    out: list[tuple[int, int, str]] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ord(ch) in _INVISIBLE or unicodedata.category(ch) == "Cf":
+            i += 1
+            continue
+        j = i + 1
+        chars = [ch]
+        while j < len(text):
+            nxt = text[j]
+            if ord(nxt) in _INVISIBLE or unicodedata.category(nxt) == "Cf":
+                j += 1
+                continue
+            if unicodedata.category(nxt)[0] != "M":
+                break
+            chars.append(nxt)
+            j += 1
+        out.append((i, j - 1, "".join(chars)))
+        i = j
+    return out
+
+
 def normalise(text: str) -> tuple[str, list[Span]]:
     """Shadow copy of `text` plus, for every shadow character, the source characters it came from."""
     out: list[str] = []
     origin: list[Span] = []
-    for i, ch in enumerate(text):
-        cp = ord(ch)
-        if cp in _INVISIBLE or unicodedata.category(ch) == "Cf":
-            continue
-        piece = unicodedata.normalize("NFKC", ch).casefold()
+    for first, last, cluster in _clusters(text):
+        piece = unicodedata.normalize("NFKC", cluster).casefold()
         for c in piece:
             c = _DEVANAGARI_DIGITS.get(ord(c), c)
             c = _CONFUSABLES.get(c, c)
@@ -72,7 +98,7 @@ def normalise(text: str) -> tuple[str, list[Span]]:
                     continue
                 c = " "
             out.append(c)
-            origin.append((i, i))
+            origin.append((first, last))
     return "".join(out), origin
 
 
@@ -115,6 +141,7 @@ class Term:
     text: str = field(repr=False)
     kind: TermKind = "word"
     extra_variants: tuple[str, ...] = field(default=(), repr=False)  # spellings the user typed or confirmed
+    folds: bool = False  # Hinglish-folded matching, opted into by the user
 
     @property
     def placeholder(self) -> str:
@@ -123,6 +150,19 @@ class Term:
 
 def new_term_id() -> str:
     return secrets.token_hex(4)
+
+
+MIN_SUBSTRING_CODENAME = 4
+
+
+def folded_form(text: str) -> str | None:
+    """What Hinglish folding reduces this word to (shown to the user before they opt in)."""
+    base, _ = normalise(text.strip())
+    base = base.strip()
+    if not _ascii_latin(base) or len(base) < 4:
+        return None
+    folded, _ = _fold(base, [(k, k) for k in range(len(base))])
+    return folded
 
 
 def variants(text: str, kind: TermKind) -> list[str]:
@@ -161,15 +201,16 @@ class Matcher:
                 norm, _ = normalise(extra.strip())
                 if norm.strip():
                     forms.append(norm.strip())
+            substring = term.kind == "codename" and len(normalise(term.text)[0].strip()) >= MIN_SUBSTRING_CODENAME
             for form in dict.fromkeys(forms):
-                boundary = term.kind != "codename"
+                boundary = not substring
                 self._patterns.append(_Pattern(term, form, "plain", boundary))
-                if _ascii_latin(form) and len(form) >= 4:
+                if term.folds and _ascii_latin(form) and len(form) >= 4:
                     # Matched against the folded copy of the text even when folding leaves the
                     # term unchanged: the *text* may fold ("Sharmaa" → "sharma").
                     folded, _ = _fold(form, [(k, k) for k in range(len(form))])
                     self._patterns.append(_Pattern(term, folded, "folded", boundary))
-                if term.kind == "codename":
+                if substring:
                     squashed, _ = _squash(form, [(k, k) for k in range(len(form))])
                     if len(squashed) >= 3:
                         self._patterns.append(_Pattern(term, squashed, "squashed", False))
@@ -194,7 +235,7 @@ class Matcher:
                     end = self._accept(shadow, start, end, p.term.kind)
                 if end is not None:
                     s, e = origin[start][0], origin[end - 1][1] + 1
-                    if p.term.kind == "codename":
+                    if not p.boundary:
                         # Substring hits mask the whole word they sit in ("Falconry" → [removed]).
                         while s > 0 and _is_word_char(text[s - 1]):
                             s -= 1
@@ -222,7 +263,12 @@ class Matcher:
         """Replace every hit with its term's placeholder. Returns (masked text, number of hits)."""
         if not text or not self._patterns:
             return text, 0
-        hits = sorted(self._spans(text), key=lambda h: (h[0], -(h[1] - h[0])))
+        # Already-masked spans are opaque: never match inside or across a placeholder.
+        masked_spans = [(m.start(), m.end()) for m in _PLACEHOLDER.finditer(text)]
+        hits = sorted(
+            (h for h in self._spans(text) if not any(h[0] < me and ms < h[1] for ms, me in masked_spans)),
+            key=lambda h: (h[0], -(h[1] - h[0])),
+        )
         merged: list[tuple[int, int, Term]] = []
         for s, e, t in hits:
             if merged and s < merged[-1][1]:
@@ -246,7 +292,6 @@ class Matcher:
 
 
 REMOVED = "[removed]"
-_PLACEHOLDER = re.compile(r"⟦NS_[0-9a-f]{8}⟧")
 
 
 def render_removed(text: str | None) -> str | None:

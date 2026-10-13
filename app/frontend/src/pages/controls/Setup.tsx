@@ -57,7 +57,11 @@ export function Setup() {
       // Start the header pass automatically the first time.
       if (s && !s.scan && !started.current) {
         started.current = true;
-        setStatus(await api.startScan());
+        try {
+          setStatus(await api.startScan());
+        } catch (e) {
+          setError(errorText(e));
+        }
       }
     })();
   }, [api, refresh]);
@@ -100,8 +104,11 @@ export function Setup() {
         <MessageBar intent="error">
           <MessageBarBody>
             The scan didn't finish.{" "}
-            <Button size="small" onClick={() => void api.startScan().then(setStatus)}>
+            <Button size="small" onClick={() => void api.startScan().then(setStatus, (e) => setError(errorText(e)))}>
               Try again
+            </Button>{" "}
+            <Button size="small" disabled={busy} onClick={() => void complete("skipped")}>
+              Skip for now
             </Button>
           </MessageBarBody>
         </MessageBar>

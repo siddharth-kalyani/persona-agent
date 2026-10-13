@@ -221,6 +221,8 @@ function ExcludeDialog({ item, onClose, onDone }: { item: SourceItem; onClose: (
   const [impact, setImpact] = useState<Impact | null>(null);
   const [keep, setKeep] = useState<Set<string>>(new Set());
   const [alsoWord, setAlsoWord] = useState(false);
+  // Only a real name can become a never-send word (not an address, not text already masked).
+  const canAddName = item.kind === "person" && !item.label.includes("@") && !item.label.includes("[removed]");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -232,12 +234,22 @@ function ExcludeDialog({ item, onClose, onDone }: { item: SourceItem; onClose: (
     setBusy(true);
     try {
       await api.addRule(item.kind, item.id, [...keep]);
-      if (alsoWord && item.kind === "person") await api.addWord(item.label, "name", [], false);
-      await onDone();
     } catch (e) {
       setError(errorText(e));
       setBusy(false);
+      return;
     }
+    if (alsoWord && canAddName) {
+      try {
+        await api.addWord(item.label, "name", [], false);
+      } catch {
+        // The exclusion is saved; say so rather than failing the whole action.
+        setError(`Excluded. Adding "${item.label}" to never-send words didn't work; add it on the Never-send words tab.`);
+        setBusy(false);
+        return;
+      }
+    }
+    await onDone();
   }
 
   return (
@@ -276,7 +288,7 @@ function ExcludeDialog({ item, onClose, onDone }: { item: SourceItem; onClose: (
                     </div>
                   </>
                 )}
-                {item.kind === "person" && (
+                {canAddName && (
                   <Checkbox
                     checked={alsoWord}
                     onChange={(_, d) => setAlsoWord(!!d.checked)}

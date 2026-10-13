@@ -56,7 +56,9 @@ Entra and Graph access may come late, so every feature also runs on a **sample w
 - Names, addresses, subjects and chat names are encrypted per user.
 - Rules store only keyed hashes of identifiers.
 - Never-send words are encrypted per user and never logged.
-- Organisation rules can only be written in a transaction the API flagged as admin, and the database enforces it.
+- Organisation rules can only be written in a transaction the API marked as admin, after its role check. The database refuses them in any other transaction.
+  - This is a backstop against bugs, not a second security boundary: code that can run arbitrary SQL as the API role could set the flag itself.
+  - All queries are parameterised.
 
 ## Guarantees built in from M0
 
@@ -160,6 +162,8 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Stores | S3 Vectors, DynamoDB, Valkey | Aurora only | Added when M2/M4 need them |
 | Vault | Separate vault account; KMS per-tenant CMK with per-user data keys, so deleting a user's key crypto-shreds their data (§7.2 S8, §8.2) | AES-256-GCM keys derived (HKDF) from one master key in Secrets Manager | Move to KMS data keys before external customers |
 | Purge | Step Functions job across all stores (§6.5 X7) | In-process job. M1 has no derived content yet, so it re-masks the Sources index and writes receipts | M2 registers each new store (L1 text, vectors, style cards) |
+| Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |
+| Background work | Step Functions / durable queues | In-process tasks, plus a sweeper every 5 minutes that resumes interrupted purge jobs and fails scans cut off by a restart (`vanimo/controls/sweeper.py`) | Move to a queue when there is more than one API task |
 | Sign-in | Entra only | Also email + password, local/dev only, for testing while the Entra app is pending | Removed or kept off in prod (the settings refuse it) |
 
 ## M0 demo and week-1 spikes

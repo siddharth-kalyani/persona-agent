@@ -87,7 +87,10 @@ export interface Rule {
 
 export interface WordPreview {
   variants: string[];
+  /** What optional Hinglish folding reduces the word to; null when it doesn't apply. */
+  foldedForm: string | null;
   appearsIn: number;
+  appearsInWithFolds: number;
   commonWord: boolean;
 }
 
@@ -97,6 +100,7 @@ export interface NeverSendWord {
   kind: TermKind;
   variants: string[];
   allowInDrafts: boolean;
+  folds: boolean;
   createdAt: string;
 }
 
@@ -198,8 +202,8 @@ export class Api {
   previewWord = (text: string, kind: TermKind) =>
     this.request<WordPreview>("POST", "/api/controls/never-send/preview", { text, kind });
   words = () => this.request<NeverSendWord[]>("GET", "/api/controls/never-send");
-  addWord = (text: string, kind: TermKind, variants: string[], allowInDrafts: boolean) =>
-    this.request<NeverSendWord>("POST", "/api/controls/never-send", { text, kind, variants, allowInDrafts });
+  addWord = (text: string, kind: TermKind, variants: string[], allowInDrafts: boolean, folds = false) =>
+    this.request<NeverSendWord>("POST", "/api/controls/never-send", { text, kind, variants, allowInDrafts, folds });
   updateWord = (id: string, allowInDrafts: boolean) =>
     this.request<void>("PATCH", `/api/controls/never-send/${encodeURIComponent(id)}`, { allowInDrafts });
   deleteWord = (id: string) => this.request<void>("DELETE", `/api/controls/never-send/${encodeURIComponent(id)}`);

@@ -26,7 +26,7 @@ async def load_terms(conn: AsyncConnection, vault: Vault, ref: UserRef) -> list[
     rows = (
         await conn.execute(
             text(
-                "select id, term_id, term_enc, variants_enc, kind, allow_in_drafts, created_at "
+                "select id, term_id, term_enc, variants_enc, kind, allow_in_drafts, folds, created_at "
                 "from vanimo.never_send_terms order by created_at"
             )
         )
@@ -42,6 +42,7 @@ async def load_terms(conn: AsyncConnection, vault: Vault, ref: UserRef) -> list[
                 "variants": json.loads(variants) if variants else [],
                 "kind": r.kind,
                 "allow_in_drafts": r.allow_in_drafts,
+                "folds": r.folds,
                 "created_at": r.created_at,
             }
         )
@@ -51,10 +52,18 @@ async def load_terms(conn: AsyncConnection, vault: Vault, ref: UserRef) -> list[
 async def load_matcher(conn: AsyncConnection, vault: Vault, ref: UserRef) -> Matcher:
     """The user's never-send matcher. Decrypted terms live only inside the returned object."""
     terms = await load_terms(conn, vault, ref)
-    return Matcher([Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"])) for t in terms])
+    return Matcher([Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms])
 
 
-async def load_engine(conn: AsyncConnection, vault: Vault, ref: UserRef) -> ExclusionEngine:
+async def lock_user_controls(conn: AsyncConnection, ref: UserRef) -> None:
+    """Serialise index writes (scan replace, never-send scrub) per user until the transaction ends,
+    so a word added during a scan can never be overwritten by unmasked text."""
+    await conn.execute(text("select pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"controls:{ref.user_id}"})
+
+
+async def load_engine(
+    conn: AsyncConnection, vault: Vault, ref: UserRef, *, self_email: str | None = None
+) -> ExclusionEngine:
     rules = (
         await conn.execute(text("select id, kind, key_hash from vanimo.exclusion_rules where status = 'active'"))
     ).all()
@@ -70,18 +79,16 @@ async def load_engine(conn: AsyncConnection, vault: Vault, ref: UserRef) -> Excl
         )
     ).all()
     mode = (await conn.execute(text("select external_mode from vanimo.tenant_policies"))).scalar_one_or_none()
-    scan = (
-        await conn.execute(
-            text("select counts from vanimo.source_scans where status = 'done' order by finished_at desc limit 1")
-        )
-    ).scalar_one_or_none()
+    # The organisation's own domains, known tenant-wide (not from one user's latest scan).
+    org_domains = (await conn.execute(text("select domain_hash from vanimo.tenant_org_domains"))).scalars().all()
     return ExclusionEngine(
         hasher=hasher_for(vault, ref),
         user_rules=[UserRule(str(r.id), r.kind, r.key_hash, frozenset(exceptions.get(str(r.id), ()))) for r in rules],
         excluded_domains={a.domain_hash: str(a.id) for a in accounts if a.mode == "excluded"},
         approved_domains=frozenset(a.domain_hash for a in accounts if a.mode == "approved"),
         external_mode=mode or "allow_all",
-        org_domains=frozenset((scan or {}).get("org_domain_hashes", [])),
+        org_domains=frozenset(org_domains),
+        self_email=self_email,
     )
 
 

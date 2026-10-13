@@ -81,6 +81,10 @@ class GraphClient:
         log.info("graph.error", graph_status=resp.status_code, graph_code=code)
         raise GraphError(resp.status_code, code)
 
+    def for_background(self) -> GraphClient:
+        """Same token, patient retries: for long passes that run outside a request."""
+        return GraphClient(self._token, self._http, self._base, max_attempts=8, max_backoff_s=60)
+
     async def get(self, path: str, params: Mapping[str, str] | None = None, **kw: Any) -> dict[str, Any]:
         return (await self.request("GET", path, params=params, **kw)).json()
 

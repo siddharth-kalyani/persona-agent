@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import uuid
-
 import httpx
 import psycopg
 import pytest
@@ -13,50 +10,12 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.conftest import log_lines
+from tests.helpers import _find, _settle, _sources, _user
 from vanimo import canary
 from vanimo.config import Settings
-from vanimo.ops.local_user import upsert_local_user
 from vanimo.state import AppState
 
 pytestmark = pytest.mark.db
-PASSWORD = "a long enough test phrase"
-
-
-async def _user(client: httpx.AsyncClient, database: dict[str, str], settings: Settings, role: str = "user") -> dict:
-    email = f"user.{uuid.uuid4().hex[:8]}@example.com"
-    otp = upsert_local_user(database["owner"], email, role, reset=False, settings=settings)
-    token = (await client.post("/api/auth/login", json={"email": email, "password": otp})).json()["token"]
-    changed = await client.post(
-        "/api/auth/change-password",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"currentPassword": otp, "newPassword": PASSWORD},
-    )
-    return {"Authorization": f"Bearer {changed.json()['token']}"}
-
-
-async def _settle(state: AppState) -> None:
-    """Wait for background jobs (purges, scrubs) started by the last request."""
-    while state.tasks:
-        await asyncio.gather(*list(state.tasks), return_exceptions=True)
-
-
-async def _sources(client: httpx.AsyncClient, h: dict, kind: str) -> list[dict]:
-    resp = await client.get("/api/controls/sources", params={"kind": kind}, headers=h)
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
-def _find(items: list[dict], label: str) -> dict:
-    return next(i for i in items if i["label"] == label)
-
-
-@pytest.fixture
-async def scanned(client: httpx.AsyncClient, database: dict[str, str], settings: Settings) -> dict:
-    h = await _user(client, database, settings)
-    resp = await client.post("/api/controls/scan", headers=h)
-    assert resp.status_code == 202, resp.text
-    assert resp.json()["scan"]["status"] == "done"
-    return h
 
 
 async def test_scan_builds_the_sources_index(client: httpx.AsyncClient, scanned: dict) -> None:
@@ -245,6 +204,9 @@ async def test_admin_client_scoping(
     removed = await client.delete(f"/api/admin/scoping/accounts/{account['id']}", headers=admin)
     assert removed.status_code == 200
     assert not _find(await _sources(client, scanned, "people"), "Karan Malhotra")["excluded"]
+    # Leave the shared local tenant as we found it.
+    for left in removed.json()["accounts"]:
+        await client.delete(f"/api/admin/scoping/accounts/{left['id']}", headers=admin)
 
 
 async def test_database_refuses_org_writes_outside_admin_transactions(database: dict[str, str]) -> None:

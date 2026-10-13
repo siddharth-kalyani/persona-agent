@@ -2,6 +2,7 @@ import {
   Badge,
   Button,
   Caption1,
+  Checkbox,
   Field,
   Input,
   makeStyles,
@@ -46,6 +47,7 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
   const [kind, setKind] = useState<TermKind>("word");
   const [extra, setExtra] = useState("");
   const [allow, setAllow] = useState(false);
+  const [folds, setFolds] = useState(false);
   const [preview, setPreview] = useState<WordPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -62,7 +64,10 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
     void load();
   }, [load]);
 
-  useEffect(() => setPreview(null), [text, kind]);
+  useEffect(() => {
+    setPreview(null);
+    setFolds(false);
+  }, [text, kind]);
 
   async function check() {
     setError(null);
@@ -78,7 +83,7 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
     setError(null);
     try {
       const spellings = extra.split(",").map((s) => s.trim()).filter(Boolean);
-      await api.addWord(text, kind, spellings, allow);
+      await api.addWord(text, kind, spellings, allow, folds);
       setText("");
       setExtra("");
       setAllow(false);
@@ -138,6 +143,13 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
               </Badge>
             ))}
           </div>
+          {preview.foldedForm && (
+            <Checkbox
+              checked={folds}
+              onChange={(_, d) => setFolds(!!d.checked)}
+              label={`Also catch Hinglish spellings (anything that simplifies to "${preview.foldedForm}"): ${preview.appearsInWithFolds} sources instead of ${preview.appearsIn}`}
+            />
+          )}
           {preview.commonWord && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -162,6 +174,7 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
               <TableCell>
                 {w.text}
                 {w.variants.length > 0 && <Caption1 className={styles.muted}> · also {w.variants.join(", ")}</Caption1>}
+                {w.folds && <Caption1 className={styles.muted}> · Hinglish spellings</Caption1>}
               </TableCell>
               <TableCell>{w.kind}</TableCell>
               <TableCell>

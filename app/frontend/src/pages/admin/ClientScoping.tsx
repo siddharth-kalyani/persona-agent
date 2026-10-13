@@ -111,6 +111,14 @@ export function ClientScoping() {
           <Radio value="allow_all" label="Use conversations with any external people, except excluded clients" />
           <Radio value="approved_only" label="Only use conversations with approved clients (everything else external is excluded)" />
         </RadioGroup>
+        {scoping.externalMode === "approved_only" && !scoping.accounts.some((a) => a.mode === "approved") && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              No client is approved yet, so every conversation with external people is excluded. Add approved clients
+              below.
+            </MessageBarBody>
+          </MessageBar>
+        )}
       </Card>
       <Card>
         <CardHeader header={<Text weight="semibold">Client accounts</Text>} />

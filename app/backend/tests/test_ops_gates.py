@@ -44,15 +44,18 @@ async def test_content_gate(database: dict[str, str]) -> None:
     engine = create_async_engine(database["app"])
     ref = await provision_user(engine, entra_tenant_id=TENANT, entra_oid=str(uuid.uuid4()), cell="in", data_region="IN")
     with pytest.raises(ReviewPending):
-        await require_review_done(engine, ref)
+        await require_review_done(engine, ref, "sample")
     async with user_tx(engine, ref) as conn:
         await conn.execute(
             text(
                 "update vanimo.users set onboarding_state = 'review_done', review_outcome = 'skipped', "
-                "review_completed_at = now()"
+                "review_completed_at = now(), reviewed_source_kind = 'sample'"
             )
         )
-    await require_review_done(engine, ref)
+    await require_review_done(engine, ref, "sample")
+    # Reviewing the sample workspace never unlocks a real mailbox.
+    with pytest.raises(ReviewPending):
+        await require_review_done(engine, ref, "graph")
     await engine.dispose()
 
 

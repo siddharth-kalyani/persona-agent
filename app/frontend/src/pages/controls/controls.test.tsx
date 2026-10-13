@@ -76,6 +76,16 @@ describe("SourcesReview", () => {
     await waitFor(() => expect(addRule).toHaveBeenCalledWith("person", "p1", ["c-big"]));
   });
 
+  it("offers 'also add to never-send words' only for real names", async () => {
+    const api = new Api("", async () => "t");
+    vi.spyOn(api, "sources").mockResolvedValue([{ ...PEOPLE[0]!, label: "ann@fabrikam.example" }]);
+    vi.spyOn(api, "impact").mockResolvedValue({ emails: 1, threads: 1, chats: 0, meetings: 0, chatList: [] });
+    wrap(api, <SourcesReview />);
+    await userEvent.click(await screen.findByRole("button", { name: "Exclude" }));
+    await screen.findByText(/1 email in 1 thread/);
+    expect(screen.queryByLabelText(/never-send words/)).not.toBeInTheDocument();
+  });
+
   it("filters by search", async () => {
     const api = new Api("", async () => "t");
     vi.spyOn(api, "sources").mockResolvedValue(PEOPLE);
@@ -90,9 +100,11 @@ describe("SourcesReview", () => {
     const api = new Api("", async () => "t");
     vi.spyOn(api, "sources").mockResolvedValue([]);
     vi.spyOn(api, "words").mockResolvedValue([]);
-    vi.spyOn(api, "previewWord").mockResolvedValue({ variants: ["falcon", "falcons"], appearsIn: 5, commonWord: false });
+    vi.spyOn(api, "previewWord").mockResolvedValue({
+      variants: ["falcon", "falcons"], foldedForm: "falcon", appearsIn: 5, appearsInWithFolds: 6, commonWord: false,
+    }); // prettier-ignore
     const addWord = vi.spyOn(api, "addWord").mockResolvedValue({
-      id: "w1", text: "Falcon", kind: "codename", variants: ["फाल्कन"], allowInDrafts: false, createdAt: "",
+      id: "w1", text: "Falcon", kind: "codename", variants: ["फाल्कन"], allowInDrafts: false, folds: false, createdAt: "",
     }); // prettier-ignore
     wrap(api, <SourcesReview />);
     await userEvent.click(await screen.findByRole("tab", { name: "Never-send words" }));
@@ -102,8 +114,10 @@ describe("SourcesReview", () => {
     expect(screen.getByRole("button", { name: "Add word" })).toBeDisabled(); // preview first
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     expect(await screen.findByText(/Appears in 5 of your stored sources/)).toBeInTheDocument();
+    // Hinglish folding is opt-in and shows its effect first.
+    await userEvent.click(screen.getByLabelText(/Also catch Hinglish spellings .*6 sources instead of 5/));
     await userEvent.click(screen.getByRole("button", { name: "Add word" }));
-    expect(addWord).toHaveBeenCalledWith("Falcon", "codename", ["फाल्कन"], false);
+    expect(addWord).toHaveBeenCalledWith("Falcon", "codename", ["फाल्कन"], false, true);
   });
 });
 

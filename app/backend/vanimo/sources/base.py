@@ -67,10 +67,16 @@ class SentHeader:
     to: tuple[Address, ...] = ()
     cc: tuple[Address, ...] = ()
     bcc: tuple[Address, ...] = ()
+    # Set when someone else is the "from" (sent on behalf of / as a delegate): a participant too.
+    sender: Address | None = None
 
     @property
     def recipients(self) -> tuple[Address, ...]:
         return self.to + self.cc + self.bcc
+
+    @property
+    def participants(self) -> tuple[Address, ...]:
+        return self.recipients + ((self.sender,) if self.sender else ())
 
 
 @dataclass(frozen=True)

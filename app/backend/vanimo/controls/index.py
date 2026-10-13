@@ -166,7 +166,7 @@ class Evaluator:
         self.labels = view.by_hash()
         self.rule_labels = {r.id: self.labels.get((r.kind, r.key_hash), r.kind) for r in engine.user_rules}
 
-    def _describe(self, reasons: list[Reason], direct_kind: str | None) -> Status:
+    def _describe(self, reasons: list[Reason], direct_kind: str | None, direct_key: str | None = None) -> Status:
         via: list[str] = []
         direct: str | None = None
         for r in reasons:
@@ -176,11 +176,19 @@ class Evaluator:
                     if r.kind == "client_account"
                     else "Your organisation: only approved clients"
                 )
-            elif r.kind == direct_kind and direct is None:
+            elif r.kind == direct_kind and direct is None and self._is_direct(r, direct_key):
                 direct = r.rule_id
             else:
                 via.append(self.rule_labels.get(r.rule_id or "", r.kind))
         return Status(bool(reasons), direct, list(dict.fromkeys(via)), any(r.scope == "tenant" for r in reasons))
+
+    def _is_direct(self, reason: Reason, direct_key: str | None) -> bool:
+        """A rule is removable from this row only if it is on exactly this item (a rule on the
+        parent domain shows on a subdomain row, but must be removed from the parent's row)."""
+        if direct_key is None:
+            return True
+        rule = next((r for r in self.engine.user_rules if r.id == reason.rule_id), None)
+        return rule is not None and rule.key_hash == direct_key
 
     def _people_reasons(self, ids: set[uuid.UUID], chat_hash: str | None = None) -> list[Reason]:
         out: list[Reason] = []
@@ -195,8 +203,8 @@ class Evaluator:
 
     def domain(self, domain: str, domain_hash: str) -> Status:
         reasons = self.engine.domain_reasons(domain)
-        # Show the user's own rule on exactly this domain as the direct one.
-        return self._describe(reasons, "domain")
+        # Only the user's own rule on exactly this domain is "direct" (removable here).
+        return self._describe(reasons, "domain", direct_key=domain_hash)
 
     def thread(self, t: Thread) -> Status:
         reasons: list[Reason] = []
@@ -236,8 +244,9 @@ def impact(view: IndexView, kind: str, item_id: uuid.UUID, message_people: dict[
         if kind == "person":
             people = {item_id}
         else:
-            anchor = view.people[item_id]
-            people = {p.id for p in view.people.values() if p.domain_hash == anchor.domain_hash}
+            # The engine excludes subdomains too (cards.bluefinbank.example under bluefinbank.example).
+            d = view.people[item_id].domain
+            people = {p.id for p in view.people.values() if p.domain == d or p.domain.endswith("." + d)}
         for pid in people:
             emails |= message_people.get(pid, set())
         threads = {t.id for t in view.threads.values() if t.people & people}

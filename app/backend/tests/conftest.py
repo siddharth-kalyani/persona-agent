@@ -99,6 +99,7 @@ def settings(database: dict[str, str]) -> Settings:
         entra_client_id=CLIENT_ID,
         cors_origins=[],
         enable_password_auth=True,
+        background_sweeper=False,  # tests call sweep_once directly
     )
 
 
@@ -188,3 +189,15 @@ async def client(settings: Settings, app_state: AppState) -> AsyncIterator[httpx
 
 def log_lines(text: str) -> list[dict]:
     return [json.loads(line) for line in text.splitlines() if line.startswith("{")]
+
+
+@pytest.fixture
+async def scanned(client: httpx.AsyncClient, database: dict[str, str], settings: Settings) -> dict:
+    """A password user (sample workspace) whose header pass is done."""
+    from tests.helpers import _user
+
+    h = await _user(client, database, settings)
+    resp = await client.post("/api/controls/scan", headers=h)
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["scan"]["status"] == "done"
+    return h

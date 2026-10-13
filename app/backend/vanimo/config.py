@@ -98,6 +98,8 @@ class Settings(BaseSettings):
 
     # Admin diagnostics (week-1 spikes, live health checks). Admin role is still required.
     enable_diagnostics: bool = True
+    # Periodically resume interrupted purge jobs and fail scans cut off by a restart.
+    background_sweeper: bool = True
     log_level: str = "INFO"
 
     @property

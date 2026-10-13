@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from vanimo.controls.store import load_matcher
+from vanimo.controls.store import load_matcher, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.logs import get_logger
 from vanimo.vault import Vault
@@ -42,6 +42,7 @@ async def scrub_index(engine: AsyncEngine, vault: Vault, ref: UserRef) -> int:
     t, u = ref.tenant_id, ref.user_id
     changed = 0
     async with user_tx(engine, ref) as conn:
+        await lock_user_controls(conn, ref)  # never interleave with a scan replacing the index
         matcher = await load_matcher(conn, vault, ref)
         if not matcher:
             return 0

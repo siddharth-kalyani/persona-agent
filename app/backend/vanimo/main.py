@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from vanimo.api import admin_scoping, auth, controls, diagnostics, me
 from vanimo.auth.entra import AuthError
 from vanimo.config import Settings, get_settings
+from vanimo.controls.sweeper import sweep_forever
 from vanimo.graph.client import GraphError
 from vanimo.logs import configure_logging, get_logger
 from vanimo.state import AppState, build_state
@@ -40,6 +41,8 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.vanimo = state or build_state(settings)
+        if settings.background_sweeper:
+            app.state.vanimo.spawn(sweep_forever(app.state.vanimo.engine, app.state.vanimo.vault))
         log.info("app.start", env=settings.env, cell=settings.cell)
         try:
             yield

@@ -58,7 +58,7 @@ class UserRule:
 @dataclass
 class ExclusionEngine:
     hasher: Hasher
-    user_rules: list[UserRule] = field(default_factory=list)
+    user_rules: list[UserRule] = field(default_factory=list)  # person/domain rules may carry chat exceptions
     excluded_domains: dict[str, str] = field(default_factory=dict)  # domain hash -> client account id
     approved_domains: frozenset[str] = frozenset()
     external_mode: Literal["allow_all", "approved_only"] = "allow_all"
@@ -89,13 +89,14 @@ class ExclusionEngine:
         rule = self._rule("person", self.hasher("person", addr.email.lower()))
         if rule and not (chat_hash and chat_hash in rule.except_chats):
             reasons.append(Reason("user", "person", rule.id))
-        return reasons + self.domain_reasons(addr.domain)
+        return reasons + self.domain_reasons(addr.domain, chat_hash=chat_hash)
 
-    def domain_reasons(self, domain: str) -> list[Reason]:
+    def domain_reasons(self, domain: str, *, chat_hash: str | None = None) -> list[Reason]:
         reasons: list[Reason] = []
         domains = self.domain_hashes(domain)
         for dh in domains:
-            if rule := self._rule("domain", dh):
+            rule = self._rule("domain", dh)
+            if rule and not (chat_hash and chat_hash in rule.except_chats):
                 reasons.append(Reason("user", "domain", rule.id))
             if dh in self.excluded_domains:
                 reasons.append(Reason("tenant", "client_account", account_id=self.excluded_domains[dh]))
@@ -120,7 +121,7 @@ class ExclusionEngine:
         reasons: list[Reason] = []
         if rule := self._rule("thread", self.hasher("thread", header.conversation_id)):
             reasons.append(Reason("user", "thread", rule.id))
-        reasons += self._participants(header.recipients)
+        reasons += self._participants(header.participants)
         return Decision(tuple(dict.fromkeys(reasons)))
 
     def chat(self, chat: Chat) -> Decision:

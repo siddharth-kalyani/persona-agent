@@ -7,7 +7,7 @@ Calls follow `docs/research/12` §9.2 (header pass).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from vanimo.graph import metadata
@@ -22,6 +22,8 @@ SENT_FIELDS = (
     "toRecipients",
     "ccRecipients",
     "bccRecipients",
+    "from",
+    "sender",
 )
 EVENT_FIELDS = (
     "id",
@@ -35,6 +37,8 @@ EVENT_FIELDS = (
     "onlineMeeting",
     "sensitivity",
     "isOrganizer",
+    "iCalUId",
+    "type",
 )
 GRAPH_MEMBER_PAGE = 25  # chats list returns at most 25 members per chat
 
@@ -48,6 +52,9 @@ def _addr(recipient: dict[str, Any] | None) -> Address | None:
 
 def _addrs(items: list[dict[str, Any]] | None) -> tuple[Address, ...]:
     return tuple(a for a in (_addr(i) for i in items or []) if a)
+
+
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _dt(value: str | None) -> datetime | None:
@@ -74,6 +81,9 @@ class GraphSource:
     def __init__(self, graph: GraphClient) -> None:
         self._g = graph
 
+    def for_background(self) -> GraphSource:
+        return GraphSource(self._g.for_background())
+
     async def profile(self) -> Profile:
         me = await metadata.me(self._g)
         email = (me.get("mail") or me.get("userPrincipalName") or "").lower() or None
@@ -92,10 +102,11 @@ class GraphSource:
             id=m["id"],
             conversation_id=m.get("conversationId") or m["id"],
             subject=m.get("subject"),
-            sent_at=_dt(m.get("sentDateTime")) or datetime.min,
+            sent_at=_dt(m.get("sentDateTime")) or EPOCH,
             to=_addrs(m.get("toRecipients")),
             cc=_addrs(m.get("ccRecipients")),
             bcc=_addrs(m.get("bccRecipients")),
+            sender=_addr(m.get("from")),  # the scan drops it when it's the user themselves
         )
 
     async def sent_headers(self) -> AsyncIterator[SentHeader]:
@@ -110,18 +121,17 @@ class GraphSource:
                     yield self._header(m)
 
     async def chats(self) -> AsyncIterator[Chat]:
-        # Never expand lastMessagePreview: it carries message text.
-        async for page in self._g.pages(
-            "me/chats",
-            {"$expand": "members", "$select": "id,chatType,topic,lastUpdatedDateTime,viewpoint", "$top": "50"},
-            max_pages=1_000,
-        ):
+        # Never expand lastMessagePreview: it carries message text. (No $select: its support on
+        # /me/chats is unverified, and the default chat properties carry no message content.)
+        async for page in self._g.pages("me/chats", {"$expand": "members", "$top": "50"}, max_pages=1_000):
             for c in page.get("value", []):
                 members_raw = c.get("members") or []
                 if len(members_raw) >= GRAPH_MEMBER_PAGE:
                     try:
-                        full = await self._g.get(f"chats/{c['id']}/members")
-                        members_raw = full.get("value", members_raw)
+                        full: list[dict[str, Any]] = []
+                        async for mp in self._g.pages(f"chats/{c['id']}/members", max_pages=100):
+                            full += mp.get("value", [])
+                        members_raw = full or members_raw
                     except GraphError:
                         pass
                 yield Chat(

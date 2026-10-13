@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from vanimo.controls.neversend import Matcher
-from vanimo.controls.store import hasher_for, load_matcher
+from vanimo.controls.store import hasher_for, load_matcher, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.logs import get_logger
 from vanimo.sources.base import CONSUMER_DOMAINS, Address, WorkspaceSource
@@ -71,7 +71,12 @@ def chat_label(topic: str | None, member_names: list[str]) -> str:
 async def _collect(source: WorkspaceSource, self_email: str, now: datetime) -> _Index:
     idx = _Index()
     me = self_email.lower()
+    seen_messages: set[str] = set()
     async for h in source.sent_headers():
+        # Delta paging can return the same message twice; count it once.
+        if h.id in seen_messages:
+            continue
+        seen_messages.add(h.id)
         thread = idx.threads.setdefault(
             h.conversation_id, {"subject": h.subject, "count": 0, "last": None, "forward": False}
         )
@@ -81,15 +86,18 @@ async def _collect(source: WorkspaceSource, self_email: str, now: datetime) -> _
         if (h.subject or "").strip().lower().startswith(FORWARD_PREFIXES):
             thread["forward"] = True
         people = []
-        for addr in h.recipients:
+        for addr in {a.email.lower(): a for a in h.participants}.values():  # once per message
             if addr.email.lower() == me:
                 continue
             p = idx.person(addr, h.sent_at)
             p.sent += 1
             people.append(p.email)
         idx.messages.append({"id": h.id, "conv": h.conversation_id, "sent_at": h.sent_at, "people": people})
+    chats_by_id: dict[str, Any] = {}
     async for c in source.chats():
-        members = [m for m in c.members if m.email.lower() != me]
+        chats_by_id[c.id] = c  # a chat that moves while pages are read can appear twice: last wins
+    for c in chats_by_id.values():
+        members = list({m.email.lower(): m for m in c.members if m.email.lower() != me}.values())
         for m in members:
             idx.person(m, c.last_activity_at).chats += 1
         idx.chats.append(
@@ -103,7 +111,10 @@ async def _collect(source: WorkspaceSource, self_email: str, now: datetime) -> _
                 "last": c.last_activity_at,
             }
         )
+    events_by_id: dict[str, Any] = {}
     async for e in source.events(now - CALENDAR_BACK, now + CALENDAR_AHEAD):
+        events_by_id[e.id] = e
+    for e in events_by_id.values():
         attendees = [a for a in (*e.attendees, *([e.organizer] if e.organizer else [])) if a.email.lower() != me]
         unique = list({a.email.lower(): a for a in attendees}.values())
         for a in unique:
@@ -139,12 +150,11 @@ async def run_scan(engine: AsyncEngine, vault: Vault, ref: UserRef, source: Work
                 {"t": ref.tenant_id, "u": ref.user_id, "k": source.kind},
             )
         ).scalar_one()
-        matcher = await load_matcher(conn, vault, ref)
     try:
         profile = await source.profile()
         org_domains = await source.org_domains()
         idx = await _collect(source, profile.email or "", datetime.now(UTC))
-        counts = await _store(engine, vault, ref, idx, matcher, org_domains, scan_id)
+        counts = await _store(engine, vault, ref, idx, org_domains, scan_id)
     except Exception as exc:
         async with user_tx(engine, ref) as conn:
             await conn.execute(
@@ -152,7 +162,7 @@ async def run_scan(engine: AsyncEngine, vault: Vault, ref: UserRef, source: Work
                     "update vanimo.source_scans set status = 'failed', finished_at = now(), error_code = :e "
                     "where id = :id"
                 ),
-                {"e": getattr(exc, "code", type(exc).__name__)[:80], "id": scan_id},
+                {"e": str(getattr(exc, "code", None) or type(exc).__name__)[:80], "id": scan_id},
             )
         log.warning("scan.failed", error_type=type(exc).__name__)
         raise
@@ -162,6 +172,22 @@ async def run_scan(engine: AsyncEngine, vault: Vault, ref: UserRef, source: Work
 
 async def _store(
     engine: AsyncEngine,
+    vault: Vault,
+    ref: UserRef,
+    idx: _Index,
+    org_domains: frozenset[str],
+    scan_id: Any,
+) -> dict[str, Any]:
+    async with user_tx(engine, ref) as conn:
+        # Under the per-user lock, with the words as they are *now*: a word added while the
+        # header pass ran is applied here, and a scrub can't interleave with this replace.
+        await lock_user_controls(conn, ref)
+        matcher = await load_matcher(conn, vault, ref)
+        return await _replace_index(conn, vault, ref, idx, matcher, org_domains, scan_id)
+
+
+async def _replace_index(
+    conn: Any,
     vault: Vault,
     ref: UserRef,
     idx: _Index,
@@ -310,18 +336,20 @@ async def _store(
         "meetings": len(meetings),
         "org_domain_hashes": sorted({h("domain", d) for d in org_domains}),
     }
-    async with user_tx(engine, ref) as conn:
-        for table in ("source_threads", "source_chats", "source_meetings", "source_people"):
-            # Messages and link rows cascade from these.
-            await conn.execute(text(f"delete from vanimo.{table}"))  # noqa: S608 - constant table names
-        for sql, rows in inserts:
-            if rows:
-                await conn.execute(text(sql), rows)
-        await conn.execute(
-            text(
-                "update vanimo.source_scans set status = 'done', finished_at = now(), counts = cast(:c as jsonb) "
-                "where id = :id"
-            ),
-            {"c": json.dumps(counts), "id": scan_id},
-        )
+    for table in ("source_threads", "source_chats", "source_meetings", "source_people"):
+        # Messages and link rows cascade from these.
+        await conn.execute(text(f"delete from vanimo.{table}"))  # noqa: S608 - constant table names
+    for sql, rows in inserts:
+        if rows:
+            await conn.execute(text(sql), rows)
+    await conn.execute(
+        text("select vanimo_private.record_org_domains(cast(:h as text[]))"), {"h": counts["org_domain_hashes"]}
+    )
+    await conn.execute(
+        text(
+            "update vanimo.source_scans set status = 'done', finished_at = now(), counts = cast(:c as jsonb) "
+            "where id = :id"
+        ),
+        {"c": json.dumps(counts), "id": scan_id},
+    )
     return counts

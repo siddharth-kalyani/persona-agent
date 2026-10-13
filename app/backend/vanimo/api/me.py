@@ -10,11 +10,11 @@ from datetime import datetime
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import text
 
 from vanimo.aio import gather_strict
 from vanimo.api.deps import CurrentPrincipal, CurrentUser, State, UserSource
 from vanimo.db.session import user_tx
+from vanimo.gates import onboarding_state
 from vanimo.sources.base import Profile
 
 router = APIRouter(prefix="/api", tags=["me"])
@@ -52,7 +52,7 @@ def _person(p: Profile | None) -> PersonOut | None:
 @router.get("/me", response_model=MeOut)
 async def get_me(principal: CurrentPrincipal, user: CurrentUser, source: UserSource, state: State) -> MeOut:
     async with user_tx(state.engine, user) as conn:
-        onboarding = (await conn.execute(text("select onboarding_state from vanimo.users"))).scalar_one()
+        onboarding, _ = await onboarding_state(conn, source.kind)
     profile, manager, sent = await gather_strict(source.profile(), source.manager(), source.recent_sent(5))
     return MeOut(
         user=_person(profile) or PersonOut(),

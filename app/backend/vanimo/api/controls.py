@@ -24,11 +24,13 @@ from vanimo import audit
 from vanimo.api.deps import CurrentUser, State, UserSource
 from vanimo.controls import index as idx
 from vanimo.controls.jobs import run_job
-from vanimo.controls.neversend import Matcher, Term, new_term_id, variants
+from vanimo.controls.neversend import Matcher, Term, folded_form, new_term_id, variants
 from vanimo.controls.scan import run_scan
-from vanimo.controls.store import add_purge_job, bump_version, load_engine, load_terms
+from vanimo.controls.store import add_purge_job, bump_version, load_engine, load_matcher, load_terms
 from vanimo.db.session import UserRef, user_tx
+from vanimo.gates import onboarding_state
 from vanimo.logs import get_logger
+from vanimo.sources.graph import EPOCH
 from vanimo.state import AppState
 
 log = get_logger("vanimo.controls")
@@ -63,17 +65,23 @@ class StatusOut(BaseModel):
     neverSendWords: int
 
 
-async def _status(state: AppState, user: UserRef) -> StatusOut:
+async def _status(state: AppState, user: UserRef, source_kind: str) -> StatusOut:
     async with user_tx(state.engine, user) as conn:
-        u = (await conn.execute(text("select onboarding_state, review_outcome from vanimo.users"))).one()
-        scan = (await conn.execute(text("select * from vanimo.source_scans order by started_at desc limit 1"))).first()
+        onboarding, outcome = await onboarding_state(conn, source_kind)
+        # Only scans of the source in use count (switching sample to Microsoft 365 starts over).
+        scan = (
+            await conn.execute(
+                text("select * from vanimo.source_scans where source_kind = :k order by started_at desc limit 1"),
+                {"k": source_kind},
+            )
+        ).first()
         rules = (
             await conn.execute(text("select count(*) from vanimo.exclusion_rules where status = 'active'"))
         ).scalar_one()
         words = (await conn.execute(text("select count(*) from vanimo.never_send_terms"))).scalar_one()
     return StatusOut(
-        onboardingState=u.onboarding_state,
-        reviewOutcome=u.review_outcome,
+        onboardingState=onboarding,
+        reviewOutcome=outcome,
         scan=ScanOut(
             status=scan.status,
             sourceKind=scan.source_kind,
@@ -89,17 +97,29 @@ async def _status(state: AppState, user: UserRef) -> StatusOut:
 
 
 @router.get("/status", response_model=StatusOut)
-async def status(user: CurrentUser, state: State) -> StatusOut:
-    return await _status(state, user)
+async def status(user: CurrentUser, source: UserSource, state: State) -> StatusOut:
+    return await _status(state, user, source.kind)
 
 
 @router.post("/scan", response_model=StatusOut, status_code=202)
 async def start_scan(user: CurrentUser, source: UserSource, state: State, request: Request) -> StatusOut:
     """Starts the header pass in the background; poll /status. Sample workspaces finish instantly."""
     key = f"scan:{user.user_id}"
-    if any(t.get_name() == key and not t.done() for t in state.tasks):
+    async with user_tx(state.engine, user) as conn:
+        # Also catches a scan started by another API process (the sweeper fails stale ones).
+        running = (
+            await conn.execute(
+                text(
+                    "select 1 from vanimo.source_scans where status = 'running' "
+                    "and started_at > now() - interval '30 minutes' limit 1"
+                )
+            )
+        ).first()
+    if running or any(t.get_name() == key and not t.done() for t in state.tasks):
         raise HTTPException(409, detail={"error": "scan_running"})
-    task = state.spawn(run_scan(state.engine, state.vault, user, source))
+    # A long background pass gets patient throttling retries (interactive calls use short ones).
+    background = getattr(source, "for_background", None)
+    task = state.spawn(run_scan(state.engine, state.vault, user, background() if background else source))
     task.set_name(key)
     async with user_tx(state.engine, user) as conn:
         await audit.record(conn, user, "controls.scan_started", request_id=request.state.request_id)
@@ -107,7 +127,7 @@ async def start_scan(user: CurrentUser, source: UserSource, state: State, reques
         # Instant for sample data: return the finished state. A failure is recorded on the scan row
         # (status "failed"), which /status reports, so it isn't re-raised here.
         await asyncio.gather(task, return_exceptions=True)
-    return await _status(state, user)
+    return await _status(state, user, source.kind)
 
 
 # --- sources ----------------------------------------------------------------------------------
@@ -127,13 +147,14 @@ class SourceItem(BaseModel):
     locked: bool = False  # excluded by the organisation
 
 
-async def _context(state: AppState, user: UserRef) -> tuple[idx.IndexView, idx.Evaluator]:
+async def _context(state: AppState, user: UserRef) -> tuple[idx.IndexView, idx.Evaluator, Matcher]:
     async with user_tx(state.engine, user) as conn:
         view = await idx.load_index(conn, state.vault, user)
         engine = await load_engine(conn, state.vault, user)
+        matcher = await load_matcher(conn, state.vault, user)
         accounts = (await conn.execute(text("select id, name_enc from vanimo.client_accounts"))).all()
     names = {str(a.id): state.vault.decrypt_tenant(user.tenant_id, a.name_enc, "account_name") or "" for a in accounts}
-    return view, idx.Evaluator(view, engine, names)
+    return view, idx.Evaluator(view, engine, names), matcher
 
 
 def _item(kind: RuleKind, item_id: Any, label: str, st: idx.Status, **kw: Any) -> SourceItem:
@@ -145,13 +166,19 @@ def _item(kind: RuleKind, item_id: Any, label: str, st: idx.Status, **kw: Any) -
 
 @router.get("/sources", response_model=list[SourceItem])
 async def list_sources(user: CurrentUser, state: State, kind: Annotated[SourceKind, Query()]) -> list[SourceItem]:
-    view, ev = await _context(state, user)
+    view, ev, matcher = await _context(state, user)
+
+    def shown(value: str | None) -> str | None:
+        # Addresses are stored (encrypted) as identifiers; a never-send word inside one is still
+        # masked wherever it is displayed.
+        return idx.render_removed(matcher.mask(value)[0]) if value else value
+
     items: list[SourceItem] = []
     if kind == "people":
         for p in sorted(view.people.values(), key=lambda p: -(p.sent + p.chats + p.meetings)):
             flags = (["personal email"] if p.consumer else []) + ([] if p.internal else ["external"])
             items.append(
-                _item("person", p.id, p.label, ev.person(p), detail=p.email, lastActivity=p.last, flags=flags,
+                _item("person", p.id, p.label, ev.person(p), detail=shown(p.email), lastActivity=p.last, flags=flags,
                       counts={"emails": p.sent, "chats": p.chats, "meetings": p.meetings})
             )  # fmt: skip
     elif kind == "domains":
@@ -162,20 +189,20 @@ async def list_sources(user: CurrentUser, state: State, kind: Annotated[SourceKi
             first = people[0]
             flags = (["personal email"] if first.consumer else []) + (["your organisation"] if first.internal else [])
             items.append(
-                _item("domain", first.id, first.domain, ev.domain(first.domain, dh),
+                _item("domain", first.id, shown(first.domain) or "", ev.domain(first.domain, dh),
                       detail=f"{len(people)} {'person' if len(people) == 1 else 'people'}", flags=flags,
                       counts={"people": len(people), "emails": sum(p.sent for p in people)},
                       lastActivity=max((p.last for p in people if p.last), default=None))
             )  # fmt: skip
     elif kind == "threads":
-        for t in sorted(view.threads.values(), key=lambda t: t.last or datetime.min, reverse=True):
+        for t in sorted(view.threads.values(), key=lambda t: t.last or EPOCH, reverse=True):
             items.append(
                 _item("thread", t.id, idx.render_removed(t.subject) or "(no subject)", ev.thread(t),
                       counts={"emails": t.count, "people": len(t.people)}, lastActivity=t.last,
                       flags=["forward"] if t.forward else [])
             )  # fmt: skip
     elif kind == "chats":
-        for c in sorted(view.chats.values(), key=lambda c: c.last or datetime.min, reverse=True):
+        for c in sorted(view.chats.values(), key=lambda c: c.last or EPOCH, reverse=True):
             flags = (["hidden in Teams"] if c.hidden else []) + (["large group"] if c.members >= idx.LARGE_CHAT else [])
             items.append(
                 _item("chat", c.id, c.label, ev.chat(c), detail={"oneOnOne": "1:1 chat", "group": "Group chat",
@@ -357,7 +384,11 @@ class TermPreviewIn(BaseModel):
 
 class TermPreviewOut(BaseModel):
     variants: list[str]
+    # What the optional Hinglish folding reduces the word to (e.g. "Sharmaa" -> "sharma"); the
+    # user opts in per word after seeing it. None when folding doesn't apply.
+    foldedForm: str | None
     appearsIn: int
+    appearsInWithFolds: int
     commonWord: bool
 
 
@@ -375,17 +406,27 @@ async def preview_term(body: TermPreviewIn, user: CurrentUser, state: State) -> 
     """Variants to confirm and how many stored items the word appears in. The word is not stored."""
     async with user_tx(state.engine, user) as conn:
         view = await idx.load_index(conn, state.vault, user)
-    matcher = Matcher([Term("00000000", body.text, body.kind)])
-    appears = sum(1 for t in _index_texts(view) if matcher.count(t))
+    texts = _index_texts(view)
+    plain = Matcher([Term("00000000", body.text, body.kind)])
+    folded = Matcher([Term("00000000", body.text, body.kind, folds=True)])
+    appears = sum(1 for t in texts if plain.count(t))
+    appears_folded = sum(1 for t in texts if folded.count(t))
     words = body.text.strip().lower().split()
     common = len(body.text.strip()) <= 3 or any(w in COMMON_WORDS for w in words)
-    return TermPreviewOut(variants=variants(body.text, body.kind), appearsIn=appears, commonWord=common)
+    return TermPreviewOut(
+        variants=variants(body.text, body.kind),
+        foldedForm=folded_form(body.text),
+        appearsIn=appears,
+        appearsInWithFolds=appears_folded,
+        commonWord=common,
+    )
 
 
 class TermIn(TermPreviewIn):
     # Extra spellings the user typed or confirmed (e.g. Devanagari): matched exactly like the term.
     variants: list[str] = Field(default_factory=list, max_length=20)
     allowInDrafts: bool = False
+    folds: bool = False  # also catch Hinglish spellings (shown in the preview first)
 
 
 class TermOut(BaseModel):
@@ -394,12 +435,13 @@ class TermOut(BaseModel):
     kind: str
     variants: list[str]
     allowInDrafts: bool
+    folds: bool = False
     createdAt: datetime
 
 
 def _term_out(t: dict[str, Any]) -> TermOut:
     return TermOut(id=t["id"], text=t["text"], kind=t["kind"], variants=t["variants"],
-                   allowInDrafts=t["allow_in_drafts"], createdAt=t["created_at"])  # fmt: skip
+                   allowInDrafts=t["allow_in_drafts"], folds=t["folds"], createdAt=t["created_at"])  # fmt: skip
 
 
 @router.get("/never-send", response_model=list[TermOut])
@@ -423,13 +465,13 @@ async def add_term(body: TermIn, user: CurrentUser, state: State, request: Reque
             await conn.execute(
                 text(
                     "insert into vanimo.never_send_terms (tenant_id, owner_user_id, term_id, term_enc, variants_enc, "
-                    "kind, allow_in_drafts) values (:t, :u, :tid, :te, :ve, :k, :a) returning id, created_at"
+                    "kind, allow_in_drafts, folds) values (:t, :u, :tid, :te, :ve, :k, :a, :f) returning id, created_at"
                 ),
                 {
                     "t": t, "u": u, "tid": new_term_id(),
                     "te": state.vault.encrypt_user(t, u, body.text.strip(), "ns_term"),
                     "ve": state.vault.encrypt_user(t, u, json.dumps(extra), "ns_variants"),
-                    "k": body.kind, "a": body.allowInDrafts,
+                    "k": body.kind, "a": body.allowInDrafts, "f": body.folds,
                 },
             )
         ).one()  # fmt: skip
@@ -439,7 +481,7 @@ async def add_term(body: TermIn, user: CurrentUser, state: State, request: Reque
         job_id = await add_purge_job(conn, user, "term_added")
     _start_job(state, user, job_id, "term_added")
     return TermOut(id=str(row.id), text=body.text.strip(), kind=body.kind, variants=extra,
-                   allowInDrafts=body.allowInDrafts, createdAt=row.created_at)  # fmt: skip
+                   allowInDrafts=body.allowInDrafts, folds=body.folds, createdAt=row.created_at)  # fmt: skip
 
 
 class TermPatch(BaseModel):
@@ -486,24 +528,30 @@ class ReviewIn(BaseModel):
 
 
 @router.post("/review", response_model=StatusOut)
-async def complete_review(body: ReviewIn, user: CurrentUser, state: State, request: Request) -> StatusOut:
-    """Finish or Skip the review. Only after this may Vanimo read message content (M2 backfill)."""
+async def complete_review(
+    body: ReviewIn, user: CurrentUser, source: UserSource, state: State, request: Request
+) -> StatusOut:
+    """Finish or Skip the review *for the current data source*. Only after this may Vanimo read
+    message content from that source (M2 backfill)."""
     async with user_tx(state.engine, user) as conn:
         if body.outcome == "finished":
             done_scan = (
-                await conn.execute(text("select 1 from vanimo.source_scans where status = 'done' limit 1"))
+                await conn.execute(
+                    text("select 1 from vanimo.source_scans where status = 'done' and source_kind = :k limit 1"),
+                    {"k": source.kind},
+                )
             ).first()
             if not done_scan:
                 raise HTTPException(409, detail={"error": "scan_not_done"})
         await conn.execute(
             text(
                 "update vanimo.users set onboarding_state = 'review_done', review_outcome = :o, "
-                "review_completed_at = now()"
+                "review_completed_at = now(), reviewed_source_kind = :k"
             ),
-            {"o": body.outcome},
+            {"o": body.outcome, "k": source.kind},
         )
         await audit.record(conn, user, f"controls.review_{body.outcome}", request_id=request.state.request_id)
-    return await _status(state, user)
+    return await _status(state, user, source.kind)
 
 
 class ReceiptOut(BaseModel):

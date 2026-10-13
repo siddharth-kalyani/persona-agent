@@ -4,6 +4,8 @@ import {
   Card,
   CardHeader,
   makeStyles,
+  MessageBar,
+  MessageBarBody,
   Spinner,
   Table,
   TableBody,
@@ -18,6 +20,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import type { ControlsStatus, Receipt } from "../../api/client";
 import { useApi } from "../../api/context";
+import { errorText } from "../Home";
 import { scanSummary } from "./Setup";
 import { SourcesReview } from "./SourcesReview";
 
@@ -49,17 +52,37 @@ export function MyData() {
   const [status, setStatus] = useState<ControlsStatus | null>(null);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
 
+  const [error, setError] = useState<string | null>(null);
+
   const refresh = useCallback(async () => {
-    const [s, r] = await Promise.all([api.controlsStatus(), api.receipts()]);
-    setStatus(s);
-    setReceipts(r);
+    try {
+      const [s, r] = await Promise.all([api.controlsStatus(), api.receipts()]);
+      setStatus(s);
+      setReceipts(r);
+    } catch (e) {
+      setError(errorText(e));
+    }
   }, [api]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  if (!status) return <Spinner label="Loading…" />;
+  // Follow a running rescan until it finishes.
+  useEffect(() => {
+    if (status?.scan?.status !== "running") return;
+    const timer = setInterval(() => void refresh(), 2000);
+    return () => clearInterval(timer);
+  }, [status?.scan?.status, refresh]);
+
+  if (!status)
+    return error ? (
+      <MessageBar intent="error">
+        <MessageBarBody>{error}</MessageBarBody>
+      </MessageBar>
+    ) : (
+      <Spinner label="Loading…" />
+    );
 
   return (
     <div className={styles.stack}>
@@ -68,10 +91,19 @@ export function MyData() {
         <Caption1 className={styles.muted}>
           {status.scan ? `Sources: ${scanSummary(status.scan)}.` : "No sources listed yet."}
         </Caption1>
-        <Button size="small" onClick={() => void api.startScan().then(setStatus)}>
-          Refresh sources
+        <Button
+          size="small"
+          disabled={status.scan?.status === "running"}
+          onClick={() => void api.startScan().then(setStatus, (e) => setError(errorText(e)))}
+        >
+          {status.scan?.status === "running" ? "Refreshing…" : "Refresh sources"}
         </Button>
       </div>
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>{error}</MessageBarBody>
+        </MessageBar>
+      )}
       <SourcesReview onChange={() => setTimeout(() => void refresh(), 500)} />
       <Card>
         <CardHeader

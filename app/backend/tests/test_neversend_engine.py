@@ -16,7 +16,7 @@ def _m(*terms: Term) -> Matcher:
 
 
 FALCON = Term("0000000a", "Falcon", "codename")
-SHARMA = Term("0000000b", "Sharma", "name", ("शर्मा",))
+SHARMA = Term("0000000b", "Sharma", "name", ("शर्मा",), folds=True)
 MONSOON = Term("0000000c", "Monsoon", "word")
 
 
@@ -76,6 +76,31 @@ def test_variants_offered_for_confirmation() -> None:
     v = variants("Project Falcon", "codename")
     assert v[:4] == ["project falcon", "project-falcon", "project_falcon", "projectfalcon"]
     assert "project falcons" in v
+
+
+def test_hinglish_folds_are_opt_in() -> None:
+    plain = Term("0000000e", "week", "word")
+    assert _m(plain).count("Vik met") == 0  # no silent folding
+    assert _m(Term("0000000f", "Sharma", "name")).count("Mrs Sharmaa") == 0
+    assert _m(Term("0000000f", "Sharma", "name", folds=True)).count("Mrs Sharmaa") == 1
+
+
+def test_accents_match_composed_or_decomposed() -> None:
+    term = Term("00000010", "café", "word")
+    assert _m(term).count("café talk") == 1
+    assert _m(Term("00000011", "café", "word")).count("café talk") == 1
+
+
+def test_existing_placeholders_are_never_rematched() -> None:
+    m = _m(Term("00000012", "NS", "word"), Term("00000013", "dead", "codename"))
+    masked, hits = m.mask("x ⟦NS_abcd1234⟧ and ⟦NS_deadbeef⟧ deadline NS")
+    assert hits == 2
+    assert masked == "x ⟦NS_abcd1234⟧ and ⟦NS_deadbeef⟧ ⟦NS_00000013⟧ ⟦NS_00000012⟧"
+
+
+def test_short_codenames_match_whole_words_only() -> None:
+    m = _m(Term("00000014", "ace", "codename"))
+    assert m.mask("Place an ace") == ("Place an ⟦NS_00000014⟧", 1)
 
 
 def test_empty_matcher_is_a_no_op() -> None:

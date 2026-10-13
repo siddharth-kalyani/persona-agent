@@ -1,0 +1,9 @@
+{
+  "app": "uv run python app.py",
+  "watch": { "include": ["**"], "exclude": ["cdk.out", "tests", ".venv", "**/__pycache__"] },
+  "context": {
+    "@aws-cdk/aws-ecs:enableImdsBlockingDeprecatedFeature": false,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:target-partitions": ["aws"]
+  }
+}

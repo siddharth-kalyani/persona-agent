@@ -1,0 +1,55 @@
+[project]
+name = "vanimo-backend"
+version = "0.1.0"
+description = "Vanimo API: persona drafting and work memory for Microsoft 365"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.140",
+    "uvicorn[standard]>=0.50",
+    "pydantic>=2.12",
+    "pydantic-settings>=2.10",
+    "sqlalchemy[asyncio]>=2.0.40",
+    "psycopg[binary]>=3.2.10",
+    "alembic>=1.16",
+    "msal>=1.33",
+    "pyjwt[crypto]>=2.10",
+    "httpx>=0.28",
+    "structlog>=25.1",
+    "boto3>=1.40",
+    "anthropic[bedrock]>=0.70",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.1",
+    "respx>=0.22",
+    "ruff>=0.13",
+]
+
+[tool.uv]
+# Deployable application, not a library: uv installs dependencies only and the
+# code runs from this directory (pytest/alembic/uvicorn put it on sys.path).
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = ["S101"]  # assert is fine in tests and invariants
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108"]
+"migrations/**" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "db: needs the local Postgres (docker compose up -d postgres)",
+]

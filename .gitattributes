@@ -1,0 +1,4 @@
+# Keep LF everywhere (Docker, shell, Python tooling); Windows editors handle LF fine.
+* text=auto eol=lf
+*.png binary
+*.ico binary

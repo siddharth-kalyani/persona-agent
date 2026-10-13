@@ -1,0 +1,22 @@
+# Local development services. Start: docker compose -f app/docker-compose.yml up -d
+# Port 5433 so it never clashes with a natively installed Postgres on 5432.
+name: vanimo
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_local  # local only; never used outside this container
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - vanimo-pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  vanimo-pg:

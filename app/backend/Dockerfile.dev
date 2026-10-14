@@ -1,0 +1,17 @@
+# Local development image for the API (docker compose --profile app). Not deployed: AWS builds
+# ./Dockerfile. The source is bind-mounted at /app, so the venv lives outside it in /opt/venv.
+FROM python:3.14-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/opt/venv
+COPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /usr/local/bin/uv
+WORKDIR /app
+
+# Dev dependencies too, so tests can run in the container.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project
+
+ENV PATH="/opt/venv/bin:$PATH" PYTHONPATH=/app \
+    # Windows bind mounts deliver no file events to Linux, so the reloader polls.
+    WATCHFILES_FORCE_POLLING=true
+EXPOSE 8000
+CMD ["uvicorn", "vanimo.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "vanimo", "--no-access-log"]

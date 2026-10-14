@@ -1,6 +1,15 @@
-# Local development services. Start: docker compose -f app/docker-compose.yml up -d
+# Local development only (passwords below never leave this machine).
+#   Database only:            docker compose -f app/docker-compose.yml up -d
+#   Database + API + web app: docker compose -f app/docker-compose.yml --profile app up -d --build
 # Port 5433 so it never clashes with a natively installed Postgres on 5432.
 name: vanimo
+
+x-local-db: &local-db
+  VANIMO_DB_ADMIN_URL: postgresql://postgres:postgres_local@postgres:5432/postgres
+  VANIMO_DB_OWNER_PASSWORD: vanimo_owner_local
+  VANIMO_DB_APP_PASSWORD: vanimo_app_local
+  VANIMO_DB_OWNER_URL: postgresql+psycopg://vanimo_owner:vanimo_owner_local@postgres:5432/vanimo
+
 services:
   postgres:
     image: postgres:18
@@ -17,6 +26,56 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # One-shot: create roles + schema (idempotent), then apply migrations. Also the place to run
+  # owner-only tools, e.g. `docker compose -f app/docker-compose.yml run --rm migrate
+  # python -m vanimo.ops.local_user --email you@example.com --role superadmin`.
+  migrate:
+    profiles: [app]
+    build: { context: ./backend, dockerfile: Dockerfile.dev }
+    image: vanimo-api-dev
+    command: ["sh", "-c", "python -m vanimo.ops.bootstrap_db && alembic upgrade head"]
+    environment: *local-db
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    profiles: [app]
+    build: { context: ./backend, dockerfile: Dockerfile.dev }
+    image: vanimo-api-dev
+    # Values here override backend/.env (which still supplies the Entra IDs when you have them).
+    environment:
+      VANIMO_ENV: local
+      VANIMO_CELL: in
+      VANIMO_ENABLE_PASSWORD_AUTH: "true"
+      VANIMO_DATABASE_URL: postgresql+psycopg://vanimo_app:vanimo_app_local@postgres:5432/vanimo
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  web:
+    profiles: [app]
+    build: { context: ./frontend, dockerfile: Dockerfile.dev }
+    image: vanimo-web-dev
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # the container's own; refresh after dependency changes with `up --build -V`
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
 
 volumes:
   vanimo-pg:

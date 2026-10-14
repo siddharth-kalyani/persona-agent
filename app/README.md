@@ -118,7 +118,27 @@ in the tenant, which the sweeper runs. Style cards are rebuilt after each purge.
 
 ## Local development (Windows, PowerShell or Git Bash)
 
-Prerequisites: Docker Desktop, Python 3.14, uv, Node 24.
+### Option A: everything in Docker (one command)
+
+Prerequisite: Docker Desktop. Run from the repo root:
+
+```bash
+docker compose -f app/docker-compose.yml --profile app up -d --build
+# http://127.0.0.1:5173 (web)  ·  http://127.0.0.1:8000/api/docs (API)
+```
+
+- **What starts:** `postgres` → `migrate` (creates roles and schema, runs `alembic upgrade head`, then exits) → `api` → `web`.
+- **Live reload:** both API and web reload on save. The source folders are mounted into the containers, and the containers poll for changes because Windows mounts send no file events.
+- **Settings:** compose sets the local database, `VANIMO_ENV=local` and password sign-in. Anything else (e.g. Entra IDs) still comes from `backend/.env` if you have one.
+- **First account:** `docker compose -f app/docker-compose.yml run --rm migrate python -m vanimo.ops.local_user --email you@example.com --role superadmin`
+- **Logs / stop:** `docker compose -f app/docker-compose.yml logs -f api` · `docker compose -f app/docker-compose.yml --profile app down` (the database volume is kept).
+- **After a dependency change** (`pyproject.toml`, `uv.lock`, `package*.json`): `docker compose -f app/docker-compose.yml --profile app up -d --build -V`.
+- **Don't mix with Option B on the same ports:** stop one before starting the other (8000 and 5173).
+- These dev images (`Dockerfile.dev`) are never deployed; AWS builds `backend/Dockerfile` (see below).
+
+### Option B: run the API and web app directly
+
+Faster for debugging and running single tests. Prerequisites: Docker Desktop, Python 3.14, uv, Node 24.
 
 ```bash
 # 1. Database (Postgres 18 in Docker, port 5433)

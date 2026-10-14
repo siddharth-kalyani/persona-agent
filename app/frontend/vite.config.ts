@@ -9,7 +9,9 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    proxy: { "/api": "http://127.0.0.1:8000" },
+    // In docker compose the API is the `api` service, and Windows bind mounts need polling.
+    proxy: { "/api": process.env.VANIMO_API_PROXY ?? "http://127.0.0.1:8000" },
+    watch: process.env.VANIMO_DEV_POLL ? { usePolling: true, interval: 300 } : undefined,
   },
   build: {
     sourcemap: false,

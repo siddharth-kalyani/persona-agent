@@ -1,0 +1,10 @@
+# Local development image for the web app (docker compose --profile app). Not deployed: AWS
+# serves the static `npm run build` output. The source is bind-mounted at /app; node_modules
+# stays in the container (the Windows copy has Windows-only native binaries).
+FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+ENV VANIMO_API_PROXY=http://api:8000 VANIMO_DEV_POLL=1
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

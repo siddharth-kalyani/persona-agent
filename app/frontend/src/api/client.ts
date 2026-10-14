@@ -327,7 +327,7 @@ export interface DraftThread {
   sender: PersonRef;
   receivedAt: string;
   excluded: boolean;
-  excludedBy: "you" | "organisation" | null;
+  excludedBy: "you" | "organisation" | "unverifiable" | null;
   reasons: string[];
 }
 

@@ -19,8 +19,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from vanimo import audit
-from vanimo.controls.neversend import Matcher, Term
-from vanimo.controls.store import hasher_for, load_engine, load_terms
+from vanimo.controls.neversend import Matcher, Term, render_removed
+from vanimo.controls.store import hasher_for, load_engine, load_terms, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.drafting import checks as chk
 from vanimo.drafting.checks import Check, ClientAccount
@@ -31,13 +31,17 @@ from vanimo.drafting.pack import load_pack
 from vanimo.drafting.prompt import build
 from vanimo.gates import onboarding_state
 from vanimo.learning import style
+from vanimo.learning.backfill import controls_version
 from vanimo.llm.router import Quality
 from vanimo.logs import get_logger
 from vanimo.redaction.marks import L1_MARKS
+from vanimo.redaction.pipeline import Person
 from vanimo.sources.base import Address, WorkspaceSource
 from vanimo.state import AppState
 
 log = get_logger("vanimo.drafting")
+
+MAX_CHECK_CHARS = 20_000  # of your own words, after the quoted thread is cut off
 
 
 @dataclass
@@ -85,11 +89,21 @@ def _sample_domains(source: WorkspaceSource) -> frozenset[str]:
     return frozenset({ORG_DOMAIN}) if source.kind == "sample" else frozenset()
 
 
-async def _known_domains(conn: AsyncConnection, state: AppState, user: UserRef) -> set[str]:
-    rows = (await conn.execute(text("select domain_enc from vanimo.source_people"))).scalars().all()
-    return {
-        d.lower() for d in (state.vault.decrypt_user(user.tenant_id, user.user_id, enc, "domain") for enc in rows) if d
-    }
+async def _known(conn: AsyncConnection, state: AppState, user: UserRef) -> tuple[set[str], list[Person]]:
+    """From the user's Sources index: the domains they've corresponded with (the look-alike test)
+    and the people, so drafting tokenises the same names the learner does."""
+    t, u = user.tenant_id, user.user_id
+    domains: set[str] = set()
+    people: list[Person] = []
+    for r in (await conn.execute(text("select email_enc, name_enc, domain_enc from vanimo.source_people"))).all():
+        domain = state.vault.decrypt_user(t, u, r.domain_enc, "domain")
+        if domain:
+            domains.add(domain.lower())
+        name = state.vault.decrypt_user(t, u, r.name_enc, "name")
+        email = state.vault.decrypt_user(t, u, r.email_enc, "email")
+        if name and email:
+            people.append(Person(name, email.lower()))
+    return domains, people
 
 
 async def _client_accounts(conn: AsyncConnection, state: AppState, user: UserRef) -> list[ClientAccount]:
@@ -106,10 +120,18 @@ async def _client_accounts(conn: AsyncConnection, state: AppState, user: UserRef
     ]
 
 
-async def _premium_used(conn: AsyncConnection) -> int:
+PREMIUM_EVENT = "draft.premium_used"
+
+
+async def premium_used(conn: AsyncConnection) -> int:
+    """Sonnet drafts in the last 24 hours, from the append-only audit log (content-free), so one-off
+    drafts count and deleting drafts doesn't reset the quota."""
     return (
         await conn.execute(
-            text("select count(*) from vanimo.drafts where tier = 'premium' and created_at > now() - interval '1 day'")
+            text(
+                "select count(*) from vanimo.audit_events where action = :a and occurred_at > now() - interval '1 day'"
+            ),
+            {"a": PREMIUM_EVENT},
         )
     ).scalar_one()
 
@@ -142,9 +164,10 @@ async def create_draft(
     async with user_tx(state.engine, user) as conn:
         ex_engine = await load_engine(conn, state.vault, user, self_email=self_email, extra_org_domains=sample_domains)
         terms = await load_terms(conn, state.vault, user)
-        premium_used = await _premium_used(conn)
-        known = await _known_domains(conn, state, user)
+        used = await premium_used(conn)
+        known, known_people = await _known(conn, state, user)
         accounts = await _client_accounts(conn, state, user)
+        version = await controls_version(conn)
     matcher = Matcher([Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms])
     blocked_matcher = Matcher(
         [
@@ -171,16 +194,17 @@ async def create_draft(
         instruction=req.instruction,
         reply_all=req.reply_all,
         one_off=req.one_off,
+        known_people=known_people,
     )
     async with user_tx(state.engine, user) as conn:
-        pack = await load_pack(conn, state.vault, user, source.kind, ctx, ex_engine, hasher)
+        pack = await load_pack(conn, state.vault, user, source.kind, ctx, ex_engine, hasher, matcher)
     prompt = build(ctx, pack)
     route = state.router.route_draft(
         mode=req.mode,
         relationship=ctx.audience.relationship,
         target_words=prompt.target_words,
         quality=req.quality,
-        premium_used_today=premium_used,
+        premium_used_today=used,
     )
     generator = generator_for(state)
     try:
@@ -190,6 +214,9 @@ async def create_draft(
     except Exception as exc:
         log.error("draft.model_failed", error_type=type(exc).__name__, model_id=route.model_id)
         raise DraftError("model_unavailable", 503) from None
+    if generator.kind == "bedrock" and route.tier == "premium":
+        async with user_tx(state.engine, user) as conn:
+            await audit.record(conn, user, PREMIUM_EVENT, request_id=request_id)
 
     gated = gate(body.text, prompt_marks=prompt.marks, grounding=ctx.grounding, matcher=matcher)
     if gated.blocked:
@@ -273,7 +300,28 @@ async def create_draft(
             hasher,
             ex_engine,
             request_id,
+            version,
         )
+        if draft_id is None:
+            # A rule or never-send word was added while drafting (§6.5 X4: it wins). The draft isn't
+            # stored, and what's shown is masked again with the words as they are now.
+            async with user_tx(state.engine, user) as conn:
+                now_terms = await load_terms(conn, state.vault, user)
+            now_blocked = Matcher(
+                [
+                    Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"])
+                    for t in now_terms
+                    if not t["allow_in_drafts"]
+                ]
+            )
+            shown = render_removed(now_blocked.mask(shown)[0]) or ""
+            found.append(
+                Check(
+                    "controls_changed",
+                    "info",
+                    "Your data controls changed while this draft was being written, so it wasn't saved.",
+                )
+            )
     log.info(
         "draft.done",
         generator=generator.kind,
@@ -324,7 +372,9 @@ async def _store(
     hasher: Any,
     ex_engine: Any,
     request_id: str,
-) -> str:
+    version: int,
+) -> str | None:
+    """Stores the draft unless the user's controls changed since drafting began (then None)."""
     me = ctx.me.address.email
     people = {
         a.email.lower(): a
@@ -334,6 +384,9 @@ async def _store(
     lineage = [{"p": hasher("person", e), "d": ex_engine.domain_hashes(a.domain)} for e, a in sorted(people.items())]
     t, u = user.tenant_id, user.user_id
     async with user_tx(state.engine, user) as conn:
+        await lock_user_controls(conn, user)  # serialised with purges and scrubs
+        if await controls_version(conn) != version:
+            return None
         draft_id = str(
             (
                 await conn.execute(
@@ -393,7 +446,7 @@ async def check_text(
         onboarding, _ = await onboarding_state(conn, source.kind)
         ex_engine = await load_engine(conn, state.vault, user, self_email=self_email, extra_org_domains=sample_domains)
         terms = await load_terms(conn, state.vault, user)
-        known = await _known_domains(conn, state, user)
+        known, _ = await _known(conn, state, user)
         accounts = await _client_accounts(conn, state, user)
     directory = await state.directory_cache.get((str(user.user_id), source.kind), source, self_email)
     org = set(directory.org_domains) | set(sample_domains)
@@ -404,6 +457,8 @@ async def check_text(
         from vanimo.drafting.context import _thread_headers
 
         headers = await _thread_headers(source, conversation_id)
+        if headers:
+            conversation_id = headers[0].conversation_id  # Graph's own form, as the rules use
     thread_people = [a for h in headers for a in h.participants]
     decision = ex_engine.conversation(conversation_id, [*thread_people, *recipients])
     found: list[Check] = []
@@ -415,11 +470,12 @@ async def check_text(
             Check(
                 "text_not_checked",
                 "info",
-                "Your organisation excludes this conversation, so only the recipients were checked.",
+                "This conversation is excluded by your organisation or includes someone Vanimo can't check, so only "
+                "the recipients were checked.",
             )
         )
         return found
-    own, _quoted = strip_quotes(body)
+    own = strip_quotes(body)[0][:MAX_CHECK_CHARS]  # your words, not the quoted thread below them
     received: list[str] = []
     if headers and onboarding == "review_done" and not decision.excluded:
         last = [h for h in headers if h.direction == "received"][-2:]

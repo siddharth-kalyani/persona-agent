@@ -138,9 +138,11 @@ never sends:** you insert, copy or open a reply, read it, and send it yourself.
 3. Only then the last 4 messages' own words are fetched and redacted to L1 in memory, with your instruction and the
    subject (never-send words → placeholders, Tier R → slots, people → tokens, verify, fail-closed).
 4. Persona pack: the style card for this audience (greeting, sign-off and length from your *emails*, since chats have
-   none), your studio settings, and up to 3 of your past messages. Every one is re-checked against the live rules
-   (a rule added a moment ago wins before the purge job runs). Same thread or same people: verbatim; anything else:
-   only its shape, so facts never move between audiences.
+   none), your studio settings, and up to 3 of your past messages. Every one is re-checked against the live rules,
+   and every stored phrase against your never-send words as they are now (a rule or word added a moment ago wins
+   before the purge or scrub job runs). A past message goes in word for word only if it's from the same thread or
+   everyone this email goes to already received it; anything else only as its shape, so facts never move between
+   audiences.
 5. The prompt (`vanimo/drafting/prompt.py`): rules → persona (marked for prompt caching) → audience → examples →
    the thread as untrusted, spotlighted data → your instruction. The model writes only the body.
 6. Output gate (`vanimo/drafting/gate.py`): plain text; the model's own greeting and sign-off dropped; tokens not in
@@ -149,7 +151,9 @@ never sends:** you insert, copy or open a reply, read it, and send it yourself.
 7. Your greeting + body + sign-off, re-hydrated for your screen: names back, never-send words as `[removed]` (or the
    word itself if you allowed it in drafts).
 8. Pre-send checks (`vanimo/drafting/checks.py`), then the draft is stored as L1 (encrypted, with lineage) for the M4
-   edit loop. Logs carry codes, counts, model and timings only.
+   edit loop, under the same lock as purges: if your controls changed while it was being written, it isn't stored
+   (§6.5 X4). Logs carry codes, counts, model and timings only. The Sonnet quota is counted from the audit log, so
+   one-off drafts count and deleting drafts doesn't reset it.
 
 **Purges reach drafts too:** a new exclusion deletes drafts whose lineage it covers, a new never-send word re-masks
 them, "Delete what Vanimo learned" deletes them, and an organisation scoping change queues users with drafts.
@@ -293,7 +297,9 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Purge | Step Functions job across all stores (§6.5 X7) | In-process job. ~~M1 has no derived content yet~~ (superseded in M2): purges the L1 items, tokens, vectors and style cards by lineage, re-masks the Sources index, L1 text and studio phrases, and writes receipts | Move to Step Functions with the queue |
 | Redaction (M2 vs §7.2) | NER ensemble (Presidio/spaCy, GLiNER, IndicNER), contextual Tier C/S classifier, Guardrails, Macie backstops, vault service in a separate account | Deterministic detectors + checksum validators + the M365 header/directory gazetteer. Names that never appear in a header or the directory stay in L1. No Tier C/S classification (client sensitive words are stored but not yet applied). Token map in Aurora, vault-encrypted | Add NER + the contextual classifier (needs AWS, D7) before external customers |
 | Embeddings and drafting (M2) | Bedrock embeddings + S3 Vectors; Claude Haiku 5.5 drafter | Local hashing-trick vectors (`vanimo/learning/embed.py`) in Aurora; an offline drafter (`vanimo/llm/offline.py`), clearly labelled, used only for the evaluation baseline. (M3: live drafting uses Claude through `vanimo/drafting/generate.py` when `VANIMO_DRAFTER=bedrock`, always in a deployed cell; locally a separate offline stand-in) | Swap in Bedrock embeddings behind the same functions once the AWS account exists |
-| Drafting (M3 vs §9.1–9.2, §9.4) | One streaming call, p95 first token ≤ 2.5 s; persona prefix padded to ≥ 4,096 tokens for caching; post-generation leakage judge; LLM revise on failed style checks | The output gate needs the whole text before anyone sees it, so the draft is returned whole: measure p95 *total* time instead. The persona block is marked for caching but not padded. No leakage judge yet (needs a model): cross-audience leakage is limited by sending other audiences' messages only as shapes. Revise runs once, only on failed checks. Pre-send checks are rules, not a model | Measure latency and caching on Bedrock in ap-south-1; add the leakage judge to the release gate before external customers |
+| Drafting (M3 vs §9.1–9.2, §9.4) | One streaming call, p95 first token ≤ 2.5 s; persona prefix padded to ≥ 4,096 tokens for caching; post-generation leakage judge; LLM revise on failed style checks | The output gate needs the whole text before anyone sees it, so the draft is returned whole: measure p95 *total* time instead. The persona block is marked for caching but not padded. No leakage judge yet (needs a model): cross-audience leakage is limited by sending other audiences' messages only as shapes. Revise runs once, only on failed checks. Pre-send checks are rules, not a model. No separate "audience card"
+ (history with this person beyond the examples), and greeting and sign-off use your most common form rather than a
+ sample from your distribution | Measure latency and caching on Bedrock in ap-south-1; add the leakage judge to the release gate before external customers |
 | Language (D6 vs M2) | English-only drafting in the MVP; Hindi/Hinglish wait for their own quality gate | M2 *labels* each message English, Hinglish or Hindi and keeps their style slices apart, so Hinglish chats don't skew the English cards. Nothing is drafted in Hinglish | Unchanged: Hinglish drafting needs its own quality gate (v1.5) |
 | Never-send matching (M1 review) | Research 12: invisible characters removed | Zero-width spaces are still removed, not treated as spaces, so splitting a word with them ("Fal​con") can't dodge the filter. The cost: two words glued by a zero-width space ("the​falcon") don't match a *word* (they do match a codename) | Revisit with ICU word segmentation |
 | Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |

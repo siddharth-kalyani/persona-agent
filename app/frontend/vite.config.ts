@@ -32,5 +32,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // Fluent UI + user-event tests take several seconds each on a busy dev box: the 5 s default flakes.
+    testTimeout: 20_000,
   },
 });

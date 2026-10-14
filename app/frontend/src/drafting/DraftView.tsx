@@ -42,9 +42,10 @@ export function draftErrorText(err: unknown): string {
     case "review_pending":
       return "Finish the “Choose what Vanimo learns from” review first (My data → Set up).";
     case "conversation_excluded":
-      return err.body.by === "organisation"
-        ? "Your organisation excludes this conversation, so Vanimo can't draft in it."
-        : "You excluded this conversation, so Vanimo doesn't use it.";
+      if (err.body.by === "organisation") return "Your organisation excludes this conversation, so Vanimo can't draft in it.";
+      if (err.body.by === "unverifiable")
+        return "Someone in this conversation has no email address Vanimo can check against your rules, so it isn't used.";
+      return "You excluded this conversation, so Vanimo doesn't use it.";
     case "instruction_required":
       return "Say what the email should say: a new email needs an instruction.";
     case "recipients_required":

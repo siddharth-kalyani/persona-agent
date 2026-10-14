@@ -168,8 +168,11 @@ export function Draft() {
     if (!draft) return;
     try {
       const res = await api.checkText(text, draft.audience.to, draft.audience.cc, draft.oneOff ? null : (target?.kind === "reply" ? target.thread.conversationId : null));
-      setChecks(res.checks);
-      setNotice(res.checks.length ? null : "No problems found in your text.");
+      // A block found when drafting (a payment-change request in the thread) still stands: re-checking
+      // your edits can't see the thread of a one-off draft, so it must not clear it.
+      const blocks = draft.checks.filter((c) => c.severity === "block" && !res.checks.some((r) => r.code === c.code));
+      setChecks([...blocks, ...res.checks]);
+      setNotice(res.checks.length || blocks.length ? null : "No problems found in your text.");
     } catch (e) {
       setError(draftErrorText(e));
     }
@@ -253,7 +256,10 @@ export function Draft() {
                 <Text weight="semibold" truncate wrap={false}>{t.subject ?? "(no subject)"}</Text>
                 <Caption1>
                   {t.sender.name ?? t.sender.email} · {when(t.receivedAt)}
-                  {t.excluded && ` · excluded by ${t.excludedBy === "organisation" ? "your organisation" : "you"}`}
+                  {t.excluded &&
+                    (t.excludedBy === "unverifiable"
+                      ? " · not used (someone can't be checked)"
+                      : ` · excluded by ${t.excludedBy === "organisation" ? "your organisation" : "you"}`)}
                 </Caption1>
               </span>
             </Button>

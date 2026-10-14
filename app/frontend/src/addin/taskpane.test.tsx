@@ -102,3 +102,48 @@ describe("Outlook task pane", () => {
     expect(insert).toBeEnabled();
   });
 });
+
+describe("reading a message", () => {
+  it("addresses the reply to that message's sender, as Outlook's reply form will", async () => {
+    vi.stubGlobal("Office", {
+      CoercionType: { Text: "text" },
+      AsyncResultStatus: { Succeeded: "succeeded", Failed: "failed" },
+      context: {
+        diagnostics: { platform: "OfficeOnline", version: "16" },
+        requirements: { isSetSupported: () => true },
+        mailbox: {
+          item: {
+            subject: "Q4 plan",
+            from: { emailAddress: "ann@contoso.example", displayName: "Ann" },
+            to: [{ emailAddress: "me@contoso.example", displayName: "Me" }],
+            cc: [{ emailAddress: "bob@contoso.example", displayName: "Bob" }],
+            conversationId: "conv-9",
+          },
+        },
+      },
+    });
+    const api = new Api("", async () => "t");
+    vi.spyOn(api, "me").mockResolvedValue(ME);
+    vi.spyOn(api, "draftingStatus").mockResolvedValue(STATUS);
+    const create = vi.spyOn(api, "createDraft").mockResolvedValue(DRAFT);
+    const user = userEvent.setup();
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <TaskPane api={api} />
+      </FluentProvider>,
+    );
+    await user.click(await screen.findByRole("switch", { name: "Reply all" }));
+    await user.click(screen.getByRole("button", { name: "Draft" }));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      mode: "reply",
+      conversationId: "conv-9",
+      to: [{ email: "ann@contoso.example", name: "Ann" }],
+      cc: [
+        { email: "me@contoso.example", name: "Me" },
+        { email: "bob@contoso.example", name: "Bob" },
+      ],
+    });
+    expect(await screen.findByRole("button", { name: "Reply with this" })).toBeInTheDocument();
+  });
+});

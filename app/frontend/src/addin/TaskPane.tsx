@@ -106,6 +106,11 @@ export function TaskPane({ api, onSignOut }: { api: Api; onSignOut?: () => void 
         if (fresh.mode === "compose") {
           req.to = fresh.to;
           req.cc = fresh.cc;
+        } else if (fresh.from) {
+          // Reading a message: the reply goes to its sender (reply-all: everyone else on it too),
+          // as Outlook's own reply form will. The server leaves you out of the list.
+          req.to = [fresh.from];
+          req.cc = replyAll ? [...fresh.to, ...fresh.cc] : [];
         } else {
           req.replyAll = replyAll;
         }

@@ -93,6 +93,11 @@ describe("Draft page", () => {
     expect(copy).toBeDisabled();
     await user.click(screen.getByRole("checkbox"));
     expect(copy).toBeEnabled();
+
+    // Re-checking your edits keeps the block found in the thread.
+    vi.spyOn(a, "checkText").mockResolvedValue({ checks: [], insertAllowed: true });
+    await user.click(screen.getByRole("button", { name: "Check my edits" }));
+    expect(await screen.findByText("This email asks to change payment details.")).toBeInTheDocument();
   });
 
   it("offers a one-off draft in a conversation you excluded", async () => {

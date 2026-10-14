@@ -266,8 +266,11 @@ async def test_offline_reply_in_your_voice(
     # Stored as L1 only: no names or the canary readable even by the table owner.
     url = database["owner"].replace("postgresql+psycopg://", "postgresql://")
     with psycopg.connect(url) as conn:
+        rows = conn.execute("select tenant_id, owner_user_id, text_enc from vanimo.drafts").fetchall()
         dump = "\n".join(str(r) for r in conn.execute("select * from vanimo.drafts").fetchall())
-    assert "Meera" not in dump and canary not in dump and "Wednesday" not in dump
+    assert "Meera" not in dump and canary not in dump and "Wednesday" not in dump  # encrypted at rest
+    l1 = app_state.vault.decrypt_user(rows[0][0], rows[0][1], rows[0][2], "draft_text") or ""
+    assert "⟦PERSON_" in l1 and "⟦ME⟧" in l1 and "Meera" not in l1 and "kestrel.example" not in l1  # and L1 inside
     # Logs: codes and timings only.
     out = capsys.readouterr().out
     assert canary not in out and "Wednesday" not in out and "Meera" not in out
@@ -514,3 +517,189 @@ async def test_graph_inbox_headers_drafts_and_manager() -> None:
         headers = await _thread_headers(source, "c+a/b")  # the add-in's form → Graph's URL-safe form
         assert [h.id for h in headers] == ["x1"]  # the unsent draft is not part of the thread
         assert thread.call_count == 2
+
+
+# --- review fixes (M3 review) ----------------------------------------------------------------------
+def test_eval_baseline_matches_two_line_sign_offs() -> None:
+    from vanimo.learning import style
+    from vanimo.learning.evaluate import score
+    from vanimo.llm.offline import Exemplar, OfflineDrafter
+
+    actual = "Hi ⟦PERSON_aaaaaaaa⟧,\n\nThe build is ready for UAT.\n\nThanks,\n⟦ME⟧"
+    ex = [style.Example(actual, "peer", "email", "english", "update", f"t{i}") for i in range(4)]
+    cards = {k: c for k, (_, c) in style.build_cards(ex).items()}
+    assert cards[style.slice_key()]["sign_offs"][0][0] == "Thanks,\n{me}"
+    pool = [Exemplar("x", actual, "is it ready?", "peer", "email", None)]
+    d = OfflineDrafter().draft("is it ready?", relationship="peer", channel="email", cards=cards, pool=pool)
+    assert score(d.text, actual)["sign_off_match"] == 1.0
+
+
+def test_directory_name_forms() -> None:
+    from vanimo.redaction.pipeline import _name_parts
+
+    assert _name_parts("Iyer, Meera") == ["Meera", "Iyer"]
+    assert _name_parts("Dr. R. Anil Kumar (Contractor)") == ["Anil", "Kumar"]
+
+
+def _no_purge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Purge and scrub jobs don't run: what's stored still holds the excluded or never-send data,
+    as in the minutes before the job finishes. The live checks must cover it."""
+
+    async def later(*_: Any, **__: Any) -> None:
+        return None
+
+    monkeypatch.setattr("vanimo.api.controls.run_job", later)
+
+
+async def _bedrock(app_state: AppState, reply: str = "Will do.") -> FakeLlm:
+    fake = FakeLlm([reply])
+    app_state._llm = fake  # type: ignore[assignment]
+    app_state.settings.drafter = "bedrock"
+    return fake
+
+
+def _prompt(fake: FakeLlm) -> str:
+    """Everything the model was given on the last call, as plain text."""
+    _, system, messages = fake.prompts[-1]
+    return "\n".join([*(b["text"] for b in system), *(m["content"] for m in messages)])
+
+
+async def test_other_audiences_messages_are_only_shapes(
+    client: httpx.AsyncClient, scanned: dict, app_state: AppState
+) -> None:
+    h = scanned
+    await _ready(client, h)
+    fake = await _bedrock(app_state)
+    to = [{"email": "emily.park@orionhealth.example", "name": "Emily Park"}]
+    cc = [{"email": "meera.iyer@kestrel.example", "name": "Meera Iyer"}]
+    d = await _draft(client, h, mode="new", to=to, cc=cc, instruction="ask her for the workshop notes")
+    assert d.status_code == 200, d.text
+    # Nothing Emily and Meera didn't both receive is shown word for word (Acme mail cc'd Meera is not).
+    assert 'kind="message"' not in _prompt(fake)
+    # To John alone, his own threads may be given verbatim.
+    await _draft(client, h, mode="new", to=[{"email": "john.miller@acmeretail.example"}], instruction="ask for UAT")
+    assert 'kind="message"' in _prompt(fake)
+
+
+async def test_live_rules_win_before_the_purge_runs(
+    client: httpx.AsyncClient, scanned: dict, app_state: AppState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = scanned
+    await _ready(client, h)
+    _no_purge(monkeypatch)
+    fake = await _bedrock(app_state)
+    john = [{"email": "john.miller@acmeretail.example", "name": "John Miller"}]
+    await _draft(client, h, mode="new", to=john, instruction="ask him for the UAT feedback")
+    assert "coupon" in _prompt(fake).lower()  # the UAT thread he was on is an example
+
+    # A never-send word, before the scrub job has re-masked the stored examples.
+    assert (
+        await client.post("/api/controls/never-send", json={"text": "coupon", "kind": "word"}, headers=h)
+    ).status_code == 201
+    await _draft(client, h, mode="new", to=john, instruction="ask him for the UAT feedback")
+    assert "coupon" not in _prompt(fake).lower() and "⟦NS_" in _prompt(fake)
+
+    # A person rule, before the purge job has deleted what was learned with her.
+    lisa = _find(await _sources(client, h, "people"), "Lisa Chen")
+    assert (
+        await client.post("/api/controls/rules", json={"kind": "person", "id": lisa["id"]}, headers=h)
+    ).status_code == 201
+    await _draft(client, h, mode="new", to=john, instruction="ask him for the UAT feedback")
+    assert "re-test" not in _prompt(fake).lower()  # the UAT thread with Lisa is no longer an example
+
+
+async def test_thread_rule_refuses_drafting(client: httpx.AsyncClient, scanned: dict, app_state: AppState) -> None:
+    h = scanned
+    await _ready(client, h)
+    thread = _find(await _sources(client, h, "threads"), "Re: Acme UAT sign-off")
+    assert (
+        await client.post("/api/controls/rules", json={"kind": "thread", "id": thread["id"]}, headers=h)
+    ).status_code == 201
+    await _settle(app_state)
+    conv = next(
+        t["conversationId"]
+        for t in (await client.get("/api/drafting/threads", headers=h)).json()
+        if t["subject"] and "Acme UAT sign-off" in t["subject"]
+    )
+    refused = await _draft(client, h, mode="reply", conversationId=conv)
+    assert refused.status_code == 409 and refused.json()["reasons"] == ["thread"]
+
+
+async def test_add_in_conversation_id_form_is_matched_to_the_rule() -> None:
+    """Office.js may give the ID in standard base64 where Graph uses the URL-safe form: the rule
+    (keyed on Graph's form) must still apply."""
+    from datetime import UTC, datetime
+
+    from vanimo.controls.engine import ExclusionEngine, UserRule
+    from vanimo.drafting.context import Directory, DraftError, gather
+    from vanimo.redaction.pipeline import Person
+    from vanimo.sources.base import MessageHeader
+
+    def hasher(kind: str, value: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(f"{kind}:{value}".encode()).hexdigest()
+
+    graph_id = "AAQkADk-abc_def="
+    fetched: list[str] = []
+
+    class Source:
+        kind = "graph"
+
+        async def thread_headers(self, conversation_id: str) -> list[MessageHeader]:
+            if conversation_id != graph_id:
+                return []
+            ann = Address("ann@fabrikam.example", "Ann")
+            return [MessageHeader("m1", graph_id, datetime.now(UTC), ann, (Address(ME),), (), "received")]
+
+        async def message(self, message_id: str) -> None:
+            fetched.append(message_id)
+
+    engine = ExclusionEngine(
+        hasher=hasher, user_rules=[UserRule("r1", "thread", hasher("thread", graph_id))], self_email=ME
+    )
+    directory = Directory(Person("Me", ME), None, frozenset(), frozenset({"kestrel.example"}), ())
+    with pytest.raises(DraftError) as err:
+        await gather(
+            Source(),  # type: ignore[arg-type]
+            ex_engine=engine,
+            matcher=Matcher([]),
+            hasher=hasher,
+            directory=directory,
+            self_email=ME,
+            mode="reply",
+            conversation_id="AAQkADk+abc/def=",
+            to=None,
+            cc=None,
+            subject=None,
+            instruction=None,
+        )
+    assert err.value.code == "conversation_excluded" and fetched == []
+
+
+async def test_a_rule_added_while_drafting_wins(
+    client: httpx.AsyncClient, scanned: dict, app_state: AppState, database: dict[str, str]
+) -> None:
+    h = scanned
+    await _ready(client, h)
+
+    class Racing(FakeLlm):
+        async def generate(self, **kw: Any) -> Generated:  # type: ignore[override]
+            # The user changes their controls while the model is writing.
+            url = database["owner"].replace("postgresql+psycopg://", "postgresql://")
+            with psycopg.connect(url) as conn:
+                conn.execute(
+                    "insert into vanimo.controls_state (owner_user_id, tenant_id, version) "
+                    "select id, tenant_id, 1 from vanimo.users on conflict (owner_user_id) "
+                    "do update set version = vanimo.controls_state.version + 1"
+                )
+            return await super().generate(**kw)
+
+    app_state._llm = Racing(["Will do."])  # type: ignore[assignment]
+    app_state.settings.drafter = "bedrock"
+    before = len((await client.get("/api/drafts", headers=h)).json())
+    d = (
+        await _draft(client, h, mode="new", to=[{"email": "rahul.verma@kestrel.example"}], instruction="ask for it")
+    ).json()
+    assert d["id"] is None and any(c["code"] == "controls_changed" for c in d["checks"])
+    assert len((await client.get("/api/drafts", headers=h)).json()) == before

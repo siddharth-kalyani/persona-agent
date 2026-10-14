@@ -74,11 +74,12 @@ _FACTS = re.compile(
     re.I,
 )
 _COMMITMENT = re.compile(
-    r"\b(?:i'll|i will|we'll|we will|i shall|we shall|i can|we can|i promise|we promise|guarantee|committed to|"
+    r"\b(?:i'll|i will|we'll|we will|i shall|we shall|i promise|we promise|guarantee|committed to|"
     r"will (?:send|share|deliver|complete|finish|get|have|provide|update|revert|confirm|fix|deploy|schedule|"
     r"arrange|book|be ready|be done|go live))\b",
     re.I,
 )
+_NOT_A_FACT = re.compile(r"24\s*[/x]\s*7|365\s*/\s*24", re.I)  # round-the-clock, not a date
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
 _CONTENT_WORD = re.compile(r"[a-z][a-z'-]{3,}")
 _STOP = frozenset(
@@ -110,7 +111,11 @@ def invented_facts(draft: str, grounding: str) -> list[Check]:
     out: list[Check] = []
     loose: list[str] = []
     for sentence in _SENTENCE.findall(L1_MARKS.sub(" ", draft)):
-        facts = [m.group() for m in _FACTS.finditer(sentence) if not _grounded(m.group(), ground)]
+        facts = [
+            m.group()
+            for m in _FACTS.finditer(sentence)
+            if not _NOT_A_FACT.fullmatch(m.group()) and not _grounded(m.group(), ground)
+        ]
         if _COMMITMENT.search(sentence):
             words = [w for w in _CONTENT_WORD.findall(sentence.lower()) if w not in _STOP]
             unsupported = bool(words) and sum(w in ground_words for w in words) / len(words) < 0.34
@@ -181,7 +186,9 @@ def lookalike(domain: str, known: str) -> bool:
 
 
 def _twin(domain: str, trusted: set[str]) -> str | None:
-    return next((k for k in sorted(trusted) if lookalike(domain, k)), None)
+    if domain in CONSUMER_DOMAINS:
+        return None
+    return next((k for k in sorted(trusted - CONSUMER_DOMAINS) if lookalike(domain, k)), None)
 
 
 def recipient_checks(
@@ -259,7 +266,9 @@ def sender_lookalike(
 
 
 _GREETING_NAME = re.compile(
-    r"^\s*(?i:hi|hello|hey|dear|good (?:morning|afternoon|evening))[\s,]+([A-Z][A-Za-z'\-]+)", re.M
+    r"^\s*(?i:hi|hello|hey|dear|good (?:morning|afternoon|evening))[\s,]+"
+    r"(?:(?i:mr|mrs|ms|miss|dr|prof|shri|sri|smt|sir|madam)\.?\s+)?([A-Z][A-Za-z'\-]+)",
+    re.M,
 )
 _GROUP_WORDS = frozenset("all team everyone folks guys sir madam maam ma'am there".split())
 
@@ -316,18 +325,32 @@ def cross_client(
 
 # --- payment changes (BEC) ----------------------------------------------------------------------
 _PAY_THING = (
-    r"(?:bank|banking|beneficiary|payment|remittance|wire|wiring|account|vendor)\s+"
-    r"(?:details|information|info|instructions|account|number)"
+    r"(?:bank|banking|beneficiary|payment|remittance|wire|wiring)\s+"
+    r"(?:details|information|info|instructions|accounts?|number)"
 )
 _CHANGE = r"(?:changed|change|changing|updated|update|new|different|revised)"
 _PAYMENT_CHANGE = re.compile(
-    rf"\b{_PAY_THING}\b[^.\n]{{0,80}}\b{_CHANGE}\b|\b{_CHANGE}\b[^.\n]{{0,40}}\b{_PAY_THING}\b|\bnew\s+(?:bank\s+)?account\b"
-    r"|\bgift\s*cards?\b",
+    "|".join(
+        [
+            rf"\b{_PAY_THING}\b[^.\n]{{0,80}}\b{_CHANGE}\b",
+            rf"\b{_CHANGE}\b[^.\n]{{0,40}}\b{_PAY_THING}\b",
+            # "our bank has changed", "we have moved banks", "switched our bank"
+            r"\bbank(?:s|ing)?\s+(?:has|have)\s+(?:changed|moved|switched)\b",
+            r"\b(?:moved|switched|changed)\s+(?:our\s+|my\s+)?banks?\b",
+            r"\bnew\s+(?:bank\s+account|beneficiary|remittance|account\s+(?:number|details))\b",
+            r"\b(?:pay|send|remit|transfer|wire)\w*\b[^.\n]{0,60}\binstead\s+of\b",
+            r"\b(?:pay|payment|remit\w*|transfer|wire)\b[^.\n]{0,40}\b(?:to|into)\s+(?:our|the|this)\s+new\s+account\b",
+        ]
+    ),
     re.I,
 )
+_GIFT_CARDS = re.compile(r"\bgift\s*cards?\b[^\n]{0,120}\b(?:codes?|scratch|pins?)\b", re.I)
+_MONEY_MOVE = (
+    r"(?:payment|wire|bank transfer|fund transfer|money transfer|transfer (?:the )?(?:funds|money|amount)|remit\w*)"
+)
 _URGENT_PAYMENT = re.compile(
-    r"\b(?:urgent|urgently|immediately|today|asap|right away|eod)\b[^.\n]{0,60}\b(?:payment|transfer|wire|remit\w*)\b"
-    r"|\b(?:payment|transfer|wire|remit\w*)\b[^.\n]{0,60}\b(?:urgent|urgently|immediately|today|asap|right away|eod)\b",
+    rf"\b(?:urgent|urgently|immediately|today|asap|right away|eod)\b[^.\n]{{0,60}}\b{_MONEY_MOVE}\b"
+    rf"|\b{_MONEY_MOVE}\b[^.\n]{{0,60}}\b(?:urgent|urgently|immediately|today|asap|right away|eod)\b",
     re.I,
 )
 
@@ -349,6 +372,10 @@ def payment_change(received: Sequence[str], draft: str, *, sender_lookalike: boo
         )
     elif urgent:
         out.append(Check("urgent_payment", "warn", "This email asks for an urgent payment. Make sure it's genuine."))
+    if any(_GIFT_CARDS.search(t) for t in received):
+        out.append(
+            Check("gift_cards", "warn", "This email asks for gift card codes, a common scam. Check with the sender.")
+        )
     if not out and _PAYMENT_CHANGE.search(draft):
         out.append(
             Check(

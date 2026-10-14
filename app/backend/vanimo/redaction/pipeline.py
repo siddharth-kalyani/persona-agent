@@ -97,8 +97,13 @@ def _fold(s: str) -> str:
 
 
 def _name_parts(full_name: str) -> list[str]:
-    """The words of a name without titles and initials ("Dr. R. Anil Kumar" → Anil, Kumar)."""
-    words = [w for w in re.split(r"\s+", full_name.strip()) if w]
+    """The words of a name without titles and initials ("Dr. R. Anil Kumar" → Anil, Kumar).
+    Directory forms are normalised: "Iyer, Meera" → Meera Iyer; "(Contractor)" and similar dropped."""
+    name = re.sub(r"\s*[(\[][^)\]]*[)\]]", " ", full_name).strip()
+    if name.count(",") == 1:
+        last, first = (x.strip() for x in name.split(","))
+        name = f"{first} {last}" if first and last else name.replace(",", " ")
+    words = [w.strip(",;") for w in re.split(r"\s+", name) if w.strip(",;")]
     return [w for w in words if _fold(w).rstrip(".") not in _TITLES and not re.fullmatch(r"\w\.?", w)]
 
 

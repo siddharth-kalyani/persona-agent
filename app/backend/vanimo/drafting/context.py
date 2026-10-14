@@ -182,6 +182,18 @@ def _url_safe(conversation_id: str) -> str:
     return conversation_id.replace("+", "-").replace("/", "_")
 
 
+def refusal(decision: Decision) -> DraftError:
+    """Why an excluded conversation is refused, without content. Someone who can't be checked (no
+    address) is neither the user's rule nor the organisation's: it's refused, never one-off."""
+    kinds = sorted({r.kind for r in decision.reasons})
+    if decision.by_tenant:
+        unverifiable = {"unknown_participant", "members_unknown"}
+        tenant = {r.kind for r in decision.reasons if r.scope == "tenant"}
+        by = "unverifiable" if tenant <= unverifiable else "organisation"
+        return DraftError("conversation_excluded", 403, by=by, reasons=kinds)
+    return DraftError("conversation_excluded", 409, by="you", reasons=kinds, oneOffAllowed=True)
+
+
 async def _thread_headers(source: WorkspaceSource, conversation_id: str) -> list[MessageHeader]:
     headers = [h for h in await source.thread_headers(conversation_id) if not h.is_draft]
     if not headers and _url_safe(conversation_id) != conversation_id:
@@ -243,7 +255,10 @@ async def gather(
     instruction: str | None,
     reply_all: bool = False,
     one_off: bool = False,
+    known_people: Sequence[Person] = (),
 ) -> LiveContext:
+    """`known_people`: names and addresses from the user's Sources index, so names mentioned in the
+    thread or the instruction are tokenised as the learner would (same gazetteer reach)."""
     me = self_email.lower()
     headers: list[MessageHeader] = []
     if mode == "reply":
@@ -252,6 +267,8 @@ async def gather(
         headers = await _thread_headers(source, conversation_id)
         if not headers:
             raise DraftError("thread_not_found", 404)
+        # From here on, Graph's own form of the ID: rules, hashes and lookups all match it.
+        conversation_id = headers[0].conversation_id
     if to is None and cc is None and headers:
         to, cc = _default_recipients(headers, me, reply_all)
     to_list = _dedupe(list(to or []), me)
@@ -270,18 +287,16 @@ async def gather(
     decision = ex_engine.conversation(
         conversation_id if mode == "reply" else None, [*thread_people, *to_list, *cc_list]
     )
-    if decision.excluded:
-        kinds = sorted({r.kind for r in decision.reasons})
-        if decision.by_tenant:
-            raise DraftError("conversation_excluded", 403, by="organisation", reasons=kinds)
-        if not one_off:
-            raise DraftError("conversation_excluded", 409, by="you", reasons=kinds, oneOffAllowed=True)
+    if decision.excluded and (decision.by_tenant or not one_off):
+        raise refusal(decision)
 
     g = Gazetteer(me=directory.me)
     for p in directory.people:
         g.add(p.full_name, p.email)
     for a in [*thread_people, *to_list, *cc_list]:
         g.add(a.name, a.email)
+    for person in known_people:
+        g.add(person.full_name, person.email)
     redactor = Redactor(matcher, g, hasher)
     tokens: dict[str, str] = {}
     counts: dict[str, int] = {}

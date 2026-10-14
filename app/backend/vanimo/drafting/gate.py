@@ -26,7 +26,13 @@ from vanimo.learning import style
 from vanimo.redaction import detectors
 from vanimo.redaction.marks import L1_MARKS, NEVER_SEND, TOKEN
 
-_URL = re.compile(r"(?i)\b(?:https?://|www\.)[^\s<>()\[\]⟦⟧\"']+")
+# Links: with a scheme or "www.", a bare host with a path ("paypa1-billing.example/pay"), and the
+# common link shorteners even without one. Outlook turns all of these into clickable links.
+_URL = re.compile(
+    r"(?i)\b(?:https?://|www\.)[^\s<>()\[\]⟦⟧\"']+"
+    r"|\b(?:[a-z0-9-]+\.)+[a-z]{2,24}/[^\s<>()\[\]⟦⟧\"']*"
+    r"|\b(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|ow\.ly|is\.gd|buff\.ly|rb\.gy|cutt\.ly)\b[^\s<>()\[\]⟦⟧\"']*"
+)
 _ANY_MARK = re.compile(r"⟦[^⟦⟧\n]{0,60}⟧")
 _MARKDOWN = [
     (re.compile(r"```[a-z]*\n?|```"), ""),

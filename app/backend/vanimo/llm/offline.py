@@ -79,5 +79,7 @@ class OfflineDrafter:
         if body:
             parts.append(body)
         if card and (sign := _top(card["sign_offs"])) and card["sign_offs"][0][0] != "(none)":
-            parts.append(sign)
+            # The card keeps the form ("Thanks,\n{me}"); a draft carries the user's own token, as the
+            # messages it's compared with do, so sign-offs are recognised and matched on both sides.
+            parts.append(sign.replace("{me_full}", "⟦ME.full⟧").replace("{me}", "⟦ME⟧"))
         return Draft("\n\n".join(p for p in parts if p), [b[1].id for b in best[:1]], card_key)

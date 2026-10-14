@@ -27,9 +27,16 @@ from vanimo.api.learning import self_email
 from vanimo.controls.neversend import render_removed
 from vanimo.controls.store import load_engine, load_matcher
 from vanimo.db.session import user_tx
-from vanimo.drafting.context import MAX_THREAD_MESSAGES, DraftError, _thread_headers
+from vanimo.drafting.context import MAX_THREAD_MESSAGES, DraftError, _thread_headers, refusal
 from vanimo.drafting.generate import OFFLINE_LABEL
-from vanimo.drafting.service import DraftInput, _sample_domains, check_text, create_draft, require_review
+from vanimo.drafting.service import (
+    DraftInput,
+    _sample_domains,
+    check_text,
+    create_draft,
+    premium_used,
+    require_review,
+)
 from vanimo.gates import onboarding_state
 from vanimo.redaction.parse import strip_signature_noise
 from vanimo.sources.base import Address
@@ -76,14 +83,7 @@ class StatusOut(BaseModel):
 async def drafting_status(user: CurrentUser, source: UserSource, state: State) -> StatusOut:
     async with user_tx(state.engine, user) as conn:
         onboarding, _ = await onboarding_state(conn, source.kind)
-        used = (
-            await conn.execute(
-                text(
-                    "select count(*) from vanimo.drafts "
-                    "where tier = 'premium' and created_at > now() - interval '1 day'"
-                )
-            )
-        ).scalar_one()
+        used = await premium_used(conn)
         learned = (
             await conn.execute(text("select count(*) from vanimo.l1_items where source_kind = :k"), {"k": source.kind})
         ).scalar_one()
@@ -106,7 +106,7 @@ class ThreadItem(BaseModel):
     sender: PersonOut
     receivedAt: datetime
     excluded: bool
-    excludedBy: Literal["you", "organisation"] | None
+    excludedBy: Literal["you", "organisation", "unverifiable"] | None
     reasons: list[str]
 
 
@@ -129,7 +129,7 @@ async def drafting_threads(
                 sender=PersonOut(email=h.sender.email, name=h.sender.name),
                 receivedAt=h.received_at,
                 excluded=decision.excluded,
-                excludedBy=("organisation" if decision.by_tenant else "you") if decision.excluded else None,
+                excludedBy=refusal(decision).extra["by"] if decision.excluded else None,  # type: ignore[arg-type]
                 reasons=sorted({r.kind for r in decision.reasons}),
             )
         )
@@ -168,15 +168,11 @@ async def drafting_thread(
     headers = await _thread_headers(source, conversationId)
     if not headers:
         raise DraftError("thread_not_found", 404)
+    conv = headers[0].conversation_id  # Graph's own form, as the rules use
     people = [a for h in headers for a in h.participants]
-    decision = ex.conversation(conversationId, people)
+    decision = ex.conversation(conv, people)
     if decision.excluded:
-        raise DraftError(
-            "conversation_excluded",
-            403 if decision.by_tenant else 409,
-            by="organisation" if decision.by_tenant else "you",
-            reasons=sorted({r.kind for r in decision.reasons}),
-        )
+        raise refusal(decision)
     messages = []
     subject = None
     for h in headers[-MAX_THREAD_MESSAGES:]:
@@ -194,7 +190,7 @@ async def drafting_thread(
         )
     unique = {a.email.lower(): a for a in people if a.email}
     return ThreadOut(
-        conversationId=conversationId,
+        conversationId=conv,
         subject=render_removed(matcher.mask(subject)[0]) if subject else None,
         messages=messages,
         participants=[PersonOut(email=e, name=a.name) for e, a in unique.items()],
@@ -308,7 +304,7 @@ async def post_draft(
 
 
 class CheckIn(BaseModel):
-    body: str = Field(max_length=20_000)
+    body: str = Field(max_length=500_000)  # the quoted thread is cut off server-side
     to: list[PersonIn] = Field(default_factory=list, max_length=100)
     cc: list[PersonIn] = Field(default_factory=list, max_length=100)
     conversationId: str | None = Field(None, max_length=512)

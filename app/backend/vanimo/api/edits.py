@@ -35,6 +35,8 @@ class SyncOut(BaseModel):
     matched: int
     unmatched: int
     excluded: int
+    superseded: int = 0  # older drafts in a conversation the user answered once
+    pending: int = 0  # still waiting (no send yet, or not read within this sync's budget)
     skipped: bool  # synced less than a minute ago
 
 
@@ -43,9 +45,6 @@ async def sync(user: CurrentUser, principal: CurrentPrincipal, source: UserSourc
     key = f"{user.user_id}:{source.kind}"
     if time.monotonic() - _last_sync.get(key, -SYNC_EVERY_S) < SYNC_EVERY_S:
         return SyncOut(matched=0, unmatched=0, excluded=0, skipped=True)
-    _last_sync[key] = time.monotonic()
-    if len(_last_sync) > 10_000:
-        _last_sync.clear()
     me = await self_email(source, principal.email)
     async with user_tx(state.engine, user) as conn:
         from vanimo.gates import onboarding_state
@@ -53,8 +52,12 @@ async def sync(user: CurrentUser, principal: CurrentPrincipal, source: UserSourc
         onboarding, _ = await onboarding_state(conn, source.kind)
     if onboarding != "review_done":
         raise DraftError("review_pending", 409)
+    # Armed only once a sync really starts (a refused or failed one doesn't block the next minute).
+    if len(_last_sync) > 10_000:
+        _last_sync.clear()
+    _last_sync[key] = time.monotonic()
     counts = await matching.sync(state, user, source, self_email=me)
-    return SyncOut(matched=counts["matched"], unmatched=counts["unmatched"], excluded=counts["excluded"], skipped=False)
+    return SyncOut(**counts, skipped=False)
 
 
 class SentIn(BaseModel):
@@ -173,6 +176,17 @@ async def decide(
         ).first()
         if row is None:
             raise DraftError("rule_not_ready", 409)
+        if status == "confirmed":
+            # One greeting, sign-off or length per audience: keeping a new one retires the old one.
+            await conn.execute(
+                text(
+                    "update vanimo.style_rules o set status = 'candidate', decided_at = now() "
+                    "from vanimo.style_rules n where n.id = :id and o.id <> n.id and o.status = 'confirmed' "
+                    "and o.kind = n.kind and o.scope = n.scope and o.source_kind = n.source_kind "
+                    "and n.kind in ('greeting', 'sign_off', 'length')"
+                ),
+                {"id": rule_id},
+            )
         await audit.record(
             conn,
             user,

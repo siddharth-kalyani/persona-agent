@@ -213,7 +213,13 @@ async def recount(conn: AsyncConnection, vault: Vault, ref: UserRef, source_kind
             "left join vanimo.rule_evidence ev on ev.rule_id = r2.id group by r2.id) e where e.id = r.id"
         )
     )
-    await conn.execute(text("delete from vanimo.style_rules where evidence = 0"))
+    # No evidence left (purged): the rule goes. A rejection is kept, without its value, so the same
+    # edit is never proposed again ("not me" is the user's decision, like an exclusion rule).
+    await conn.execute(text("delete from vanimo.style_rules where evidence = 0 and status <> 'rejected'"))
+    await conn.execute(
+        text("update vanimo.style_rules set value_enc = :v where evidence = 0 and status = 'rejected'"),
+        {"v": vault.encrypt_user(t, u, "", "style_rule")},
+    )
     rows = (
         await conn.execute(
             text(

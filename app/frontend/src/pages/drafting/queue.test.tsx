@@ -35,7 +35,7 @@ const VIEW: QueueView = {
 function api() {
   const a = new Api("", async () => "t");
   vi.spyOn(a, "tidy").mockResolvedValue({});
-  vi.spyOn(a, "syncEdits").mockResolvedValue({ matched: 0, unmatched: 0, excluded: 0, skipped: false });
+  vi.spyOn(a, "syncEdits").mockResolvedValue({ matched: 0, unmatched: 0, excluded: 0, superseded: 0, pending: 0, skipped: false });
   vi.spyOn(a, "queue").mockResolvedValue(VIEW);
   return a;
 }
@@ -82,7 +82,7 @@ const RULE: LearnedRule = {
 describe("Learned from your edits", () => {
   it("shows the send-without-edit rate and lets you keep a rule", async () => {
     const a = new Api("", async () => "t");
-    vi.spyOn(a, "syncEdits").mockResolvedValue({ matched: 1, unmatched: 0, excluded: 0, skipped: false });
+    vi.spyOn(a, "syncEdits").mockResolvedValue({ matched: 1, unmatched: 0, excluded: 0, superseded: 0, pending: 0, skipped: false });
     vi.spyOn(a, "learnedRules").mockResolvedValue([RULE]);
     vi.spyOn(a, "editSummary").mockResolvedValue({ matched: 4, sendWithoutEditRate: 0.25, lightEditRate: 0.75, drafts: {} });
     const decide = vi.spyOn(a, "decideRule").mockResolvedValue({ ...RULE, status: "confirmed" });

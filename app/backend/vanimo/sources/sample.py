@@ -355,6 +355,9 @@ class SampleSource:
             raise ValueError("unknown sample message")
         return PlacedDraft(id=f"smp-draft-{uuid.uuid4().hex[:12]}", web_link=None)
 
+    async def set_draft_recipients(self, item_id: str, to: list[Address], cc: list[Address]) -> None:
+        return None
+
     async def draft_state(self, item_id: str) -> DraftItemState:
         return DraftItemState(exists=item_id.startswith("smp-draft-"), is_draft=True, modified_at=None)
 

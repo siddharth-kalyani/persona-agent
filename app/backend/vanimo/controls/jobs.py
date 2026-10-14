@@ -199,6 +199,7 @@ async def purge_excluded_learning(
         ]
         rules_before = (await conn.execute(text("select count(*) from vanimo.style_rules"))).scalar_one()
         if doomed_drafts:
+            await remember_placed(conn, doomed_drafts)
             # Their edit events and rule evidence go with them (foreign keys); rules are re-counted.
             await conn.execute(text("delete from vanimo.drafts where id = any(:ids)"), {"ids": doomed_drafts})
         if doomed_drafts or doomed:
@@ -210,6 +211,19 @@ async def purge_excluded_learning(
         "drafts_deleted": len(doomed_drafts),
         "rules_deleted": rules_before - rules_after,
     }
+
+
+async def remember_placed(conn: AsyncConnection, draft_ids: list[Any]) -> None:
+    """Drafts already in the user's Outlook: their record goes, but the mailbox item can only be
+    removed while the user is signed in, so its ID waits in orphan_placements for the next tidy."""
+    await conn.execute(
+        text(
+            "insert into vanimo.orphan_placements (tenant_id, owner_user_id, source_kind, placed_ref_enc, placed_at) "
+            "select tenant_id, owner_user_id, source_kind, placed_ref_enc, placed_at from vanimo.drafts "
+            "where placed_state = 'placed' and placed_ref_enc is not null and id = any(:ids)"
+        ),
+        {"ids": draft_ids},
+    )
 
 
 async def gc_tokens(conn: AsyncConnection, vault: Vault, ref: UserRef) -> int:
@@ -240,6 +254,8 @@ async def delete_learning(engine: AsyncEngine, ref: UserRef) -> dict[str, int]:
         )
         out["learning_runs_cancelled"] = cancelled.rowcount
         await bump_version(conn, ref)
+        all_drafts = list((await conn.execute(text("select id from vanimo.drafts"))).scalars().all())
+        await remember_placed(conn, all_drafts)
         for table in ("l1_items", "l1_tokens", "style_cards", "eval_runs", "drafts", "style_rules"):
             result = await conn.execute(text(f"delete from vanimo.{table}"))  # noqa: S608
             out[f"{table}_deleted"] = result.rowcount

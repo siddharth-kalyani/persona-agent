@@ -323,6 +323,36 @@ def cross_client(
     return out
 
 
+def reply_to_redirect(redirects: Sequence[tuple[Address, Address]], *, known_domains: Iterable[str],
+                      org_domains: Iterable[str]) -> list[Check]:  # fmt: skip
+    """The email asks for replies to go somewhere other than its sender. Vanimo's drafts go to the
+    sender; a look-alike reply address blocks."""
+    out: list[Check] = []
+    trusted = {d.lower() for d in known_domains} | {d.lower() for d in org_domains}
+    for sender, target in redirects[:3]:
+        twin = None if _in(target.domain, trusted) else _twin(target.domain, trusted)
+        if twin:
+            out.append(
+                Check(
+                    "lookalike_reply_to",
+                    "block",
+                    f"This email asks for replies to go to {target.email}, at {target.domain}, which looks like "
+                    f"{twin}. "
+                    "This is a common fraud trick.",
+                )
+            )
+        else:
+            out.append(
+                Check(
+                    "reply_to_differs",
+                    "warn",
+                    f"This email asks for replies to go to {target.email}, not to {sender.email}. Vanimo's draft goes "
+                    "to the sender; check who should get your reply.",
+                )
+            )
+    return out
+
+
 # --- payment changes (BEC) ----------------------------------------------------------------------
 _PAY_THING = (
     r"(?:bank|banking|beneficiary|payment|remittance|wire|wiring)\s+"

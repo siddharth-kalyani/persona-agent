@@ -73,7 +73,8 @@ class Prompt:
     sign_off: str  # L1, may be ""
     marks: set[str] = field(default_factory=set)  # every ⟦…⟧ mark the prompt contains
     dont: list[str] = field(default_factory=list)  # the user's "never use" phrases (L1)
-    prefer: list[tuple[str, str]] = field(default_factory=list)  # learned word swaps (old, new)
+    drop: list[str] = field(default_factory=list)  # confirmed learned phrases: their short sentences go
+    prefer: list[tuple[str, str]] = field(default_factory=list)  # confirmed learned word swaps (old, new)
     no_exclamations: bool = False
 
 
@@ -197,18 +198,28 @@ def _untrusted(text: str) -> str:
 def _learned(pack: PersonaPack) -> dict[str, Any]:
     """Learned rules as controls: greeting and sign-off forms, a length nudge, phrases to avoid,
     word swaps, no exclamation marks (confirmed rules first: load order)."""
-    out: dict[str, Any] = {"avoid": [], "prefer": [], "length": 0, "no_exclamations": False, "lines": []}
+    out: dict[str, Any] = {
+        "avoid": [],  # every learned phrase to avoid: the revise check
+        "drop": [],  # confirmed ones: sentences holding them are dropped in code
+        "prefer": [],  # confirmed swaps, applied in code
+        "length": 0,
+        "no_exclamations": False,
+        "lines": [],
+    }
     for r in pack.rules:
+        confirmed = r.status == "confirmed"  # code changes the text only for rules the user kept
         if r.kind in ("greeting", "sign_off") and r.kind not in out:
             out[r.kind] = [[r.value, 1.0]]
         elif r.kind == "length" and not out["length"]:
             out["length"] = -1 if r.value == "shorter" else 1
         elif r.kind == "avoid":
             out["avoid"].append(r.value)
-        elif r.kind == "prefer":
+            if confirmed:
+                out["drop"].append(r.value)
+        elif r.kind == "prefer" and confirmed:
             old, _, new = r.value.partition(" -> ")
             out["prefer"].append((old, new))
-        elif r.kind == "exclamations":
+        elif r.kind == "exclamations" and confirmed:
             out["no_exclamations"] = True
         if r.kind not in ("greeting", "sign_off"):
             out["lines"].append(f"- {r.text}")
@@ -271,33 +282,59 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
         sign_off=s,
         marks=marks,
         dont=[*pack.settings.phrases_dont, *learned["avoid"]],
+        drop=learned["drop"],
         prefer=learned["prefer"],
         no_exclamations=learned["no_exclamations"],
     )
 
 
-_PROTECTED = re.compile(rf"{L1_MARKS.pattern}|\[[^\]\n]{{1,40}}\]")
-_PROTECTED_SPLIT = re.compile(f"({_PROTECTED.pattern})")
+# Never changed by learned rules: Vanimo's marks, [slots], links, and numbers with dots or commas.
+_SAFE = re.compile(
+    rf"{L1_MARKS.pattern}|\[[^\]\n]{{1,40}}\]"
+    r"|(?i:\b(?:https?://|www\.)[^\s<>()\[\]⟦⟧\"']+)"
+    r"|(?i:\b(?:[a-z0-9-]+\.)+[a-z]{2,24}/[^\s<>()\[\]⟦⟧\"']*)"
+    r"|\d+(?:[.,]\d+)+"
+)
+_SENTENCE_END = re.compile(r"[.!?]+(?=\s|$)|\n")
+
+
+def _masked(body: str) -> str:
+    """The body with every safe span blanked (same length), to find sentence ends and "!" safely."""
+    return _SAFE.sub(lambda m: "\x00" * len(m.group()), body)
+
+
+def _sentences(body: str) -> list[str]:
+    cuts = [m.end() for m in _SENTENCE_END.finditer(_masked(body))]
+    out, start = [], 0
+    for cut in [*cuts, len(body)]:
+        if cut > start:
+            out.append(body[start:cut])
+            start = cut
+    return out
 
 
 def apply_rules(body: str, prompt: Prompt) -> str:
-    """Learned rules applied in code, whichever generator wrote the body: word swaps, no exclamation
-    marks, and a short sentence holding a phrase the writer always deletes is dropped."""
+    """Rules the user kept, applied in code whichever generator wrote the body: word swaps, no
+    exclamation marks, and a short sentence holding a phrase they always delete is dropped. Names,
+    placeholders, [slots], links and numbers are never touched. Runs before the output gate."""
     for old, new in prompt.prefer:
+        pattern = re.compile(rf"(?<![\w⟦'’]){re.escape(old)}(?![\w'’])", re.I)  # noqa: RUF001
 
         def swap(m: re.Match[str], new: str = new) -> str:
             return new[:1].upper() + new[1:] if m.group()[:1].isupper() else new
 
-        pattern = re.compile(rf"(?<![\w⟦]){re.escape(old)}(?![\w])", re.I)
-        # Never inside a token, placeholder or [slot]: only the writer's own words change.
-        body = "".join(
-            piece if _PROTECTED.fullmatch(piece) else pattern.sub(swap, piece) for piece in _PROTECTED_SPLIT.split(body)
-        )
+        pieces, pos = [], 0
+        for m in _SAFE.finditer(body):
+            pieces += [pattern.sub(swap, body[pos : m.start()]), m.group()]
+            pos = m.end()
+        body = "".join([*pieces, pattern.sub(swap, body[pos:])])
     if prompt.no_exclamations:
-        body = body.replace("!", ".")
-    for phrase in prompt.dont:
-        sentences = re.findall(r"[^.!?\n]+[.!?]?\s*|\n", body)
-        kept = [x for x in sentences if not (phrase.lower() in x.lower() and len(x.split()) <= 12)]
+        masked = _masked(body)
+        body = "".join("." if c == "!" and masked[i] == "!" else c for i, c in enumerate(body))
+    for phrase in prompt.drop:
+        found = re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)", re.I)
+        sentences = _sentences(body)
+        kept = [x for x in sentences if not (found.search(_masked(x)) and len(x.split()) <= 12)]
         if len(kept) < len(sentences) and "".join(kept).strip():
             body = "".join(kept)
     return body.strip()

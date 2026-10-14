@@ -107,12 +107,32 @@ _DATE_NAMES = frozenset(
     february march april may june july august september october november december jan feb mar apr jun jul aug
     sep sept oct nov dec eod eow""".split()
 )
-_FACT_WORDS = _DATE_NAMES | frozenset("week month year morning afternoon evening noon".split())
+_NEGATIONS = frozenset("not no never cannot can't won't don't didn't isn't aren't wasn't shouldn't n't".split())
 
 
-def _swappable(tok: str) -> bool:
-    """A lower-case everyday word: not a name or product (capitalised mid-text), a date or a number."""
-    return _is_word(tok) and tok == tok.lower() and tok.lower() not in _FACT_WORDS
+# A word swap is style only between forms that mean the same thing: everything else (accept →
+# decline, last → next, office → warehouse, a → the) is a content edit and never becomes a rule.
+SWAP_GROUPS = (
+    frozenset({"please", "pls", "plz", "kindly"}),
+    frozenset({"thanks", "thx", "thank", "ty", "tq", "thnx"}),
+    frozenset({"ok", "okay", "alright", "fine", "sure"}),
+    frozenset({"yes", "yeah", "yep", "yup"}),
+    frozenset({"hi", "hello", "hey", "hii"}),
+    frozenset({"revert", "reply", "respond"}),
+    frozenset({"team", "all", "everyone", "folks", "guys"}),
+    frozenset({"great", "good", "nice", "awesome", "cool", "excellent"}),
+    frozenset({"you", "u"}),
+    frozenset({"your", "ur"}),
+    frozenset({"asap", "soon"}),
+    frozenset({"regards", "cheers", "best"}),
+)
+
+
+def _style_swap(old: str, new: str) -> bool:
+    """Two lower-case forms of the same thing (see SWAP_GROUPS), as the user wrote them."""
+    if not (_is_word(old) and _is_word(new) and old == old.lower() and new == new.lower()):
+        return False
+    return any(old in g and new in g for g in SWAP_GROUPS)
 
 
 def style_edits(draft: str, sent: str) -> list[Edit]:
@@ -140,7 +160,7 @@ def style_edits(draft: str, sent: str) -> list[Edit]:
         if tag == "equal":
             continue
         old, new = t_d[i1:i2], t_s[j1:j2]
-        if tag == "replace" and len(old) == 1 and len(new) == 1 and _swappable(old[0]) and _swappable(new[0]):
+        if tag == "replace" and len(old) == 1 and len(new) == 1 and _style_swap(old[0].lower(), new[0].lower()):
             out.append(Edit("prefer", f"{old[0].lower()} -> {new[0].lower()}"))
         elif tag == "delete" and 2 <= len(old) <= 16 and all(_is_word(t) or re.fullmatch(r"[,.!?]", t) for t in old):
             words = [t.lower() for t in old if _is_word(t)]
@@ -166,12 +186,49 @@ def style_edits(draft: str, sent: str) -> list[Edit]:
     return list(dict.fromkeys(out))
 
 
+def _meaning_changed(draft: str, sent: str) -> bool:
+    """A small edit that still changes what the email says: a number, a negation or a word swapped
+    for another (approve → reject, 5000 → 50000). Such a draft wasn't sent as is."""
+    a, b = _tokens(draft), _tokens(sent)
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, [t.lower() for t in a], [t.lower() for t in b]).get_opcodes():
+        if tag == "equal":
+            continue
+        old, new = _expand(a[i1:i2]), _expand(b[j1:j2])
+        if old == new:
+            continue  # "I'll" → "I will": the same words
+        changed = [*old, *new]
+        if any(re.search(r"\d", t) or t in _NEGATIONS for t in changed):
+            return True
+        if tag == "replace" and not (len(old) == len(new) == 1 and _style_swap(old[0], new[0])):
+            if any(_is_word(t) for t in changed):
+                return True
+    return False
+
+
+_CONTRACTIONS = {
+    "i'll": "i will", "we'll": "we will", "you'll": "you will", "it'll": "it will", "i'm": "i am",
+    "we're": "we are", "you're": "you are", "they're": "they are", "it's": "it is", "that's": "that is",
+    "i've": "i have", "we've": "we have", "i'd": "i would", "we'd": "we would", "let's": "let us",
+    "don't": "do not", "doesn't": "does not", "didn't": "did not", "can't": "cannot", "won't": "will not",
+    "isn't": "is not", "aren't": "are not", "wasn't": "was not", "shouldn't": "should not",
+}  # fmt: skip
+
+
+def _expand(tokens: list[str]) -> list[str]:
+    out: list[str] = []
+    for t in tokens:
+        out += _CONTRACTIONS.get(t.lower().replace("’", "'"), t.lower()).split()  # noqa: RUF001
+    return out
+
+
 def compare(draft_l1: str, sent_l1: str) -> Comparison:
     # A never-send word shows as [removed] on screen; what the user sends back carries that text.
     draft_l1, sent_l1 = (NEVER_SEND.sub(REMOVED, t) for t in (draft_l1, sent_l1))
     share = edit_share(draft_l1, sent_l1)
     sim = similarity(draft_l1, sent_l1)
     result = outcome_of(share, sim)
+    if result == "sent_as_is" and share > 0 and _meaning_changed(draft_l1, sent_l1):
+        result = "light_edit"
     return Comparison(
         outcome=result,
         edit_share=share,

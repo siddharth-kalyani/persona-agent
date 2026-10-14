@@ -195,6 +195,10 @@ and the organisation's **Drafts in mailboxes** switch on the Client scoping tab.
   IDs. It shows in every Outlook client, including mobile.
 - **What goes in.** "Prepare" puts the draft as written. "Put in my Drafts folder" on the Draft page puts in the
   text on your screen, including your edits; it isn't stored by Vanimo.
+- **Who it's addressed to.** Exactly the recipients Vanimo checked, set on the draft after it's created, never the
+  message's Reply-To. An email whose Reply-To points elsewhere gets a warning, and a look-alike Reply-To blocks.
+- **One per conversation.** Placing a new draft removes the earlier unused one in the same conversation. A double
+  click can't create two.
 - **Warnings.** A draft with a blocking warning (payment change, look-alike domain) only goes in after you tick the
   confirmation.
 - **Tidying.** Each time you open the queue, placed drafts older than your setting (3 days by default) are deleted
@@ -204,28 +208,38 @@ and the organisation's **Drafts in mailboxes** switch on the Client scoping tab.
 
 **Edit loop** (`vanimo/edits/`, architecture §9.2, research R05 §2.3 and §7.7):
 1. **Match.** When you open the Queue or Persona tab, pending drafts are matched to your recent Sent Items:
-   - a reply matches the first message you sent in the same conversation after it;
+   - a reply matches the first message you sent in the same conversation after it; if you drafted several times,
+     the latest draft before the send is matched and the older ones are marked superseded (one send is one
+     observation);
    - a new email matches a sent message to the same people that shares enough text;
    - within 72 hours, otherwise the draft is marked unmatched.
-   Headers first: an excluded sent message ends the tracking and is never read. In the sample workspace, **Mark as
+   - drafts whose candidates weren't all read (at most 10 bodies per sync) stay pending for the next sync.
+
+   Headers first: an excluded sent message ends the tracking and is never read. The people on the real reply join
+   the draft's lineage, so excluding someone you cc'd there purges what was learned too. Everything is stored under
+   the controls lock, and only if your controls didn't change during the sync. In the sample workspace, **Mark as
    sent** on the Draft page uses your edited text instead.
 2. **Compare in L1** (the same tokens on both sides, so names are never edits). The outcome is one of:
-   - sent as is (≤ 5% of characters changed);
+   - sent as is (≤ 5% of characters changed, and no number, negation or word changed meaning);
    - light edit (≤ 25%);
    - heavy edit;
    - rewritten.
 3. **Style edits become rule observations** for that audience: greeting, sign-off, shorter or longer, exclamation
-   marks dropped, a filler phrase deleted ("hope you are having a great week"), one everyday word swapped ("please"
-   → "pls"). Edits touching dates, numbers, names, slots or longer passages are content: counted, never a rule.
+   marks dropped, a filler phrase deleted ("hope you are having a great week"), one word swapped for another form of
+   the same thing ("please" → "pls", "reply" → "revert"; a fixed list). Anything else (accept → decline, a date, a
+   number, a name, a slot, a longer passage) is content: counted, never a rule.
 4. **Verify (PROSE-style, rules in the MVP).** A rule becomes **active** only after all of these:
    - 3 observations from different drafts;
    - more than twice as many supporting as contradicting, and the latest one supports it;
    - your own sent mail to that audience agrees, where there are enough messages to judge.
-5. **Confirm.** On the Persona tab: **Keep** (confirmed) or **Not me** (rejected, never used or proposed again).
-   Unconfirmed rules stop being used 90 days after they were last seen.
-6. **Use.** Active and confirmed rules go into the prompt, override the greeting, sign-off and target length, and
-   are applied in code: word swaps (never inside a name, a placeholder or a `[slot]`), no exclamation marks, and a
-   short sentence holding a phrase you always delete is dropped.
+5. **Confirm.** On the Persona tab: **Keep** (confirmed) or **Not me** (rejected, never used or proposed again,
+   even after a purge removes its evidence: the decision is kept without the text). Keeping a new greeting, sign-off
+   or length rule retires the old one for that audience. Unconfirmed rules stop being used 90 days after they were
+   last seen.
+6. **Use.** Active and confirmed rules go into the prompt and set the greeting, sign-off and target length. Only
+   rules you kept change the text in code: word swaps, no exclamation marks, and a short sentence holding a phrase
+   you always delete is dropped. These run before the output gate and never touch names, placeholders, `[slots]`,
+   links or numbers. Your own "never use" phrases (Persona studio) still only ask the model to revise.
 7. **Measure.** The send-without-edit rate (the north star, `docs/03` §5) and the light-edit rate show on the
    Persona tab.
 
@@ -235,7 +249,9 @@ vault-encrypted). The sent text is never stored.
 - an exclusion deletes the drafts its lineage covers, with their edit events and rule evidence, then re-counts the
   rules; a rule with no evidence left is deleted;
 - a never-send word deletes any rule holding it;
-- "Delete what Vanimo learned" deletes everything above, but keeps your drafting settings.
+- "Delete what Vanimo learned" deletes everything above, but keeps your drafting settings;
+- a purge that deletes the record of a draft already in your Outlook keeps its mailbox ID (encrypted) until the next
+  tidy removes the draft, if it's still unsent and untouched.
 
 ## Guarantees built in from M0
 
@@ -365,7 +381,10 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
  (history with this person beyond the examples), and greeting and sign-off use your most common form rather than a
  sample from your distribution | Measure latency and caching on Bedrock in ap-south-1; add the leakage judge to the release gate before external customers |
 | Drafts in the Drafts folder (M4 vs §3.2, §9.1) | Proactive: a webhook on new mail → "needs reply" triage model → `createReply` in the background (Step Functions); stale-draft cleanup on a schedule | Made when you open the Queue or press Prepare, and tidied when you open it. A background job has no Microsoft 365 token (we keep no refresh tokens, and webhooks need a public endpoint), so nothing happens while you're away. Triage is rules (automated sender, To vs Cc, question/request/scheduling), not a model | After deploy: change notifications + a background token strategy (or the Compose app with application permissions), then proactive drafts for reply-likely mail |
-| Edit loop (M4 vs R05 §2.3, §7.7) | Haiku edit classifier, nightly LLM verification of rule candidates against held-out mail, Teams edits, add-in send-time capture, confidentiality deletions as negative ACL evidence | Rule-based edit taxonomy and deterministic verification against your sent mail; matching runs when you open the Queue or Persona tab; email only (Teams in M5); no send-time capture; content edits are counted only (there is no memory store to correct until M6) | Add the classifier and LLM verification with Bedrock; Teams edits in M5 |
+| Edit loop (M4 vs R05 §2.3, §7.7) | Haiku edit classifier, nightly LLM verification of rule candidates against held-out mail, Teams edits, add-in send-time capture, confidentiality deletions as negative ACL evidence | Rule-based edit taxonomy and deterministic verification against your sent mail; matching runs when you open the Queue or Persona tab; email only (Teams in M5); no send-time capture; content edits are counted only (there is no memory store to correct until M6). Rules to confirm are shown on the Persona tab, not sent as a weekly digest (no
+ notification channel until M5). Matching waits 72 h rather than R05's 24 h, because it only runs when you open the
+ app. "No reply needed" choices are thread HMACs and stay after an exclusion (like the exclusion rule itself) | Add
+ the classifier and LLM verification with Bedrock; Teams edits and the weekly digest in M5 |
 | Language (D6 vs M2) | English-only drafting in the MVP; Hindi/Hinglish wait for their own quality gate | M2 *labels* each message English, Hinglish or Hindi and keeps their style slices apart, so Hinglish chats don't skew the English cards. Nothing is drafted in Hinglish | Unchanged: Hinglish drafting needs its own quality gate (v1.5) |
 | Never-send matching (M1 review) | Research 12: invisible characters removed | Zero-width spaces are still removed, not treated as spaces, so splitting a word with them ("Fal​con") can't dodge the filter. The cost: two words glued by a zero-width space ("the​falcon") don't match a *word* (they do match a codename) | Revisit with ICU word segmentation |
 | Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |

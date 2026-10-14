@@ -71,6 +71,10 @@ export function draftErrorText(err: unknown): string {
       return "Tick the confirmation under the warning first.";
     case "reply_drafts_only":
       return "Only replies can go to your Drafts folder; copy a new email instead.";
+    case "outlook_drafts_off":
+      return "Turn on “Put drafts in my Outlook Drafts folder” on the Queue tab first.";
+    case "controls_changed":
+      return "Your data controls changed meanwhile. Try again.";
     case "already_matched":
       return "This draft was already marked as sent.";
     case "db_unavailable":

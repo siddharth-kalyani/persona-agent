@@ -218,11 +218,12 @@ async def create_draft(
         async with user_tx(state.engine, user) as conn:
             await audit.record(conn, user, PREMIUM_EVENT, request_id=request_id)
 
-    gated = gate(body.text, prompt_marks=prompt.marks, grounding=ctx.grounding, matcher=matcher)
+    # Learned rules first, then the gate: whatever they change still passes every output check.
+    gated = gate(apply_rules(body.text, prompt), prompt_marks=prompt.marks, grounding=ctx.grounding, matcher=matcher)
     if gated.blocked:
         log.warning("draft.blocked", error_code=gated.blocked)
         raise DraftError("draft_blocked", 422, reason=gated.blocked)
-    l1 = compose(prompt.greeting, apply_rules(gated.body, prompt), prompt.sign_off)
+    l1 = compose(prompt.greeting, gated.body, prompt.sign_off)
     values = {**pack.stored_tokens, **ctx.tokens}
     shown, removed = render(
         l1, values=values, allowed_marks=prompt.marks, allowed_terms=allowed_terms, blocked_matcher=blocked_matcher
@@ -244,7 +245,8 @@ async def create_draft(
     recipients = [r.address for r in ctx.audience.to + ctx.audience.cc]
     found: list[Check] = []
     found += chk.sender_lookalike(_senders(ctx), known_domains=known, org_domains=org)
-    found += chk.payment_change(received, shown, sender_lookalike=bool(found))
+    found += chk.reply_to_redirect(ctx.redirects, known_domains=known, org_domains=org)
+    found += chk.payment_change(received, shown, sender_lookalike=chk.blocked(found))
     found += chk.recipient_checks(
         recipients, thread_people=ctx.thread_people, known_domains=known, org_domains=org, me=self_email
     )
@@ -393,8 +395,9 @@ async def _store(
                     text(
                         "insert into vanimo.drafts (tenant_id, owner_user_id, source_kind, surface, mode, generator, "
                         "tier, model_id, relationship, thread_hash, people, text_enc, checks, word_count, latency_ms, "
-                        "reply_to_enc) values (:t, :u, :k, :surface, :mode, :gen, :tier, :model, :rel, :th, "
-                        "cast(:people as jsonb), :txt, cast(:checks as jsonb), :wc, :ms, :rt) returning id"
+                        "reply_to_enc, audience_enc) values (:t, :u, :k, :surface, :mode, :gen, :tier, :model, :rel, "
+                        ":th, "
+                        "cast(:people as jsonb), :txt, cast(:checks as jsonb), :wc, :ms, :rt, :aud) returning id"
                     ),
                     {
                         "t": t,
@@ -412,6 +415,18 @@ async def _store(
                         "checks": json.dumps([{"code": c.code, "severity": c.severity} for c in found]),
                         "wc": len(style._words(l1)),
                         "ms": int(total_ms),
+                        # The people Vanimo checked: a draft put in Outlook is addressed to exactly them.
+                        "aud": state.vault.encrypt_user(
+                            t,
+                            u,
+                            json.dumps(
+                                {
+                                    side: [{"email": r.address.email, "name": r.address.name} for r in rs]
+                                    for side, rs in (("to", ctx.audience.to), ("cc", ctx.audience.cc))
+                                }
+                            ),
+                            "draft_audience",
+                        ),
                         "rt": state.vault.encrypt_user(t, u, ctx.reply_to_id, "draft_reply_to")
                         if ctx.mode == "reply"
                         else None,
@@ -467,6 +482,13 @@ async def check_text(
     found: list[Check] = []
     senders = [h.sender for h in headers if h.sender.email.lower() != me]
     found += chk.sender_lookalike(senders, known_domains=known, org_domains=org)
+    redirects = [
+        (h.sender, r)
+        for h in headers
+        for r in h.reply_to
+        if r.email and r.email.lower() not in (h.sender.email.lower(), me)
+    ]
+    found += chk.reply_to_redirect(redirects, known_domains=known, org_domains=org)
     found += chk.recipient_checks(recipients, thread_people=thread_people, known_domains=known, org_domains=org, me=me)
     if decision.by_tenant:
         found.append(

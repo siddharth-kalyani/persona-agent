@@ -147,10 +147,12 @@ class MessageHeader:
     direction: Literal["sent", "received"]
     # An unsent draft in the conversation (for example the reply being written right now).
     is_draft: bool = False
+    # Where the sender asked replies to go, if not to them (a classic payment-fraud trick).
+    reply_to: tuple[Address, ...] = ()
 
     @property
     def participants(self) -> tuple[Address, ...]:
-        return (self.sender, *self.to, *self.cc)
+        return (self.sender, *self.to, *self.cc, *self.reply_to)
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,10 @@ class WorkspaceSource(Protocol):
     # --- drafts in the user's mailbox (M4; Mail.ReadWrite; never sends) ----------------------
     async def create_reply_draft(self, message_id: str, text: str, *, reply_all: bool) -> PlacedDraft:
         """A reply (or reply-all) draft to `message_id`, with `text` above the quoted thread."""
+        ...
+
+    async def set_draft_recipients(self, item_id: str, to: list[Address], cc: list[Address]) -> None:
+        """Address a placed draft to exactly the people Vanimo checked (not the message's Reply-To)."""
         ...
 
     async def draft_state(self, item_id: str) -> DraftItemState: ...

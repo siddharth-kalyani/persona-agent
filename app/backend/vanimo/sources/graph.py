@@ -253,6 +253,7 @@ class GraphSource:
                         cc=_addrs(m.get("ccRecipients")),
                         direction="sent" if me.email and sender.email == me.email else "received",
                         is_draft=bool(m.get("isDraft")),
+                        reply_to=_addrs(m.get("replyTo")),
                     )
                 )
         return sorted(out, key=lambda h: h.sent_at)
@@ -321,10 +322,25 @@ class GraphSource:
         # `comment` puts the text above the quoted thread and keeps the thread intact (a body
         # replacement would drop it). Immutable IDs: the ID stays the same when the draft is sent.
         action = "createReplyAll" if reply_all else "createReply"
-        d = await self._g.post(
-            f"me/messages/{_safe_id(message_id)}/{action}", json={"comment": text}, headers=IMMUTABLE_IDS
+        resp = await self._g.request(
+            "POST",
+            f"me/messages/{_safe_id(message_id)}/{action}",
+            json={"comment": text},
+            headers=IMMUTABLE_IDS,
+            idempotent=False,
         )
+        d = resp.json()
         return PlacedDraft(id=d["id"], web_link=d.get("webLink"))
+
+    async def set_draft_recipients(self, item_id: str, to: list[Address], cc: list[Address]) -> None:
+        def rec(a: Address) -> dict[str, Any]:
+            return {"emailAddress": {"address": a.email, **({"name": a.name} if a.name else {})}}
+
+        await self._g.patch(
+            f"me/messages/{_safe_id(item_id)}",
+            json={"toRecipients": [rec(a) for a in to], "ccRecipients": [rec(a) for a in cc]},
+            headers=IMMUTABLE_IDS,
+        )
 
     async def draft_state(self, item_id: str) -> DraftItemState:
         try:
@@ -355,7 +371,16 @@ class GraphSource:
 
 # --- content reads (callers must pass the onboarding gate; see base.py) -------------------------
 CONTENT_FIELDS = "id,conversationId,subject,sentDateTime,from,toRecipients,ccRecipients,uniqueBody,body"
-THREAD_FIELDS = ("id", "conversationId", "sentDateTime", "from", "toRecipients", "ccRecipients", "isDraft")
+THREAD_FIELDS = (
+    "id",
+    "conversationId",
+    "sentDateTime",
+    "from",
+    "toRecipients",
+    "ccRecipients",
+    "isDraft",
+    "replyTo",
+)
 IMMUTABLE_IDS = {"Prefer": 'IdType="ImmutableId"'}
 
 

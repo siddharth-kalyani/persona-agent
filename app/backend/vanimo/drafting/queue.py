@@ -21,6 +21,7 @@ yourself, the unused draft is removed. Anything you edited or sent stays.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -54,6 +55,17 @@ NEEDS_REPLY_INTENTS = {
     "request": "asks you to do something",
     "scheduling": "about a meeting time",
 }
+
+
+# Triage result per message (an intent label, never text), so reloading the queue doesn't re-read
+# bodies. In-process, keyed by user; bounded.
+_TRIAGE: dict[tuple[str, str], str] = {}
+
+
+def _remember(user_id: str, message_id: str, intent: str) -> None:
+    if len(_TRIAGE) > 20_000:
+        _TRIAGE.clear()
+    _TRIAGE[(user_id, message_id)] = intent
 
 
 @dataclass
@@ -144,13 +156,23 @@ async def waiting(state: AppState, user: UserRef, source: WorkspaceSource, *, se
         needs, reason = (False, "automated sender") if automated else (not cc_only, "you're copied" if cc_only else "")
         if decision.excluded:
             needs, reason = False, "excluded"
-        elif not automated and onboarding == "review_done" and reads < MAX_TRIAGE_READS:
-            reads += 1
-            m = await source.message(h.id)
-            intent = labels.intent(strip_quotes(m.body)[0]) if m else "general"
-            if intent in NEEDS_REPLY_INTENTS:
+        elif not automated and onboarding == "review_done":
+            intent = _TRIAGE.get((str(user.user_id), h.id))
+            if intent is None and reads < MAX_TRIAGE_READS:
+                reads += 1
+                # The whole thread decides, from headers, before its latest message is read: an
+                # excluded person earlier in the thread may be quoted in it.
+                thread = await source.thread_headers(h.conversation_id)
+                decision = engine.conversation(h.conversation_id, [a for x in thread for a in x.participants])
+                if not decision.excluded:
+                    m = await source.message(h.id)
+                    intent = labels.intent(strip_quotes(m.body)[0]) if m else "general"
+                    _remember(str(user.user_id), h.id, intent)
+            if decision.excluded:
+                needs, reason = False, "excluded"
+            elif intent in NEEDS_REPLY_INTENTS:
                 needs, reason = True, NEEDS_REPLY_INTENTS[intent]
-            elif not cc_only:
+            elif intent is not None and not cc_only:
                 needs, reason = False, "no question or request found"
         d = drafts.get(th)
         items.append(
@@ -196,6 +218,22 @@ async def dismiss(state: AppState, user: UserRef, conversation_id: str) -> None:
 
 
 # --- drafts in the Outlook Drafts folder --------------------------------------------------------
+PLACING_TIMEOUT = timedelta(minutes=10)  # a claim older than this was cut off (restart): released
+
+
+async def _retire(source: WorkspaceSource, item_id: str, placed_at: datetime, *, reason: str) -> str:
+    """Remove a placed draft from the mailbox if, and only if, it is still an unsent draft nobody
+    touched since Vanimo wrote it. Returns its new state."""
+    item = await source.draft_state(item_id)
+    if not item.exists:
+        return "gone"
+    if not item.is_draft:
+        return "sent"
+    if item.modified_at is not None and item.modified_at > placed_at + EDIT_GRACE:
+        return "kept_edited"
+    return reason if await source.delete_draft(item_id) else "gone"
+
+
 async def place(
     state: AppState,
     user: UserRef,
@@ -206,31 +244,69 @@ async def place(
     confirmed: bool = False,
     request_id: str | None = None,
 ) -> dict[str, Any]:
-    """Put a reply draft in the user's Drafts folder. `text_shown` is the text on the user's screen
-    (possibly edited by them); it goes to their mailbox and is not stored by Vanimo."""
+    """Put a reply draft in the user's Drafts folder, addressed to exactly the people Vanimo checked.
+    `text_shown` is the text on the user's screen (possibly edited); it goes to their mailbox and is
+    not stored by Vanimo. One Vanimo draft per conversation: an earlier unused one is removed."""
+    if not text_shown.strip():
+        raise DraftError("empty_draft", 422)
+    t, u = user.tenant_id, user.user_id
     async with user_tx(state.engine, user) as conn:
         settings = await load_settings(conn)
         d = (
             await conn.execute(
-                text("select id, mode, reply_to_enc, checks, placed_state from vanimo.drafts where id = :id"),
+                text(
+                    "select id, mode, reply_to_enc, audience_enc, checks, placed_state, thread_hash from vanimo.drafts "
+                    "where id = :id and source_kind = :k"
+                ),
+                {"id": draft_id, "k": source.kind},
+            )
+        ).first()
+        if d is None:
+            raise DraftError("not_found", 404)
+        if not settings.allowed_by_organisation:
+            raise DraftError("server_drafts_off", 403)
+        if not settings.outlook_drafts:
+            raise DraftError("outlook_drafts_off", 409)
+        if d.mode != "reply" or not d.reply_to_enc:
+            raise DraftError("reply_drafts_only", 409)
+        if any(c.get("severity") == "block" for c in d.checks) and not confirmed:
+            raise DraftError("confirmation_required", 409)
+        # Claim the row: a second click (or Prepare and Place at once) finds it taken.
+        claimed = (
+            await conn.execute(
+                text(
+                    "update vanimo.drafts set placed_state = 'placing', placed_at = now() where id = :id "
+                    "and (placed_state is null or placed_state not in ('placing', 'placed')) returning id"
+                ),
                 {"id": draft_id},
             )
         ).first()
-    if d is None:
-        raise DraftError("not_found", 404)
-    if not settings.allowed_by_organisation:
-        raise DraftError("server_drafts_off", 403)
-    if d.mode != "reply" or not d.reply_to_enc:
-        raise DraftError("reply_drafts_only", 409)
-    if d.placed_state == "placed":
-        raise DraftError("already_placed", 409)
-    if any(c.get("severity") == "block" for c in d.checks) and not confirmed:
-        raise DraftError("confirmation_required", 409)
-    if not text_shown.strip():
-        raise DraftError("empty_draft", 422)
-    reply_to = state.vault.decrypt_user(user.tenant_id, user.user_id, d.reply_to_enc, "draft_reply_to") or ""
-    placed = await source.create_reply_draft(reply_to, text_shown, reply_all=False)
-    t, u = user.tenant_id, user.user_id
+        if claimed is None:
+            raise DraftError("already_placed", 409)
+    reply_to = state.vault.decrypt_user(t, u, d.reply_to_enc, "draft_reply_to") or ""
+    audience = json.loads(state.vault.decrypt_user(t, u, d.audience_enc, "draft_audience") or "{}")
+    placed = None
+    try:
+        await _replace_earlier(state, user, source, d.thread_hash, draft_id)
+        try:
+            placed = await source.create_reply_draft(reply_to, text_shown, reply_all=False)
+        except ValueError:
+            raise DraftError("thread_not_found", 404) from None
+        if audience:
+            await source.set_draft_recipients(
+                placed.id,
+                [Address(a["email"], a.get("name")) for a in audience.get("to", [])],
+                [Address(a["email"], a.get("name")) for a in audience.get("cc", [])],
+            )
+    except Exception:
+        if placed is not None:
+            await source.delete_draft(placed.id)  # half-made: never leave it addressed wrongly
+        async with user_tx(state.engine, user) as conn:
+            await conn.execute(
+                text("update vanimo.drafts set placed_state = null where id = :id and placed_state = 'placing'"),
+                {"id": draft_id},
+            )
+        raise
     async with user_tx(state.engine, user) as conn:
         await conn.execute(
             text(
@@ -247,11 +323,45 @@ async def place(
     return {"placed": True, "webLink": placed.web_link}
 
 
+async def _replace_earlier(
+    state: AppState, user: UserRef, source: WorkspaceSource, thread_hash: str | None, draft_id: str
+) -> None:
+    if not thread_hash:
+        return
+    async with user_tx(state.engine, user) as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "select id, placed_ref_enc, placed_at from vanimo.drafts where thread_hash = :h "
+                    "and placed_state = 'placed' and id <> :id and source_kind = :k"
+                ),
+                {"h": thread_hash, "id": draft_id, "k": source.kind},
+            )
+        ).all()
+    for r in rows:
+        item_id = state.vault.decrypt_user(user.tenant_id, user.user_id, r.placed_ref_enc, "draft_placed") or ""
+        new_state = await _retire(source, item_id, r.placed_at, reason="replaced")
+        async with user_tx(state.engine, user) as conn:
+            await conn.execute(
+                text("update vanimo.drafts set placed_state = :s where id = :id"), {"s": new_state, "id": r.id}
+            )
+
+
 async def tidy(state: AppState, user: UserRef, source: WorkspaceSource) -> dict[str, int]:
-    """Clean up placed drafts nobody used (see the module docstring). Returns content-free counts."""
+    """Clean up placed drafts nobody used (see the module docstring). The mailbox item decides —
+    still a draft, edited, sent or gone — never Vanimo's own record. Returns content-free counts."""
     hasher = hasher_for(state.vault, user)
+    t, u = user.tenant_id, user.user_id
     async with user_tx(state.engine, user) as conn:
         settings = await load_settings(conn)
+        # A claim cut off by a restart is released (the draft wasn't recorded as placed).
+        await conn.execute(
+            text(
+                "update vanimo.drafts set placed_state = null where placed_state = 'placing' "
+                "and placed_at < now() - make_interval(mins => :m)"
+            ),
+            {"m": int(PLACING_TIMEOUT.total_seconds() // 60)},
+        )
         rows = (
             await conn.execute(
                 text(
@@ -261,31 +371,34 @@ async def tidy(state: AppState, user: UserRef, source: WorkspaceSource) -> dict[
                 {"k": source.kind},
             )
         ).all()
+        orphans = (
+            await conn.execute(
+                text("select id, placed_ref_enc, placed_at from vanimo.orphan_placements where source_kind = :k"),
+                {"k": source.kind},
+            )
+        ).all()
+    counts: dict[str, int] = {}
+    # Drafts whose record a purge deleted: removed from the mailbox if still unsent and untouched.
+    for o in orphans:
+        item_id = state.vault.decrypt_user(t, u, o.placed_ref_enc, "draft_placed") or ""
+        new_state = await _retire(source, item_id, o.placed_at, reason="removed_stale")
+        async with user_tx(state.engine, user) as conn:
+            await conn.execute(text("delete from vanimo.orphan_placements where id = :id"), {"id": o.id})
+        counts[f"orphan_{new_state}"] = counts.get(f"orphan_{new_state}", 0) + 1
     if not rows:
-        return {}
+        return counts
     now = datetime.now(UTC)
     replied: dict[str, datetime] = {}
     for h in await source.recent_sent(50):
         th = hasher("thread", h.conversation_id)
         replied[th] = max(h.sent_at, replied.get(th, h.sent_at))
-    counts: dict[str, int] = {}
     for r in rows:
-        item_id = state.vault.decrypt_user(user.tenant_id, user.user_id, r.placed_ref_enc, "draft_placed") or ""
+        item_id = state.vault.decrypt_user(t, u, r.placed_ref_enc, "draft_placed") or ""
         stale = r.placed_at < now - timedelta(days=settings.stale_days)
         answered = r.thread_hash in replied and replied[r.thread_hash] > r.placed_at
         if not (stale or answered):
             continue
-        item = await source.draft_state(item_id)
-        if not item.exists:
-            new_state = "gone"
-        elif not item.is_draft:
-            new_state = "sent"
-        elif item.modified_at is not None and item.modified_at > r.placed_at + EDIT_GRACE:
-            new_state = "kept_edited"
-        elif await source.delete_draft(item_id):
-            new_state = "replaced" if answered else "removed_stale"
-        else:
-            new_state = "gone"
+        new_state = await _retire(source, item_id, r.placed_at, reason="replaced" if answered else "removed_stale")
         async with user_tx(state.engine, user) as conn:
             await conn.execute(
                 text("update vanimo.drafts set placed_state = :s where id = :id"), {"s": new_state, "id": r.id}

@@ -54,7 +54,7 @@ def test_apply_rules_never_touches_tokens_or_slots() -> None:
     p = Prompt(system=[], user="", target_words=20, bounds=(5, 40), greeting="", sign_off="")
     p.prefer = [("please", "pls"), ("account", "a/c")]
     p.no_exclamations = True
-    p.dont = ["do not hesitate"]
+    p.drop = ["do not hesitate"]
     body = "Please send the [bank account] details to ⟦PERSON_aaaaaaaa⟧! Do not hesitate to ask. The account is fine."
     out = apply_rules(body, p)
     assert out == "Pls send the [bank account] details to ⟦PERSON_aaaaaaaa⟧. The a/c is fine."

@@ -156,7 +156,9 @@ class LiveContext:
     decision: Decision
     one_off: bool
     me: Recipient
-    reply_to_id: str | None = None  # the message a reply answers (for a draft in the Outlook Drafts folder)
+    reply_to_id: str | None = None  # the latest message: a draft in Outlook replies to it (full quote)
+    # Messages whose Reply-To sends replies somewhere other than their sender: (sender, reply-to).
+    redirects: list[tuple[Address, Address]] = field(default_factory=list)
     suspicious: bool = False
     counts: dict[str, int] = field(default_factory=dict)
 
@@ -398,8 +400,13 @@ async def gather(
         decision=decision,
         one_off=one_off and decision.excluded,
         me=Recipient(Address(me, directory.me.full_name), me_forms, "⟦ME.full⟧"),
-        reply_to_id=next((h.id for h in reversed(headers) if h.sender.email.lower() != me), None)
-        or (headers[-1].id if headers else None),
+        reply_to_id=headers[-1].id if headers else None,
+        redirects=[
+            (h.sender, r)
+            for h in headers
+            for r in h.reply_to
+            if r.email and r.email.lower() not in (h.sender.email.lower(), me)
+        ],
         suspicious=suspicious,
         counts=counts,
     )

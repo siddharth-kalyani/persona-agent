@@ -61,6 +61,7 @@ class GraphClient:
         params: Mapping[str, str] | None = None,
         json: Any = None,
         headers: Mapping[str, str] | None = None,
+        idempotent: bool = True,
     ) -> httpx.Response:
         hdrs = {"Authorization": f"Bearer {self._token}", **(headers or {})}
         url = self._url(path)
@@ -72,6 +73,8 @@ class GraphClient:
                     resp = await self._http.request(method, url, params=params, json=json, headers=hdrs)
             if resp.status_code not in RETRY_STATUSES or attempt == self._max_attempts:
                 break
+            if not idempotent and resp.status_code != 429:
+                break  # a 5xx may have done the work (a draft created): never repeat a non-idempotent call
             retry_after = _retry_after(resp, attempt, self._max_backoff)
             log.warning("graph.retry", graph_status=resp.status_code, attempt=attempt, retry_after_s=retry_after)
             await asyncio.sleep(retry_after)
@@ -90,6 +93,10 @@ class GraphClient:
 
     async def post(self, path: str, json: Any = None, **kw: Any) -> dict[str, Any]:
         resp = await self.request("POST", path, json=json, **kw)
+        return resp.json() if resp.content else {}
+
+    async def patch(self, path: str, json: Any = None, **kw: Any) -> dict[str, Any]:
+        resp = await self.request("PATCH", path, json=json, **kw)
         return resp.json() if resp.content else {}
 
     async def delete(self, path: str) -> None:

@@ -575,7 +575,10 @@ export class Api {
       { text },
     );
   syncEdits = () =>
-    this.request<{ matched: number; unmatched: number; excluded: number; skipped: boolean }>("POST", "/api/edits/sync");
+    this.request<{ matched: number; unmatched: number; excluded: number; superseded: number; pending: number; skipped: boolean }>(
+      "POST",
+      "/api/edits/sync",
+    );
   editSummary = () => this.request<EditSummary>("GET", "/api/edits/summary");
   learnedRules = () => this.request<LearnedRule[]>("GET", "/api/rules");
   decideRule = (id: string, decision: "keep" | "reject") =>

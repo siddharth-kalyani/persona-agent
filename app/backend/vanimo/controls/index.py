@@ -63,6 +63,9 @@ class ChatRow:
     hidden: bool
     last: datetime | None
     people: set[uuid.UUID] = field(default_factory=set)
+    meeting_hash: str | None = None
+    series_hash: str | None = None
+    members_complete: bool = True
 
 
 @dataclass
@@ -131,7 +134,8 @@ async def load_index(conn: AsyncConnection, vault: Vault, ref: UserRef) -> Index
     chats = {
         r.id: ChatRow(
             r.id, r.key_hash, r.chat_type, render_removed(dec(r.label_enc, "chat_label")) or "(chat)",
-            r.member_count, r.hidden, r.last_activity_at,
+            r.member_count, r.hidden, r.last_activity_at, set(), r.meeting_hash, r.series_hash,
+            r.members_complete,
         )
         for r in (await conn.execute(text("select * from vanimo.source_chats"))).all()
     }  # fmt: skip
@@ -182,6 +186,8 @@ class Evaluator:
                 via.append(
                     f"Your organisation: {self.account_names.get(r.account_id or '', 'client account')}"
                     if r.kind == "client_account"
+                    else "Not everyone in this chat could be checked"
+                    if r.kind in ("members_unknown", "unknown_participant")
                     else "Your organisation: only approved clients"
                 )
             elif r.kind == direct_kind and direct is None and self._is_direct(r, direct_key):
@@ -224,6 +230,12 @@ class Evaluator:
         reasons: list[Reason] = []
         if rule := self.engine.rule("chat", c.key_hash):
             reasons.append(Reason("user", "chat", rule.id))
+        if rule := self.engine.rule("meeting", c.meeting_hash):
+            reasons.append(Reason("user", "meeting", rule.id))
+        if rule := self.engine.rule("series", c.series_hash):
+            reasons.append(Reason("user", "series", rule.id))
+        if not c.members_complete:
+            reasons.append(Reason("tenant", "members_unknown"))
         return self._describe(reasons + self._people_reasons(c.people, chat_hash=c.key_hash), "chat")
 
     def meeting(self, m: Meeting, *, as_series: bool = False) -> Status:

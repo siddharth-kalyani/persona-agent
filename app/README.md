@@ -60,11 +60,40 @@ Entra and Graph access may come late, so every feature also runs on a **sample w
   - This is a backstop against bugs, not a second security boundary: code that can run arbitrary SQL as the API role could set the flag itself.
   - All queries are parameterised.
 
-### Carried into M2 (from the M1 reviews)
+### Carried into M2 (from the M1 reviews), done in M2
 
-- Every content read calls `require_review_done(engine, ref, source.kind)`.
-- The fetch path builds the engine with `load_engine(..., self_email=...)`.
-- Every new derived store (L1 text, vectors, style cards) registers its purge in `vanimo/controls/jobs.py`.
+- Every content read calls `require_review_done(engine, ref, source.kind)` (the learning backfill does).
+- The fetch path builds the engine with `load_engine(..., self_email=...)` (`vanimo/learning/backfill.py`).
+- Every derived store (L1 text, vectors, tokens, style cards) has its purge in `vanimo/controls/jobs.py`.
+
+## M2: Learn safely
+
+Works the same on the sample workspace and on Microsoft 365. Tabs: **Sample workspace**, **Learning**, **Persona**.
+
+1. **Sample workspace** (sample only): Inbox, Sent, Chats and Meetings as Outlook and Teams would show them.
+   Each item shows what Vanimo did with it (learned, excluded and why, not learned yet, received). For a
+   learned item, **See what Vanimo stored** shows the stored text next to your view of it.
+2. **Learning:** *Start learning* runs the backfill (`vanimo/learning/backfill.py`):
+   - Gate first: nothing is read until the review is done for this source.
+   - Only your own sent emails and chat messages from allowed sources are read; the engine decides from metadata
+     before any text is fetched. The message you replied to is kept as context only if its sender is allowed too.
+   - Redaction L0 → L1 in memory (`vanimo/redaction/`): hidden HTML and Unicode tag characters dropped,
+     never-send words → `⟦NS_…⟧`, Tier R (Aadhaar/VID, PAN, GSTIN, IFSC + account, UPI, voter ID, passport,
+     cards, SSN/ITIN, EIN, ABA, secrets and passwords) → `[slot]` (checksum-validated, irreversible), people
+     from the header/directory gazetteer → `⟦PERSON_…⟧`, emails and phones → tokens, your own name → `⟦ME⟧`.
+     A verify pass blocks any item with residue (fail-closed).
+   - Labels: relationship (manager/report/peer/external/personal), intent, channel, language (English,
+     Hinglish, Hindi). Stored vault-encrypted with HMAC lineage. A rule or word added mid-run restarts it.
+   - *Delete what Vanimo learned* deletes everything learned and leaves a receipt.
+3. **Persona:** the Persona Snapshot (style cards: greetings, sign-offs, length, formality, phrases,
+   Indian-English keep-list, per audience, with back-off) and the basic studio (formality, length, warmth,
+   emoji, polish, phrases to use or avoid). Also shows the offline evaluation baseline.
+
+Two-phase fetch: thread headers are read first; text is fetched only for allowed messages and the one each replied to (and only if everyone on that message is allowed). Meeting chats are tied to their meeting by the join link, so a meeting or series rule covers them; a chat whose roster can't be read in full is never read.
+
+Purges: adding an exclusion deletes learned items whose lineage it now excludes. Adding a never-send word
+re-masks stored text, tokens and studio phrases. An admin client-scoping change queues a purge for every user
+in the tenant, which the sweeper runs. Style cards are rebuilt after each purge.
 
 ## Guarantees built in from M0
 
@@ -167,7 +196,11 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Add-in CSP | Enforced | Report-only until the add-in spike confirms Outlook's hosts | Enforce in M3 |
 | Stores | S3 Vectors, DynamoDB, Valkey | Aurora only | Added when M2/M4 need them |
 | Vault | Separate vault account; KMS per-tenant CMK with per-user data keys, so deleting a user's key crypto-shreds their data (§7.2 S8, §8.2) | AES-256-GCM keys derived (HKDF) from one master key in Secrets Manager | Move to KMS data keys before external customers |
-| Purge | Step Functions job across all stores (§6.5 X7) | In-process job. M1 has no derived content yet, so it re-masks the Sources index and writes receipts | M2 registers each new store (L1 text, vectors, style cards) |
+| Purge | Step Functions job across all stores (§6.5 X7) | In-process job. ~~M1 has no derived content yet~~ (superseded in M2): purges the L1 items, tokens, vectors and style cards by lineage, re-masks the Sources index, L1 text and studio phrases, and writes receipts | Move to Step Functions with the queue |
+| Redaction (M2 vs §7.2) | NER ensemble (Presidio/spaCy, GLiNER, IndicNER), contextual Tier C/S classifier, Guardrails, Macie backstops, vault service in a separate account | Deterministic detectors + checksum validators + the M365 header/directory gazetteer. Names that never appear in a header or the directory stay in L1. No Tier C/S classification (client sensitive words are stored but not yet applied). Token map in Aurora, vault-encrypted | Add NER + the contextual classifier (needs AWS, D7) before external customers |
+| Embeddings and drafting (M2) | Bedrock embeddings + S3 Vectors; Claude Haiku 5.5 drafter | Local hashing-trick vectors (`vanimo/learning/embed.py`) in Aurora; an offline drafter (`vanimo/llm/offline.py`), clearly labelled, used only for the evaluation baseline | Swap in Bedrock behind the same functions once the AWS account exists |
+| Language (D6 vs M2) | English-only drafting in the MVP; Hindi/Hinglish wait for their own quality gate | M2 *labels* each message English, Hinglish or Hindi and keeps their style slices apart, so Hinglish chats don't skew the English cards. Nothing is drafted in Hinglish | Unchanged: Hinglish drafting needs its own quality gate (v1.5) |
+| Never-send matching (M1 review) | Research 12: invisible characters removed | Zero-width spaces are still removed, not treated as spaces, so splitting a word with them ("Fal​con") can't dodge the filter. The cost: two words glued by a zero-width space ("the​falcon") don't match a *word* (they do match a codename) | Revisit with ICU word segmentation |
 | Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |
 | Background work | Step Functions / durable queues | In-process tasks, plus a sweeper every 5 minutes that resumes interrupted purge jobs and fails scans cut off by a restart (`vanimo/controls/sweeper.py`) | Move to a queue when there is more than one API task |
 | Housekeeping functions | Separate sweeper role | `vanimo_private.fail_stale_scans` / `claim_purge_jobs` are SECURITY DEFINER functions the API role can call. They act across tenants and return only IDs. `record_org_domains` accepts domains from Microsoft 365 scans, plus the sample domain in the local tenant only | Give the sweeper its own database role; add an admin view of recorded organisation domains |

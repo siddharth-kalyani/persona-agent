@@ -16,15 +16,18 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from vanimo import audit
 from vanimo.api.deps import AdminPrincipal, CurrentUser, State
-from vanimo.db.session import user_tx
+from vanimo.controls.jobs import run_job
+from vanimo.db.session import UserRef, user_tx
+from vanimo.state import AppState
 from vanimo.vault import normalise_identifier
 
 router = APIRouter(prefix="/api/admin/scoping", tags=["admin"])
@@ -98,6 +101,18 @@ async def _read(state: State, user: CurrentUser) -> ScopingOut:
     )
 
 
+async def _enqueue_tenant_purge(conn: Any) -> list[Any]:
+    """Queue a purge (and bump the controls version) for every user of the tenant; see 0007."""
+    return list((await conn.execute(text("select * from vanimo_private.enqueue_tenant_purge()"))).all())
+
+
+def _start_tenant_jobs(state: AppState, admin: UserRef, jobs: list[Any]) -> None:
+    """After commit: run each user's purge now (the sweeper is only the safety net)."""
+    for job in jobs:
+        ref = UserRef(admin.tenant_id, job.user_id)
+        state.spawn(run_job(state.engine, state.vault, ref, str(job.job_id), "tenant_policy_changed"))
+
+
 @router.get("", response_model=ScopingOut)
 async def get_scoping(_: AdminPrincipal, user: CurrentUser, state: State) -> ScopingOut:
     return await _read(state, user)
@@ -119,7 +134,9 @@ async def set_policy(
             ),
             {"t": user.tenant_id, "m": body.externalMode, "u": user.user_id},
         )
+        jobs = await _enqueue_tenant_purge(conn)  # learned data follows the new rules
         await audit.record(conn, user, f"admin.scoping.mode_{body.externalMode}", request_id=request.state.request_id)
+    _start_tenant_jobs(state, user, jobs)
     return await _read(state, user)
 
 
@@ -127,6 +144,13 @@ async def set_policy(
 async def add_account(
     body: AccountIn, _: AdminPrincipal, user: CurrentUser, state: State, request: Request
 ) -> ScopingOut:
+    try:
+        return await _add_account(body, user, state, request)
+    except IntegrityError:
+        raise HTTPException(409, detail={"error": "domain_already_assigned"}) from None
+
+
+async def _add_account(body: AccountIn, user: UserRef, state: AppState, request: Request) -> ScopingOut:
     v, t = state.vault, user.tenant_id
     async with user_tx(state.engine, user, admin=True) as conn:
         hashes = {d: v.key_hash(t, "domain", d) for d in body.domains}
@@ -167,8 +191,10 @@ async def add_account(
                 text("insert into vanimo.client_account_terms (tenant_id, account_id, term_enc) values (:t, :a, :w)"),
                 [{"t": t, "a": account_id, "w": v.encrypt_tenant(t, w, "account_term")} for w in body.sensitiveWords],
             )
+        jobs = await _enqueue_tenant_purge(conn)  # learned data follows the new rules
         await audit.record(conn, user, "admin.scoping.account_added", target_kind="client_account",
                            target_ref=str(account_id), request_id=request.state.request_id)  # fmt: skip
+    _start_tenant_jobs(state, user, jobs)
     return await _read(state, user)
 
 
@@ -184,6 +210,8 @@ async def remove_account(
         ).first()
         if not done:
             raise HTTPException(404, detail={"error": "account_not_found"})
+        jobs = await _enqueue_tenant_purge(conn)  # learned data follows the new rules
         await audit.record(conn, user, "admin.scoping.account_removed", target_kind="client_account",
                            target_ref=str(account_id), request_id=request.state.request_id)  # fmt: skip
+    _start_tenant_jobs(state, user, jobs)
     return await _read(state, user)

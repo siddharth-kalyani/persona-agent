@@ -74,7 +74,7 @@ def test_normalise_devanagari_digits_and_whitespace() -> None:
 
 def test_variants_offered_for_confirmation() -> None:
     v = variants("Project Falcon", "codename")
-    assert v[:4] == ["project falcon", "project-falcon", "project_falcon", "projectfalcon"]
+    assert v[:5] == ["project falcon", "project-falcon", "project_falcon", "project.falcon", "projectfalcon"]
     assert "project falcons" in v
 
 

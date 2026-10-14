@@ -1,6 +1,6 @@
 """Keeps background work durable across restarts (in-process tasks die with the process).
 
-Every few minutes: scans still "running" after 2 hours are marked failed (so the UI offers a
+Every few minutes: scans and learning runs still "running" after 2 hours are marked failed (so the UI offers a
 retry instead of spinning), and purge/scrub jobs left pending or running are run again (they are
 idempotent). Uses SECURITY DEFINER functions from migration 0005, which return IDs only.
 """
@@ -27,6 +27,10 @@ async def sweep_once(engine: AsyncEngine, vault: Vault) -> tuple[int, int]:
     async with engine.begin() as conn:
         failed = (
             await conn.execute(text("select vanimo_private.fail_stale_scans(:m)"), {"m": STALE_SCAN_MINUTES})
+        ).scalar_one()
+        # Learning runs interrupted by a restart are marked failed, so the user can start again.
+        failed += (
+            await conn.execute(text("select vanimo_private.fail_stale_learning_runs(:m)"), {"m": STALE_SCAN_MINUTES})
         ).scalar_one()
         jobs = (
             await conn.execute(text("select * from vanimo_private.claim_purge_jobs(:m)"), {"m": STALE_JOB_MINUTES})

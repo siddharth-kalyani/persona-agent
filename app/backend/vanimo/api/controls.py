@@ -19,17 +19,26 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from vanimo import audit
 from vanimo.api.deps import CurrentUser, State, UserSource
 from vanimo.controls import index as idx
 from vanimo.controls.jobs import run_job
-from vanimo.controls.neversend import Matcher, Term, folded_form, new_term_id, variants
+from vanimo.controls.neversend import Matcher, Term, folded_form, new_term_id, normalise, variants
 from vanimo.controls.scan import run_scan
-from vanimo.controls.store import add_purge_job, bump_version, load_engine, load_matcher, load_terms
+from vanimo.controls.store import (
+    add_purge_job,
+    bump_version,
+    load_engine,
+    load_matcher,
+    load_terms,
+    lock_user_controls,
+)
 from vanimo.db.session import UserRef, user_tx
 from vanimo.gates import onboarding_state
 from vanimo.logs import get_logger
+from vanimo.sources.base import WorkspaceSource
 from vanimo.sources.graph import EPOCH
 from vanimo.state import AppState
 
@@ -147,10 +156,17 @@ class SourceItem(BaseModel):
     locked: bool = False  # excluded by the organisation
 
 
-async def _context(state: AppState, user: UserRef) -> tuple[idx.IndexView, idx.Evaluator, Matcher]:
+async def _context(
+    state: AppState, user: UserRef, source: WorkspaceSource
+) -> tuple[idx.IndexView, idx.Evaluator, Matcher]:
     async with user_tx(state.engine, user) as conn:
         view = await idx.load_index(conn, state.vault, user)
-        engine = await load_engine(conn, state.vault, user)
+        engine = await load_engine(
+            conn,
+            state.vault,
+            user,
+            extra_org_domains=await source.org_domains() if source.kind == "sample" else (),
+        )
         matcher = await load_matcher(conn, state.vault, user)
         accounts = (await conn.execute(text("select id, name_enc from vanimo.client_accounts"))).all()
     names = {str(a.id): state.vault.decrypt_tenant(user.tenant_id, a.name_enc, "account_name") or "" for a in accounts}
@@ -196,7 +212,7 @@ async def _index_matches_source(state: AppState, user: UserRef, source_kind: str
 async def list_sources(
     user: CurrentUser, source: UserSource, state: State, kind: Annotated[SourceKind, Query()]
 ) -> list[SourceItem]:
-    view, ev, matcher = await _context(state, user)
+    view, ev, matcher = await _context(state, user, source)
     if not await _index_matches_source(state, user, source.kind):
         return []  # the index belongs to the other data source; a new scan replaces it
     mask = display_masker(matcher)
@@ -322,6 +338,13 @@ def _start_job(state: AppState, user: UserRef, job_id: str, reason: str) -> None
 
 @router.post("/rules", response_model=RuleOut, status_code=201)
 async def add_rule(body: RuleIn, user: CurrentUser, state: State, request: Request) -> RuleOut:
+    try:
+        return await _add_rule(body, user, state, request)
+    except IntegrityError:  # the same rule added twice at once: the unique index catches the second
+        raise HTTPException(409, detail={"error": "already_excluded"}) from None
+
+
+async def _add_rule(body: RuleIn, user: UserRef, state: AppState, request: Request) -> RuleOut:
     async with user_tx(state.engine, user) as conn:
         view = await idx.load_index(conn, state.vault, user)
         key_hash = _key_hash(view, body.kind, body.id)
@@ -485,9 +508,12 @@ async def list_terms(user: CurrentUser, state: State) -> list[TermOut]:
 
 @router.post("/never-send", response_model=TermOut, status_code=201)
 async def add_term(body: TermIn, user: CurrentUser, state: State, request: Request) -> TermOut:
+    if not normalise(body.text)[0].strip():
+        raise HTTPException(422, detail={"error": "empty_word"})  # spaces or invisible characters only
     extra = [v.strip() for v in body.variants if v.strip() and len(v.strip()) <= 100]
     t, u = user.tenant_id, user.user_id
     async with user_tx(state.engine, user) as conn:
+        await lock_user_controls(conn, user)  # two adds at once can't both pass the checks below
         count = (await conn.execute(text("select count(*) from vanimo.never_send_terms"))).scalar_one()
         if count >= MAX_TERMS:
             raise HTTPException(422, detail={"error": "too_many_words"})
@@ -595,6 +621,7 @@ class ReceiptOut(BaseModel):
     requestedAt: datetime
     completedAt: datetime | None
     counts: dict[str, Any]
+    needsAttention: bool = False  # failed after every automatic retry
 
 
 @router.get("/receipts", response_model=list[ReceiptOut])
@@ -603,6 +630,32 @@ async def receipts(user: CurrentUser, state: State) -> list[ReceiptOut]:
         rows = (await conn.execute(text("select * from vanimo.purge_jobs order by requested_at desc limit 100"))).all()
     return [
         ReceiptOut(id=str(r.id), reason=r.reason, status=r.status, requestedAt=r.requested_at,
-                   completedAt=r.completed_at, counts=r.counts)
+                   completedAt=r.completed_at, counts=r.counts,
+                   needsAttention=r.status == "failed" and r.attempts >= 3)
         for r in rows
     ]  # fmt: skip
+
+
+@router.post("/receipts/{job_id}/retry", response_model=ReceiptOut)
+async def retry_receipt(job_id: uuid.UUID, user: CurrentUser, state: State, request: Request) -> ReceiptOut:
+    """Run a failed purge or scrub again (they are idempotent)."""
+    async with user_tx(state.engine, user) as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "update vanimo.purge_jobs set status = 'running', attempts = 0, "
+                    "lease_until = now() + interval '10 minutes' where id = :id and status = 'failed' "
+                    "returning id, reason"
+                ),
+                {"id": job_id},
+            )
+        ).first()
+        if not row:
+            raise HTTPException(404, detail={"error": "no_failed_job"})
+        await audit.record(conn, user, "controls.job_retried", target_kind="purge_job", target_ref=str(job_id),
+                           request_id=request.state.request_id)  # fmt: skip
+    await run_job(state.engine, state.vault, user, str(row.id), row.reason)
+    async with user_tx(state.engine, user) as conn:
+        r = (await conn.execute(text("select * from vanimo.purge_jobs where id = :id"), {"id": job_id})).one()
+    return ReceiptOut(id=str(r.id), reason=r.reason, status=r.status, requestedAt=r.requested_at,
+                      completedAt=r.completed_at, counts=r.counts, needsAttention=False)  # fmt: skip

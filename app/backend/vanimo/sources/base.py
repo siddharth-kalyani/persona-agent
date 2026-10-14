@@ -6,8 +6,11 @@ Two implementations behind one interface:
   * SampleSource — a synthetic workspace, so every feature can be built and demoed while
                    Entra/Graph access is pending (founder decision, 2026-10-13).
 
-Everything here is metadata (headers, rosters, calendar fields). Message text is never
-part of this interface; content reads arrive in M2 behind the onboarding gate.
+Metadata methods (headers, rosters, calendar fields) are safe before the review step. The
+content methods (`message`, `chat_messages`, `event_agenda`) read message text: callers must
+pass the onboarding gate first (`vanimo.gates.require_review_done`) and fetch only items the
+exclusion engine allowed from their metadata (`thread_headers`, rosters): two-phase fetch,
+architecture §6.5 X2.
 """
 
 from __future__ import annotations
@@ -56,6 +59,7 @@ class Profile:
     email: str | None = None
     job_title: str | None = None
     department: str | None = None
+    id: str | None = None  # directory object ID (identifies the user's own chat messages)
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,11 @@ class Chat:
     members: tuple[Address, ...]
     last_activity_at: datetime | None = None
     hidden: bool = False
+    # Meeting chats: the meeting's join link, which ties the chat to its calendar event (and series).
+    join_url: str | None = field(default=None, repr=False)
+    # False when the full roster couldn't be read, or a member has no address (guest, anonymous):
+    # the engine can't vouch for who is in the chat, so its content is never read (fail-closed).
+    members_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -102,6 +111,54 @@ class Event:
     is_private: bool = False
     is_organizer: bool = False
     join_url: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class MessageContent:
+    """One email with its text (L0 — in memory only, never stored as is)."""
+
+    id: str
+    conversation_id: str
+    subject: str | None
+    sent_at: datetime
+    sender: Address
+    to: tuple[Address, ...]
+    cc: tuple[Address, ...]
+    direction: Literal["sent", "received"]
+    body: str  # the author's own words in this message (Graph `uniqueBody`)
+    quoted: str = ""  # earlier messages quoted below it, if any
+    hidden: bool = False  # hidden HTML (display:none, white-on-white) was found and dropped
+
+    @property
+    def recipients(self) -> tuple[Address, ...]:
+        return self.to + self.cc
+
+
+@dataclass(frozen=True)
+class MessageHeader:
+    """One message of a thread, metadata only: the engine decides on this before any text is read."""
+
+    id: str
+    conversation_id: str
+    sent_at: datetime
+    sender: Address
+    to: tuple[Address, ...]
+    cc: tuple[Address, ...]
+    direction: Literal["sent", "received"]
+
+    @property
+    def participants(self) -> tuple[Address, ...]:
+        return (self.sender, *self.to, *self.cc)
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    id: str
+    chat_id: str
+    sender: Address  # email "" when the sender couldn't be matched to the chat roster
+    created_at: datetime
+    text: str
+    from_me: bool
 
 
 class WorkspaceSource(Protocol):
@@ -120,3 +177,14 @@ class WorkspaceSource(Protocol):
     def events(self, start: datetime, end: datetime) -> AsyncIterator[Event]: ...
 
     async def org_domains(self) -> frozenset[str]: ...
+
+    async def direct_reports(self) -> list[Address]: ...
+
+    async def thread_headers(self, conversation_id: str) -> list[MessageHeader]: ...
+
+    # --- content (behind the onboarding gate) ---------------------------------------------
+    async def message(self, message_id: str) -> MessageContent | None: ...
+
+    def chat_messages(self, chat_id: str) -> AsyncIterator[ChatMessage]: ...
+
+    async def event_agenda(self, event_id: str) -> str | None: ...

@@ -36,6 +36,7 @@ const REASONS: Record<string, string> = {
   term_added: "Never-send word added: stored text re-masked",
   term_removed: "Never-send word removed",
   tenant_policy_changed: "Your organisation changed its rules",
+  learning_deleted: "You deleted what Vanimo learned",
 };
 
 export function receiptDetail(r: Receipt): string {
@@ -126,7 +127,21 @@ export function MyData() {
                   {REASONS[r.reason] ?? r.reason}
                   {receiptDetail(r) && <Caption1 className={styles.muted}> · {receiptDetail(r)}</Caption1>}
                 </TableCell>
-                <TableCell>{r.status}</TableCell>
+                <TableCell>
+                  {r.needsAttention ? (
+                    <div className={styles.row}>
+                      <Text weight="semibold">Needs attention</Text>
+                      <Button
+                        size="small"
+                        onClick={() => void api.retryReceipt(r.id).then(refresh, (e) => setError(errorText(e)))}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : (
+                    r.status
+                  )}
+                </TableCell>
               </TableRow>
             ))}
             {receipts.length === 0 && (

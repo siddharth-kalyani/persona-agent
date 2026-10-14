@@ -43,10 +43,11 @@ _DEVANAGARI_DIGITS = {0x0966 + i: str(i) for i in range(10)}
 _CONFUSABLES = {
     "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
     "ԁ": "d", "ӏ": "l", "к": "k", "м": "m", "т": "t", "в": "b", "н": "h",
+    "ɑ": "a", "ɡ": "g", "ı": "i", "ո": "n", "ս": "u", "օ": "o", "հ": "h", "ց": "g",
     "α": "a", "ο": "o", "ρ": "p", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "τ": "t", "υ": "u", "χ": "x",
 }  # fmt: skip
 _NAME_SUFFIXES = ("ji", "jee", "sahab", "saheb", "bhai", "'s", "’s", "s", "जी", "भाई", "साहब")
-_SEPARATORS = re.compile(r"[\s\-_./]+")
+_SEPARATORS = re.compile(r"[\s\-_./‐‑‒–—―−]+")
 _PLACEHOLDER = re.compile(r"⟦NS_[0-9a-f]{8}⟧")
 
 
@@ -132,24 +133,14 @@ def _strip_marks(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
     out: list[str] = []
     org: list[Span] = []
     for c, o in zip(shadow, origin, strict=True):
+        if unicodedata.category(c) in ("Mn", "Me") and out and out[-1].isascii() and out[-1].isalpha():
+            # A mark NFKC couldn't merge (strikethrough U+0336, underline U+0332, ogonek on f):
+            # it belongs to the Latin letter before it, so it goes and the letter keeps its span.
+            org[-1] = (org[-1][0], o[1])
+            continue
         d = unicodedata.normalize("NFD", c)
         if d[0].isascii():
-            d = "".join(ch for ch in d if unicodedata.category(ch) != "Mn")
-        for ch in d:
-            out.append(ch)
-            org.append(o)
-    return "".join(out), org
-
-
-def _strip_marks(shadow: str, origin: list[Span]) -> tuple[str, list[Span]]:
-    """Latin letters with their accents removed (UTS #39-style skeleton step), so a mark glued on
-    to dodge the filter ("falcońs") doesn't hide the word. Non-Latin text is left as is."""
-    out: list[str] = []
-    org: list[Span] = []
-    for c, o in zip(shadow, origin, strict=True):
-        d = unicodedata.normalize("NFD", c)
-        if d[0].isascii():
-            d = "".join(ch for ch in d if unicodedata.category(ch) != "Mn")
+            d = "".join(ch for ch in d if unicodedata.category(ch) not in ("Mn", "Me"))
         for ch in d:
             out.append(ch)
             org.append(o)
@@ -204,7 +195,7 @@ def variants(text: str, kind: TermKind) -> list[str]:
     tokens = [t for t in _SEPARATORS.split(base) if t]
     out = [base]
     if len(tokens) > 1:
-        out += [" ".join(tokens), "-".join(tokens), "_".join(tokens), "".join(tokens)]
+        out += [" ".join(tokens), "-".join(tokens), "_".join(tokens), ".".join(tokens), "".join(tokens)]
     if kind in ("word", "codename") and _ascii_latin(base) and base[-1].isalpha():
         out += [base + "s", base + "es", base + "'s", base + "’s"]
     seen: set[str] = set()
@@ -238,9 +229,6 @@ class Matcher:
                 stripped, _ = _strip_marks(form, [(k, k) for k in range(len(form))])
                 if _ascii_latin(stripped):
                     self._patterns.append(_Pattern(term, stripped, "stripped", boundary))
-                stripped, _ = _strip_marks(form, [(k, k) for k in range(len(form))])
-                if _ascii_latin(stripped):
-                    self._patterns.append(_Pattern(term, stripped, "stripped", boundary))
                 if term.folds and _ascii_latin(form) and len(form) >= 4:
                     # Matched against the folded copy of the text even when folding leaves the
                     # term unchanged: the *text* may fold ("Sharmaa" → "sharma").
@@ -269,16 +257,21 @@ class Matcher:
                 end = start + len(p.needle)
                 if p.boundary:
                     end = self._accept(shadow, start, end, p.term.kind)
+                next_from = start + 1
                 if end is not None:
                     s, e = origin[start][0], origin[end - 1][1] + 1
                     if not p.boundary:
-                        # Substring hits mask the whole word they sit in ("Falconry" → [removed]).
+                        # Substring hits mask the whole word they sit in ("Falconry" → [removed]);
+                        # the rest of that word is covered, so the search resumes after it.
                         while s > 0 and _is_word_char(text[s - 1]):
                             s -= 1
                         while e < len(text) and _is_word_char(text[e]):
                             e += 1
+                        next_from = end
+                        while next_from < len(shadow) and _is_word_char(shadow[next_from]):
+                            next_from += 1
                     hits.append((s, e, p.term))
-                start = shadow.find(p.needle, start + 1)
+                start = shadow.find(p.needle, next_from)
         return hits
 
     @staticmethod
@@ -287,6 +280,11 @@ class Matcher:
             return None
         if end == len(shadow) or not _is_word_char(shadow[end]):
             return end
+        digits_end = end
+        while digits_end < len(shadow) and shadow[digits_end].isdigit():
+            digits_end += 1
+        if digits_end > end and (digits_end == len(shadow) or not _is_word_char(shadow[digits_end])):
+            return digits_end  # a version or number glued on: "Falcon2", "falcon2026"
         if kind == "name":  # glued honorific or possessive: Sharmaji, Sharma-ji is separator anyway
             for suffix in _NAME_SUFFIXES:
                 if shadow.startswith(suffix, end):
@@ -295,12 +293,13 @@ class Matcher:
                         return after
         return None
 
-    def mask(self, text: str | None) -> tuple[str | None, int]:
-        """Replace every hit with its term's placeholder. Returns (masked text, number of hits)."""
+    def mask(self, text: str | None, *, opaque: re.Pattern[str] | None = None) -> tuple[str | None, int]:
+        """Replace every hit with its term's placeholder. Returns (masked text, number of hits).
+        `opaque`: marks never matched inside or across (default: never-send placeholders; L1
+        callers pass `vanimo.redaction.marks.L1_MARKS`, so tokens and [slots] stay intact)."""
         if not text or not self._patterns:
             return text, 0
-        # Already-masked spans are opaque: never match inside or across a placeholder.
-        masked_spans = [(m.start(), m.end()) for m in _PLACEHOLDER.finditer(text)]
+        masked_spans = [(m.start(), m.end()) for m in (opaque or _PLACEHOLDER).finditer(text)]
         hits = sorted(
             (h for h in self._spans(text) if not any(h[0] < me and ms < h[1] for ms, me in masked_spans)),
             key=lambda h: (h[0], -(h[1] - h[0])),
@@ -323,8 +322,8 @@ class Matcher:
         out.append(text[pos:])
         return "".join(out), len(merged)
 
-    def count(self, text: str | None) -> int:
-        return self.mask(text)[1]
+    def count(self, text: str | None, *, opaque: re.Pattern[str] | None = None) -> int:
+        return self.mask(text, opaque=opaque)[1]
 
 
 REMOVED = "[removed]"

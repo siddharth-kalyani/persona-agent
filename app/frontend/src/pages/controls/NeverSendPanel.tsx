@@ -181,11 +181,18 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
                 <Switch
                   checked={w.allowInDrafts}
                   aria-label={`Allow ${w.text} in my drafts`}
-                  onChange={(_, d) => void api.updateWord(w.id, d.checked).then(load)}
+                  onChange={(_, d) =>
+                    void api.updateWord(w.id, d.checked).then(load, (e) => setError(errorText(e)))
+                  }
                 />
               </TableCell>
               <TableCell>
-                <Button size="small" onClick={() => void api.deleteWord(w.id).then(load).then(() => onChange?.())}>
+                <Button size="small" onClick={() =>
+                    void api
+                      .deleteWord(w.id)
+                      .then(load)
+                      .then(() => onChange?.(), (e) => setError(errorText(e)))
+                  }>
                   Remove
                 </Button>
               </TableCell>

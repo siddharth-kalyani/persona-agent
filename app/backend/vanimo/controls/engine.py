@@ -10,7 +10,9 @@ Organisation rules:
   * external mode "approved_only" — conversations with any external participant whose domain
     isn't in an "approved" account are out (internal domains are always fine).
 User rules: person, domain, chat, thread, meeting occurrence, meeting series. A person rule
-covers every chat the person is in, except chats the user explicitly unticked (D5).
+covers every chat the person is in, except chats the user explicitly unticked (D5). A meeting or
+series rule also covers the meeting's chat (linked through the meeting's join link).
+System: a chat whose full roster couldn't be read is excluded (fail-closed; nobody can lift it).
 """
 
 from __future__ import annotations
@@ -85,15 +87,25 @@ class ExclusionEngine:
 
     # --- people -------------------------------------------------------------------------
     def person_reasons(self, addr: Address, *, chat_hash: str | None = None) -> list[Reason]:
+        return self.hashed_person_reasons(
+            self.hasher("person", addr.email.lower()), self.domain_hashes(addr.domain), chat_hash=chat_hash
+        )
+
+    def hashed_person_reasons(
+        self, person_hash: str, domain_hashes: list[str], *, chat_hash: str | None = None
+    ) -> list[Reason]:
+        """As person_reasons, from stored hashes only (lineage re-checks in purge jobs)."""
         reasons: list[Reason] = []
-        rule = self._rule("person", self.hasher("person", addr.email.lower()))
+        rule = self._rule("person", person_hash)
         if rule and not (chat_hash and chat_hash in rule.except_chats):
             reasons.append(Reason("user", "person", rule.id))
-        return reasons + self.domain_reasons(addr.domain, chat_hash=chat_hash)
+        return reasons + self.hashed_domain_reasons(domain_hashes, chat_hash=chat_hash)
 
     def domain_reasons(self, domain: str, *, chat_hash: str | None = None) -> list[Reason]:
+        return self.hashed_domain_reasons(self.domain_hashes(domain), chat_hash=chat_hash)
+
+    def hashed_domain_reasons(self, domains: list[str], *, chat_hash: str | None = None) -> list[Reason]:
         reasons: list[Reason] = []
-        domains = self.domain_hashes(domain)
         for dh in domains:
             rule = self._rule("domain", dh)
             if rule and not (chat_hash and chat_hash in rule.except_chats):
@@ -107,6 +119,15 @@ class ExclusionEngine:
         ):
             reasons.append(Reason("tenant", "not_approved"))
         return reasons
+
+    def people_reasons(self, people: Iterable[Address], *, chat_hash: str | None = None) -> list[Reason]:
+        """Reasons from any participant other than the user. An address-less participant (a sender
+        not on the chat roster) can't be checked, so it excludes."""
+        out: list[Reason] = []
+        for addr in people:
+            if not addr.email:
+                out.append(Reason("tenant", "unknown_participant"))
+        return out + self._participants([a for a in people if a.email], chat_hash)
 
     def _participants(self, people: Iterable[Address], chat_hash: str | None = None) -> list[Reason]:
         out: list[Reason] = []
@@ -124,13 +145,25 @@ class ExclusionEngine:
         reasons += self._participants(header.participants)
         return Decision(tuple(dict.fromkeys(reasons)))
 
-    def chat(self, chat: Chat) -> Decision:
+    def chat(self, chat: Chat, *, meeting_hash: str | None = None, series_hash: str | None = None) -> Decision:
+        """`meeting_hash`/`series_hash`: the calendar event a meeting chat belongs to, if known."""
         chat_hash = self.hasher("chat", chat.id)
         reasons: list[Reason] = []
         if rule := self._rule("chat", chat_hash):
             reasons.append(Reason("user", "chat", rule.id))
+        reasons += self._meeting_reasons(meeting_hash, series_hash)
+        if not chat.members_complete:
+            reasons.append(Reason("tenant", "members_unknown"))
         reasons += self._participants(chat.members, chat_hash=chat_hash)
         return Decision(tuple(dict.fromkeys(reasons)))
+
+    def _meeting_reasons(self, meeting_hash: str | None, series_hash: str | None) -> list[Reason]:
+        reasons: list[Reason] = []
+        if rule := self.rule("meeting", meeting_hash):
+            reasons.append(Reason("user", "meeting", rule.id))
+        if rule := self.rule("series", series_hash):
+            reasons.append(Reason("user", "series", rule.id))
+        return reasons
 
     def meeting(self, event: Event) -> Decision:
         reasons: list[Reason] = []
@@ -140,6 +173,27 @@ class ExclusionEngine:
             reasons.append(Reason("user", "series", rule.id))
         people = [*event.attendees, *([event.organizer] if event.organizer else [])]
         reasons += self._participants(people)
+        return Decision(tuple(dict.fromkeys(reasons)))
+
+    def lineage(
+        self,
+        people: Iterable[tuple[str, list[str]]],
+        *,
+        thread_hash: str | None = None,
+        chat_hash: str | None = None,
+        meeting_hash: str | None = None,
+        series_hash: str | None = None,
+    ) -> Decision:
+        """Re-check a stored item from its lineage: (person hash, domain hashes) per participant
+        other than the user, plus the thread or chat it came from (and a meeting chat's meeting)."""
+        reasons: list[Reason] = []
+        if rule := self.rule("thread", thread_hash):
+            reasons.append(Reason("user", "thread", rule.id))
+        if rule := self.rule("chat", chat_hash):
+            reasons.append(Reason("user", "chat", rule.id))
+        reasons += self._meeting_reasons(meeting_hash, series_hash)
+        for person_hash, domains in people:
+            reasons += self.hashed_person_reasons(person_hash, domains, chat_hash=chat_hash)
         return Decision(tuple(dict.fromkeys(reasons)))
 
 

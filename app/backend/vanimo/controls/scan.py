@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,7 +22,7 @@ from vanimo.controls.neversend import Matcher
 from vanimo.controls.store import hasher_for, load_matcher, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.logs import get_logger
-from vanimo.sources.base import CONSUMER_DOMAINS, Address, WorkspaceSource
+from vanimo.sources.base import CONSUMER_DOMAINS, Address, Event, WorkspaceSource
 from vanimo.vault import Vault
 
 log = get_logger("vanimo.scan")
@@ -109,11 +110,16 @@ async def _collect(source: WorkspaceSource, self_email: str, now: datetime) -> _
                 "members": [m.email.lower() for m in members],
                 "hidden": c.hidden,
                 "last": c.last_activity_at,
+                "join_url": c.join_url,
+                "complete": c.members_complete,
             }
         )
     events_by_id: dict[str, Any] = {}
     async for e in source.events(now - CALENDAR_BACK, now + CALENDAR_AHEAD):
         events_by_id[e.id] = e
+    by_url = meeting_links(events_by_id.values())
+    for chat in idx.chats:
+        chat["meeting"], chat["series"] = by_url.get(chat.pop("join_url") or "", (None, None))
     for e in events_by_id.values():
         attendees = [a for a in (*e.attendees, *([e.organizer] if e.organizer else [])) if a.email.lower() != me]
         unique = list({a.email.lower(): a for a in attendees}.values())
@@ -132,6 +138,11 @@ async def _collect(source: WorkspaceSource, self_email: str, now: datetime) -> _
             }
         )
     return idx
+
+
+def meeting_links(events: Iterable[Event]) -> dict[str, tuple[str, str | None]]:
+    """Join link → (event ID, series ID): how a meeting chat is tied to its meeting."""
+    return {e.join_url: (e.id, e.series_id) for e in events if e.join_url}
 
 
 def _is_internal(domain: str, org_domains: frozenset[str]) -> bool:
@@ -270,6 +281,9 @@ async def _replace_index(
                 "mc": len(c["members"]),
                 "hd": c["hidden"],
                 "la": c["last"],
+                "mh": h("meeting", c["meeting"]) if c["meeting"] else None,
+                "sh": h("series", c["series"]) if c["series"] else None,
+                "mc2": c["complete"],
             }
         )
         chat_links += [{**owner, "a": cid, "p": person_ids[e]} for e in dict.fromkeys(c["members"])]
@@ -316,7 +330,8 @@ async def _replace_index(
         ),
         (
             "insert into vanimo.source_chats (id, tenant_id, owner_user_id, key_hash, chat_type, topic_enc, label_enc, "
-            "member_count, hidden, last_activity_at) values (:id, :t, :u, :k, :ty, :tp, :lb, :mc, :hd, :la)",
+            "member_count, hidden, last_activity_at, meeting_hash, series_hash, members_complete) "
+            "values (:id, :t, :u, :k, :ty, :tp, :lb, :mc, :hd, :la, :mh, :sh, :mc2)",
             chats,
         ),
         (

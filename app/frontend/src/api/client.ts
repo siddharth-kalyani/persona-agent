@@ -111,6 +111,8 @@ export interface Receipt {
   requestedAt: string;
   completedAt: string | null;
   counts: Record<string, unknown>;
+  /** Failed after every automatic retry: shown to the user with a Retry button. */
+  needsAttention?: boolean;
 }
 
 export interface ClientAccount {
@@ -156,6 +158,141 @@ export interface HeaderPass {
   chatsFinished: boolean;
   elapsedMs: number;
   itemsPerSecond: number | null;
+}
+
+// --- Learning, persona, sample workspace (M2) ----------------------------------------------------
+export interface LearningRun {
+  id: string;
+  status: "running" | "done" | "failed";
+  sourceKind: "graph" | "sample";
+  startedAt: string;
+  finishedAt: string | null;
+  counts: Record<string, number>;
+  errorCode: string | null;
+}
+
+export interface LearningStatus {
+  onboardingState: "review_pending" | "review_done";
+  sourceKind: "graph" | "sample";
+  run: LearningRun | null;
+  stored: { email: number; chat: number; total: number };
+  styleCards: number;
+}
+
+export interface StoredItem {
+  id: string;
+  channel: "email" | "chat";
+  sentAt: string;
+  relationship: string;
+  intent: string;
+  language: string;
+  wordCount: number;
+  heldOut: boolean;
+  suspicious: boolean;
+  subject: string | null;
+  /** Exactly what is stored: tokens, [slots] and never-send placeholders. */
+  stored: string;
+  /** The stored text re-hydrated for you: names back, never-send words as [removed]. */
+  display: string;
+  contextStored: string | null;
+  contextDisplay: string | null;
+}
+
+export type Distribution = [string, number][];
+
+export interface StyleCard {
+  n: number;
+  greetings: Distribution;
+  sign_offs: Distribution;
+  length: { median: number; p25: number; p75: number };
+  formality: number;
+  exclamation_rate: number;
+  question_rate: number;
+  emoji_rate: number;
+  phrases: string[];
+  keep_list: string[];
+  languages: Record<string, number>;
+  intents: Record<string, number>;
+}
+
+export interface PersonaSettings {
+  formality: number;
+  length: number;
+  warmth: number;
+  emoji: boolean;
+  polish: "none" | "light";
+  phrases_do: string[];
+  phrases_dont: string[];
+}
+
+export interface PersonaSnapshot {
+  source: "graph" | "sample";
+  learned_items: number;
+  by: { channel: Record<string, number>; relationship: Record<string, number>; language: Record<string, number> };
+  overall: StyleCard | null;
+  audiences: { relationship: string; card: StyleCard }[];
+  cards: number;
+  settings: PersonaSettings;
+  evaluation: { metrics: Record<string, number | string>; at: string } | null;
+}
+
+export interface SamplePerson {
+  name: string | null;
+  email: string;
+}
+
+export type ItemStatus = "learned" | "excluded" | "not_learned" | "received";
+
+export interface SampleEmail {
+  id: string;
+  conversationId: string;
+  subject: string | null;
+  sentAt: string;
+  sender: SamplePerson;
+  to: SamplePerson[];
+  cc: SamplePerson[];
+  direction: "sent" | "received";
+  body: string;
+  status: ItemStatus;
+  reasons: string[];
+  storedId: string | null;
+}
+
+export interface SampleChat {
+  id: string;
+  chatType: string;
+  label: string;
+  members: SamplePerson[];
+  excluded: boolean;
+  reasons: string[];
+  messages: {
+    id: string;
+    sender: SamplePerson;
+    createdAt: string;
+    text: string;
+    fromMe: boolean;
+    status: ItemStatus;
+    storedId: string | null;
+  }[];
+}
+
+export interface SampleMeeting {
+  id: string;
+  subject: string | null;
+  start: string;
+  end: string;
+  organizer: SamplePerson | null;
+  attendees: SamplePerson[];
+  agenda: string | null;
+  excluded: boolean;
+  reasons: string[];
+}
+
+export interface SampleWorkspace {
+  note: string;
+  emails: SampleEmail[];
+  chats: SampleChat[];
+  meetings: SampleMeeting[];
 }
 
 export class Api {
@@ -210,6 +347,24 @@ export class Api {
   completeReview = (outcome: "finished" | "skipped") =>
     this.request<ControlsStatus>("POST", "/api/controls/review", { outcome });
   receipts = () => this.request<Receipt[]>("GET", "/api/controls/receipts");
+  retryReceipt = (id: string) => this.request<Receipt>("POST", `/api/controls/receipts/${encodeURIComponent(id)}/retry`);
+
+  learning = () => this.request<LearningStatus>("GET", "/api/learning");
+  startLearning = () => this.request<LearningStatus>("POST", "/api/learning/run");
+  deleteLearning = () =>
+    this.request<{ jobId: string; status: string; counts: Record<string, unknown> }>("DELETE", "/api/learning");
+  storedItems = (params: { ids?: string[]; channel?: "email" | "chat"; limit?: number; offset?: number } = {}) => {
+    const q = new URLSearchParams();
+    for (const id of params.ids ?? []) q.append("ids", id);
+    if (params.channel) q.set("channel", params.channel);
+    if (params.limit) q.set("limit", String(params.limit));
+    if (params.offset) q.set("offset", String(params.offset));
+    return this.request<{ items: StoredItem[]; total: number }>("GET", `/api/learning/items?${q.toString()}`);
+  };
+  persona = () => this.request<PersonaSnapshot>("GET", "/api/persona");
+  savePersonaSettings = (settings: PersonaSettings) =>
+    this.request<PersonaSettings>("PUT", "/api/persona/settings", settings);
+  sampleWorkspace = () => this.request<SampleWorkspace>("GET", "/api/sample/workspace");
 
   scoping = () => this.request<Scoping>("GET", "/api/admin/scoping");
   setExternalMode = (externalMode: Scoping["externalMode"]) =>

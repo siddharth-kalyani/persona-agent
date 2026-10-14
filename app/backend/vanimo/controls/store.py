@@ -4,6 +4,7 @@ so row-level security limits it to the caller's own rows (and their tenant's pol
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import text
@@ -62,8 +63,17 @@ async def lock_user_controls(conn: AsyncConnection, ref: UserRef) -> None:
 
 
 async def load_engine(
-    conn: AsyncConnection, vault: Vault, ref: UserRef, *, self_email: str | None = None
+    conn: AsyncConnection,
+    vault: Vault,
+    ref: UserRef,
+    *,
+    self_email: str | None = None,
+    extra_org_domains: Iterable[str] = (),
 ) -> ExclusionEngine:
+    """`extra_org_domains`: domains to treat as the organisation's own for this evaluation only.
+    The sample workspace passes its fictional company's domain, so in a real tenant using
+    "approved clients only" the sample colleagues aren't treated as unapproved externals (the
+    sample domain is never recorded in a real tenant's table)."""
     rules = (
         await conn.execute(text("select id, kind, key_hash from vanimo.exclusion_rules where status = 'active'"))
     ).all()
@@ -87,7 +97,10 @@ async def load_engine(
         excluded_domains={a.domain_hash: str(a.id) for a in accounts if a.mode == "excluded"},
         approved_domains=frozenset(a.domain_hash for a in accounts if a.mode == "approved"),
         external_mode=mode or "allow_all",
-        org_domains=frozenset(org_domains),
+        org_domains=frozenset(org_domains)
+        | frozenset(
+            vault.key_hash(ref.tenant_id, "domain", normalise_identifier("domain", d)) for d in extra_org_domains
+        ),
         self_email=self_email,
     )
 

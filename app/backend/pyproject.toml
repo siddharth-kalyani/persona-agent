@@ -44,6 +44,9 @@ ignore = ["S101"]  # assert is fine in tests and invariants
 "tests/**" = ["S105", "S106", "S108"]
 "vanimo/controls/neversend.py" = ["RUF001", "RUF005"]  # the look-alike table is look-alikes by design
 "tests/test_neversend_engine.py" = ["RUF001", "RUF003"]  # adversarial look-alike inputs
+"tests/test_redaction.py" = ["RUF001", "E501"]  # adversarial look-alike inputs
+"vanimo/redaction/detectors.py" = ["E501"]  # one detection rule per line
+"vanimo/sources/sample_content.py" = ["E501"]  # prose data: one message per line
 "migrations/**" = ["E501", "S608"]  # DDL built from module constants, never input
 
 [tool.pytest.ini_options]

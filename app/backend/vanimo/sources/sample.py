@@ -19,7 +19,17 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from vanimo.sources.base import Address, Chat, Event, Profile, SentHeader
+from vanimo.sources.base import (
+    Address,
+    Chat,
+    ChatMessage,
+    Event,
+    MessageContent,
+    MessageHeader,
+    Profile,
+    SentHeader,
+)
+from vanimo.sources.sample_content import AGENDAS, CHAT_SCRIPTS, ME, THREAD_SCRIPTS
 
 ORG_DOMAIN = "kestrel.example"
 SAMPLE_SEED = 20261013
@@ -113,7 +123,14 @@ def _chats(self_addr: Address, now: datetime) -> list[Chat]:
         Chat("smp-chat-009", "group", "All Kestrel India", with_self(*LARGE_GROUP), ago(6)),
         Chat("smp-chat-010", "group", None, with_self(REPORTS[0], PEERS[1], REPORTS[1]), ago(70)),  # unnamed
         Chat("smp-chat-011", "group", "Old Acme pilot", with_self(ACME[0], PEERS[3]), ago(24 * 90), hidden=True),
-        Chat("smp-chat-012", "meeting", "Acme weekly sync", with_self(*ACME, MANAGER), ago(26)),
+        Chat(
+            "smp-chat-012",
+            "meeting",
+            "Acme weekly sync",
+            with_self(*ACME, MANAGER),
+            ago(26),
+            join_url="https://teams.example/l/meetup-join/acme-06",  # the series' latest past occurrence
+        ),
         Chat("smp-chat-013", "group", "Monsoon pricing (confidential)", with_self(EXEC, MANAGER), ago(40)),
     ]
 
@@ -180,28 +197,72 @@ def _events(self_addr: Address, now: datetime) -> list[Event]:
     return events
 
 
-def _sent(self_addr: Address, now: datetime) -> list[SentHeader]:
+def _conversation(self_addr: Address, now: datetime) -> list[MessageContent]:
+    """Every email in the sample mailbox (sent and received), oldest first per thread.
+
+    Sent messages keep the IDs smp-msg-0001… in thread order, as the header pass has always seen
+    them; replies from others are smp-in-0001….
+    """
     rng = random.Random(SAMPLE_SEED)  # noqa: S311 - deterministic sample data, not security
-    sent: list[SentHeader] = []
-    n = 0
+    first = (self_addr.name or "You").split()[0]
+    out: list[MessageContent] = []
+    n_sent = n_in = 0
     for t_index, thread in enumerate(THREADS):
         conversation = f"smp-conv-{t_index + 1:03d}"
         start_days = rng.uniform(2, 110)
-        for m in range(thread.messages):
-            n += 1
+        script = THREAD_SCRIPTS[thread.subject]
+        history: list[MessageContent] = []
+        for m, (who, text) in enumerate(script):
             prefix = "" if m == 0 or thread.subject.lower().startswith(("re:", "fw:", "fwd:")) else "Re: "
-            sent.append(
-                SentHeader(
-                    id=f"smp-msg-{n:04d}",
-                    conversation_id=conversation,
-                    subject=prefix + thread.subject,
-                    sent_at=now - timedelta(days=start_days - m * rng.uniform(0.2, 2.0), minutes=rng.randint(0, 600)),
-                    to=thread.to,
-                    cc=thread.cc,
-                )
-            )
+            when = now - timedelta(days=start_days - m * rng.uniform(0.2, 2.0), minutes=rng.randint(0, 600))
+            body = text.format(first=first, full=self_addr.name or first)
+            quoted = "\n\n".join(f"From: {h.sender.name}\n{h.body}" for h in reversed(history[-3:]))
+            if who == ME:
+                n_sent += 1
+                msg = MessageContent(
+                    id=f"smp-msg-{n_sent:04d}", conversation_id=conversation, subject=prefix + thread.subject,
+                    sent_at=when, sender=self_addr, to=thread.to, cc=thread.cc, direction="sent", body=body,
+                    quoted=quoted,
+                )  # fmt: skip
+            else:
+                n_in += 1
+                them = thread.to[0]
+                msg = MessageContent(
+                    id=f"smp-in-{n_in:04d}", conversation_id=conversation,
+                    subject="Re: " + thread.subject.removeprefix("Re: "),
+                    sent_at=when, sender=them, to=(self_addr,), cc=(), direction="received", body=body, quoted=quoted,
+                )  # fmt: skip
+            history.append(msg)
+            out.append(msg)
+    return out
+
+
+def _sent(self_addr: Address, now: datetime) -> list[SentHeader]:
+    sent = [
+        SentHeader(id=m.id, conversation_id=m.conversation_id, subject=m.subject, sent_at=m.sent_at, to=m.to, cc=m.cc)
+        for m in _conversation(self_addr, now)
+        if m.direction == "sent"
+    ]
     sent.sort(key=lambda h: h.sent_at, reverse=True)
     return sent
+
+
+def _chat_messages(self_addr: Address, now: datetime, chat: Chat) -> list[ChatMessage]:
+    first = (self_addr.name or "You").split()[0]
+    by_name = {m.name: m for m in chat.members}
+    script = CHAT_SCRIPTS.get(chat.id, [])
+    last = chat.last_activity_at or now
+    out = []
+    for i, (who, text) in enumerate(script):
+        sender = self_addr if who == ME else by_name.get(who, Address(email="unknown@kestrel.example", name=who))
+        out.append(
+            ChatMessage(
+                id=f"{chat.id}-m{i + 1:02d}", chat_id=chat.id, sender=sender,
+                created_at=last - timedelta(minutes=7 * (len(script) - i - 1)),
+                text=text.format(first=first), from_me=who == ME,
+            )
+        )  # fmt: skip
+    return out
 
 
 def _self_address(email: str | None) -> Address:
@@ -242,3 +303,31 @@ class SampleSource:
 
     async def org_domains(self) -> frozenset[str]:
         return frozenset({ORG_DOMAIN})
+
+    async def direct_reports(self) -> list[Address]:
+        return list(REPORTS)
+
+    # --- content (callers must pass the onboarding gate) ----------------------------------
+    async def thread_headers(self, conversation_id: str) -> list[MessageHeader]:
+        return [
+            MessageHeader(m.id, m.conversation_id, m.sent_at, m.sender, m.to, m.cc, m.direction)
+            for m in _conversation(self.me, self._now)
+            if m.conversation_id == conversation_id
+        ]
+
+    async def message(self, message_id: str) -> MessageContent | None:
+        return next((m for m in _conversation(self.me, self._now) if m.id == message_id), None)
+
+    async def all_messages(self) -> list[MessageContent]:
+        """Sample-only convenience for the Sample workspace screen."""
+        return _conversation(self.me, self._now)
+
+    async def chat_messages(self, chat_id: str) -> AsyncIterator[ChatMessage]:
+        chat = next((c for c in _chats(self.me, self._now) if c.id == chat_id), None)
+        if chat:
+            for m in _chat_messages(self.me, self._now, chat):
+                yield m
+
+    async def event_agenda(self, event_id: str) -> str | None:
+        event = next((e for e in _events(self.me, self._now) if e.id == event_id), None)
+        return AGENDAS.get(event.subject or "") if event else None

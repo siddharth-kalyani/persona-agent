@@ -24,6 +24,7 @@ from vanimo.sources.base import (
     Chat,
     ChatMessage,
     Event,
+    InboxHeader,
     MessageContent,
     MessageHeader,
     Profile,
@@ -50,6 +51,8 @@ BLUEFIN = [_p("Karan Malhotra", "bluefinbank.example"), _p("Deepa Rao", "cards.b
 ORION = [_p("Emily Park", "orionhealth.example")]
 VENDOR = [_p("Tom Becker", "cloudnest.example")]
 FAMILY = Address(email="nisha.home.1987@gmail.com", name="Nisha (home)")
+# A look-alike of the vendor's domain ("c1oudnest" with a digit one): the payment-change (BEC) case.
+LOOKALIKE_VENDOR = _p("Tom Becker", "c1oudnest.example")
 EVERYONE_INTERNAL = [MANAGER, *REPORTS, *PEERS, EXEC]
 
 PROFILES = {
@@ -90,6 +93,10 @@ THREADS: list[_Thread] = [
     _Thread("Re: Travel to Pune next week", (PEERS[4],), (), 1),
     _Thread("Re: Security questionnaire for Bluefin", (BLUEFIN[1],), (PEERS[2],), 2),
     _Thread("Sprint 14 retro notes", (*REPORTS, PEERS[2]), (), 1),
+    # Waiting for your reply (M3 drafting): received only, appended so earlier IDs stay stable.
+    _Thread("Q4 resource plan before Thursday", (MANAGER,), (), 1),
+    _Thread("Acme go-live date?", (ACME[0],), (), 1),
+    _Thread("Updated bank details for CloudNest invoice", (LOOKALIKE_VENDOR,), (), 1),
 ]
 
 LARGE_GROUP = tuple(
@@ -211,6 +218,9 @@ def _conversation(self_addr: Address, now: datetime) -> list[MessageContent]:
         conversation = f"smp-conv-{t_index + 1:03d}"
         start_days = rng.uniform(2, 110)
         script = THREAD_SCRIPTS[thread.subject]
+        waiting = all(who != ME for who, _ in script)
+        if waiting:  # received only, waiting for your reply: the most recent mail in the inbox
+            start_days = 0.3 + 0.4 * (len(THREADS) - t_index)
         history: list[MessageContent] = []
         for m, (who, text) in enumerate(script):
             prefix = "" if m == 0 or thread.subject.lower().startswith(("re:", "fw:", "fwd:")) else "Re: "
@@ -229,7 +239,7 @@ def _conversation(self_addr: Address, now: datetime) -> list[MessageContent]:
                 them = thread.to[0]
                 msg = MessageContent(
                     id=f"smp-in-{n_in:04d}", conversation_id=conversation,
-                    subject="Re: " + thread.subject.removeprefix("Re: "),
+                    subject=("" if waiting and m == 0 else "Re: ") + thread.subject.removeprefix("Re: "),
                     sent_at=when, sender=them, to=(self_addr,), cc=(), direction="received", body=body, quoted=quoted,
                 )  # fmt: skip
             history.append(msg)
@@ -314,6 +324,14 @@ class SampleSource:
             for m in _conversation(self.me, self._now)
             if m.conversation_id == conversation_id
         ]
+
+    async def recent_received(self, top: int = 25) -> list[InboxHeader]:
+        latest: dict[str, MessageContent] = {}
+        for m in _conversation(self.me, self._now):
+            if m.direction == "received":
+                latest[m.conversation_id] = m  # oldest first per thread: the last one wins
+        newest = sorted(latest.values(), key=lambda m: m.sent_at, reverse=True)[:top]
+        return [InboxHeader(m.id, m.conversation_id, m.subject, m.sent_at, m.sender, m.to, m.cc) for m in newest]
 
     async def message(self, message_id: str) -> MessageContent | None:
         return next((m for m in _conversation(self.me, self._now) if m.id == message_id), None)

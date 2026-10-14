@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     # Models (D7: Claude on Bedrock only). Haiku 5.5 by default (founder, 2026-10-13); Sonnet 5.5 for premium drafts.
     model_default: str = "anthropic.claude-haiku-5-5"
     model_premium: str = "anthropic.claude-sonnet-5-5"
+    # Drafting (M3). "offline": the clearly labelled stand-in (no model, no AWS) until the AWS account
+    # exists (founder, 2026-10-13); "bedrock": Claude on Amazon Bedrock. Prod must use Bedrock.
+    drafter: Literal["offline", "bedrock"] = "offline"
+    # Sonnet drafts per user per day (the rest fall back to Haiku), and a per-user rate limit
+    # against runaway clients (denial of wallet, architecture §10).
+    premium_drafts_per_day: int = 20
+    drafts_per_minute: int = 10
+    drafts_per_day: int = 300
 
     # Key for opaque references to identifiers (audit targets, later exclusion rules) so
     # raw IDs and addresses are never stored. Per-tenant KMS-derived keys replace this in M1.
@@ -154,6 +162,8 @@ class Settings(BaseSettings):
                 missing.append("VANIMO_REF_HMAC_KEY")
             if self.vault_master_key.get_secret_value().startswith("local-dev-only"):
                 missing.append("VANIMO_VAULT_MASTER_KEY")
+            if self.env == "prod" and self.drafter != "bedrock":
+                missing.append("VANIMO_DRAFTER=bedrock (the offline drafter is a local/dev stand-in)")
             if missing:
                 raise ValueError(f"missing required settings: {', '.join(missing)}")
         return self

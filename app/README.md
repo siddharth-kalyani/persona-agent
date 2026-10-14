@@ -8,7 +8,7 @@ The build plan is `docs/03-mvp-plan-and-roadmap.md` §0 (solo track M0–M6). Th
 | `frontend/` | Web control center + Outlook add-in task pane | React 19, Vite, TypeScript, Fluent UI 9, MSAL |
 | `infra/` | One regional cell on AWS | AWS CDK (Python): VPC, Aurora PostgreSQL 18 (Serverless v2), ECS Fargate, internal ALB, CloudFront, S3, KMS, Secrets Manager |
 | `infra/entra/` | How to register the Entra app | — |
-| `surfaces/outlook-addin/` | Outlook add-in manifest (XML) | — |
+| `surfaces/outlook-addin/` | Outlook add-in manifest (XML); the task pane itself is in `frontend/src/addin/` | — |
 | `docker-compose.yml` | Local Postgres 18 (port 5433) | Docker |
 
 ## Sample data: works without Microsoft 365
@@ -94,6 +94,80 @@ Two-phase fetch: thread headers are read first; text is fetched only for allowed
 Purges: adding an exclusion deletes learned items whose lineage it now excludes. Adding a never-send word
 re-masks stored text, tokens and studio phrases. An admin client-scoping change queues a purge for every user
 in the tenant, which the sweeper runs. Style cards are rebuilt after each purge.
+
+## M3: Draft in Outlook
+
+Works the same on the sample workspace and on Microsoft 365. New: the **Draft** tab in the web app and the drafting
+task pane in Outlook (`frontend/src/addin/`). Both use one drafting service (`backend/vanimo/drafting/`). **Vanimo
+never sends:** you insert, copy or open a reply, read it, and send it yourself.
+
+**What it does:**
+- **Reply or new email in your voice.** In Outlook the task pane reads the open email's conversation and recipients;
+  on the web you pick a conversation from your inbox or start a new email. An instruction is optional for a reply
+  ("tell her I'll send the plan by Wednesday") and required for a new email.
+- **Audience chip.** "Writing to: your manager / a colleague / someone outside your organisation", from the same
+  rules the learner uses (directory manager and reports, your organisation's domains).
+- **Insert at the cursor** in a compose window (never replacing the quoted thread). From a message you're reading:
+  **Reply with this** opens Outlook's reply form with the draft in it.
+- **Pre-send checks** on every draft, and on your own text with **Check before sending** / **Check my edits**:
+
+  | Check | Severity |
+  |---|---|
+  | Dates, times, amounts and promises not in the email or your instruction (generated drafts only) | warn |
+  | Look-alike domain in a recipient or the sender (`c1oudnest.example` vs `cloudnest.example`) | **block** |
+  | Payment-detail change or urgent payment request (BEC) | **block** |
+  | First email to a domain, a personal address, an outsider added to an internal thread | warn |
+  | Greeting names someone not on To; a client account named in an email to a different client | warn |
+  | Regulated IDs or secrets in your text; never-send words in your text | warn |
+  | Fill-ins left for you (`[date]`, `[PAN]`), links or made-up contacts removed, hidden text in the email | info |
+
+  A **block** turns insert (and copy) off until you tick "I've checked this another way".
+- **Model router.** Claude Haiku 5.5 by default; Sonnet 5.5 for a new email to a client or your manager, a long reply,
+  or when you ask for higher quality, within a daily quota (`VANIMO_PREMIUM_DRAFTS_PER_DAY`, default 20). Rate limit
+  per user: `VANIMO_DRAFTS_PER_MINUTE` / `VANIMO_DRAFTS_PER_DAY`.
+- **Offline stand-in** (`VANIMO_DRAFTER=offline`, the local default) until the AWS account exists. No model: it turns
+  your instruction into first-person sentences in your register (for example "Kindly …" if you write that way to
+  clients), adds your greeting and sign-off, or writes a short acknowledgement with a fill-in when there is no
+  instruction. It is labelled everywhere it appears. A deployed cell always uses Bedrock, and prod refuses `offline`.
+
+**How a draft is made** (`vanimo/drafting/service.py`, architecture §7.2 S12):
+1. Rate limit, then the onboarding gate (no review, no draft).
+2. Thread **headers** only → the exclusion engine decides on the whole conversation: its thread rule, everyone in it,
+   everyone you're writing to. Excluded by you: refused, or a **one-off draft** made in memory and never stored.
+   Excluded by your organisation: always refused.
+3. Only then the last 4 messages' own words are fetched and redacted to L1 in memory, with your instruction and the
+   subject (never-send words → placeholders, Tier R → slots, people → tokens, verify, fail-closed).
+4. Persona pack: the style card for this audience (greeting, sign-off and length from your *emails*, since chats have
+   none), your studio settings, and up to 3 of your past messages. Every one is re-checked against the live rules
+   (a rule added a moment ago wins before the purge job runs). Same thread or same people: verbatim; anything else:
+   only its shape, so facts never move between audiences.
+5. The prompt (`vanimo/drafting/prompt.py`): rules → persona (marked for prompt caching) → audience → examples →
+   the thread as untrusted, spotlighted data → your instruction. The model writes only the body.
+6. Output gate (`vanimo/drafting/gate.py`): plain text; the model's own greeting and sign-off dropped; tokens not in
+   this prompt never revealed; links not in the email or instruction removed; a Tier R value blocks the draft; made-up
+   addresses and phones become fill-ins; never-send words masked.
+7. Your greeting + body + sign-off, re-hydrated for your screen: names back, never-send words as `[removed]` (or the
+   word itself if you allowed it in drafts).
+8. Pre-send checks (`vanimo/drafting/checks.py`), then the draft is stored as L1 (encrypted, with lineage) for the M4
+   edit loop. Logs carry codes, counts, model and timings only.
+
+**Purges reach drafts too:** a new exclusion deletes drafts whose lineage it covers, a new never-send word re-masks
+them, "Delete what Vanimo learned" deletes them, and an organisation scoping change queues users with drafts.
+
+### Try the Outlook add-in locally
+
+Outlook loads add-in pages over HTTPS only, and needs a manifest. With the Docker stack (or Option B) running:
+
+1. Create and trust a localhost certificate. One way (needs Node): `npx office-addin-dev-certs install`. It writes
+   `localhost.crt` and `localhost.key` to `%USERPROFILE%\.office-addin-dev-certs`.
+2. Start Vite with it (Option B frontend): set `VANIMO_DEV_HTTPS_CERT` and `VANIMO_DEV_HTTPS_KEY` to those two files,
+   then `npm run dev`. The app is now on `https://localhost:5173`.
+3. Render a manifest for that host: `py app/surfaces/outlook-addin/render_manifest.py https://localhost:5173 > manifest.xml`.
+4. In Outlook on the web: **Get Add-ins → My add-ins → Add a custom add-in → Add from file** → `manifest.xml`.
+   Your organisation may need to allow custom add-ins.
+5. Open an email (or a reply) and press **Vanimo**. Until the Entra app exists the pane offers local password sign-in;
+   a password account uses the **sample workspace**, so pick a sample conversation to reply to. The draft is inserted
+   into the real compose window.
 
 ## Guarantees built in from M0
 
@@ -208,17 +282,18 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 
 | Area | Target (`docs/02`) | M0 | Before external customers |
 |---|---|---|---|
-| API runtime | API Gateway + Lambda BFF, separate drafting service (§4.2) | One FastAPI service on ECS Fargate behind an internal ALB, reached only through CloudFront (VPC origin) | Revisit when drafting gets its own warm service (M3) |
+| API runtime | API Gateway + Lambda BFF, separate drafting service (§4.2) | One FastAPI service on ECS Fargate behind an internal ALB, reached only through CloudFront (VPC origin). ~~Revisit in M3~~ (M3): drafting runs inside this service; it is already warm | Split drafting into its own service when load or latency needs it (measure p95 in the pilot) |
 | Egress | No internet egress from the data plane; Graph/Bedrock allow-list (Network Firewall / DNS Firewall) (§4.2) | API tasks reach the internet through one NAT gateway | Add the egress allow-list and WAF |
 | Bedrock IAM | Scoped to allowed models | `bedrock-mantle:CreateInference` on `*`, limited to the cell region. The model allow-list is enforced in code | Scope to model ARNs once the ARN format is published |
 | Keys | Per-tenant CMKs, per-user data keys (§8.2) | One cell CMK | Per-tenant keys arrive with external tenants |
 | Entra | Read app + Compose app; certificate in KMS, no client secret (§5.1–5.2) | One app with a client secret in Secrets Manager (D8) | Split the apps; switch to a certificate |
-| Add-in CSP | Enforced | Report-only until the add-in spike confirms Outlook's hosts | Enforce in M3 |
+| Add-in CSP | Enforced | Report-only until the add-in spike confirms Outlook's hosts. Still report-only after M3: the spike needs the Entra app and a deployed cell, which don't exist yet | Enforce right after the add-in spike |
 | Stores | S3 Vectors, DynamoDB, Valkey | Aurora only | Added when M2/M4 need them |
 | Vault | Separate vault account; KMS per-tenant CMK with per-user data keys, so deleting a user's key crypto-shreds their data (§7.2 S8, §8.2) | AES-256-GCM keys derived (HKDF) from one master key in Secrets Manager | Move to KMS data keys before external customers |
 | Purge | Step Functions job across all stores (§6.5 X7) | In-process job. ~~M1 has no derived content yet~~ (superseded in M2): purges the L1 items, tokens, vectors and style cards by lineage, re-masks the Sources index, L1 text and studio phrases, and writes receipts | Move to Step Functions with the queue |
 | Redaction (M2 vs §7.2) | NER ensemble (Presidio/spaCy, GLiNER, IndicNER), contextual Tier C/S classifier, Guardrails, Macie backstops, vault service in a separate account | Deterministic detectors + checksum validators + the M365 header/directory gazetteer. Names that never appear in a header or the directory stay in L1. No Tier C/S classification (client sensitive words are stored but not yet applied). Token map in Aurora, vault-encrypted | Add NER + the contextual classifier (needs AWS, D7) before external customers |
-| Embeddings and drafting (M2) | Bedrock embeddings + S3 Vectors; Claude Haiku 5.5 drafter | Local hashing-trick vectors (`vanimo/learning/embed.py`) in Aurora; an offline drafter (`vanimo/llm/offline.py`), clearly labelled, used only for the evaluation baseline | Swap in Bedrock behind the same functions once the AWS account exists |
+| Embeddings and drafting (M2) | Bedrock embeddings + S3 Vectors; Claude Haiku 5.5 drafter | Local hashing-trick vectors (`vanimo/learning/embed.py`) in Aurora; an offline drafter (`vanimo/llm/offline.py`), clearly labelled, used only for the evaluation baseline. (M3: live drafting uses Claude through `vanimo/drafting/generate.py` when `VANIMO_DRAFTER=bedrock`, always in a deployed cell; locally a separate offline stand-in) | Swap in Bedrock embeddings behind the same functions once the AWS account exists |
+| Drafting (M3 vs §9.1–9.2, §9.4) | One streaming call, p95 first token ≤ 2.5 s; persona prefix padded to ≥ 4,096 tokens for caching; post-generation leakage judge; LLM revise on failed style checks | The output gate needs the whole text before anyone sees it, so the draft is returned whole: measure p95 *total* time instead. The persona block is marked for caching but not padded. No leakage judge yet (needs a model): cross-audience leakage is limited by sending other audiences' messages only as shapes. Revise runs once, only on failed checks. Pre-send checks are rules, not a model | Measure latency and caching on Bedrock in ap-south-1; add the leakage judge to the release gate before external customers |
 | Language (D6 vs M2) | English-only drafting in the MVP; Hindi/Hinglish wait for their own quality gate | M2 *labels* each message English, Hinglish or Hindi and keeps their style slices apart, so Hinglish chats don't skew the English cards. Nothing is drafted in Hinglish | Unchanged: Hinglish drafting needs its own quality gate (v1.5) |
 | Never-send matching (M1 review) | Research 12: invisible characters removed | Zero-width spaces are still removed, not treated as spaces, so splitting a word with them ("Fal​con") can't dodge the filter. The cost: two words glued by a zero-width space ("the​falcon") don't match a *word* (they do match a codename) | Revisit with ICU word segmentation |
 | Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |

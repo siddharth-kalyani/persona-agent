@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -12,6 +13,12 @@ export default defineConfig({
     // In docker compose the API is the `api` service, and Windows bind mounts need polling.
     proxy: { "/api": process.env.VANIMO_API_PROXY ?? "http://127.0.0.1:8000" },
     watch: process.env.VANIMO_DEV_POLL ? { usePolling: true, interval: 300 } : undefined,
+    // Outlook loads add-in pages over HTTPS only: to try the task pane against this dev server, point
+    // these at a trusted localhost certificate (app/README.md, "Try the Outlook add-in locally").
+    https:
+      process.env.VANIMO_DEV_HTTPS_CERT && process.env.VANIMO_DEV_HTTPS_KEY
+        ? { cert: readFileSync(process.env.VANIMO_DEV_HTTPS_CERT), key: readFileSync(process.env.VANIMO_DEV_HTTPS_KEY) }
+        : undefined,
   },
   build: {
     sourcemap: false,

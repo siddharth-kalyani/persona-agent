@@ -39,7 +39,8 @@ BRIDGE_CSP = (
     "frame-ancestors 'self'"
 )
 # Outlook add-in task pane: Office.js from Microsoft's CDN and framing by Outlook hosts. Report-only
-# until the M0 add-in spike confirms the exact hosts on every Outlook client; enforced from M3.
+# until the add-in spike confirms the exact hosts on every Outlook client. The spike needs the Entra app
+# and a deployed cell; enforce right after it.
 ADDIN_CSP = (
     "default-src 'self'; script-src 'self' https://appsforoffice.microsoft.com; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; connect-src 'self' https://login.microsoftonline.com; "
@@ -151,6 +152,8 @@ class AppStack(Stack):
                 "VANIMO_ENTRA_CLIENT_ID": cfg.entra_client_id,
                 "VANIMO_CORS_ORIGINS": "[]",  # same origin through CloudFront
                 "VANIMO_ENABLE_DIAGNOSTICS": "true",
+                # A deployed cell has Bedrock: drafts come from Claude, never the offline stand-in.
+                "VANIMO_DRAFTER": "bedrock",
                 # uvicorn trusts X-Forwarded-For only from the ALB (inside the VPC).
                 "FORWARDED_ALLOW_IPS": data.vpc.vpc_cidr_block,
             },

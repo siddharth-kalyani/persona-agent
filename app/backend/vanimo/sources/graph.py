@@ -19,6 +19,7 @@ from vanimo.sources.base import (
     Chat,
     ChatMessage,
     Event,
+    InboxHeader,
     MessageContent,
     MessageHeader,
     Profile,
@@ -102,7 +103,10 @@ class GraphSource:
 
     async def manager(self) -> Profile | None:
         mgr = await metadata.manager(self._g)
-        return Profile(mgr.get("displayName"), None, mgr.get("jobTitle")) if mgr else None
+        if not mgr:
+            return None
+        email = (mgr.get("mail") or mgr.get("userPrincipalName") or "").lower() or None
+        return Profile(mgr.get("displayName"), email, mgr.get("jobTitle"))
 
     async def recent_sent(self, top: int = 5) -> list[SentHeader]:
         return [self._header(m) for m in await metadata.recent_sent_headers(self._g, top=top)]
@@ -246,9 +250,27 @@ class GraphSource:
                         to=_addrs(m.get("toRecipients")),
                         cc=_addrs(m.get("ccRecipients")),
                         direction="sent" if me.email and sender.email == me.email else "received",
+                        is_draft=bool(m.get("isDraft")),
                     )
                 )
         return sorted(out, key=lambda h: h.sent_at)
+
+    async def recent_received(self, top: int = 25) -> list[InboxHeader]:
+        out: dict[str, InboxHeader] = {}
+        for m in await metadata.recent_inbox_headers(self._g, top=min(top * 2, 100)):
+            conv = m.get("conversationId") or m["id"]
+            if conv in out:
+                continue  # newest first: the first one seen is the latest of its conversation
+            out[conv] = InboxHeader(
+                id=m["id"],
+                conversation_id=conv,
+                subject=m.get("subject"),
+                received_at=_dt(m.get("receivedDateTime")) or EPOCH,
+                sender=_addr(m.get("from")) or Address(email=""),
+                to=_addrs(m.get("toRecipients")),
+                cc=_addrs(m.get("ccRecipients")),
+            )
+        return list(out.values())[:top]
 
     async def message(self, message_id: str) -> MessageContent | None:
         # HTML bodies (not Graph's text conversion), so hidden content is found and dropped here.
@@ -301,7 +323,7 @@ class GraphSource:
 
 # --- content reads (callers must pass the onboarding gate; see base.py) -------------------------
 CONTENT_FIELDS = "id,conversationId,subject,sentDateTime,from,toRecipients,ccRecipients,uniqueBody,body"
-THREAD_FIELDS = ("id", "conversationId", "sentDateTime", "from", "toRecipients", "ccRecipients")
+THREAD_FIELDS = ("id", "conversationId", "sentDateTime", "from", "toRecipients", "ccRecipients", "isDraft")
 IMMUTABLE_IDS = {"Prefer": 'IdType="ImmutableId"'}
 
 

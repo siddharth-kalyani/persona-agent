@@ -145,6 +145,15 @@ class ExclusionEngine:
         reasons += self._participants(header.participants)
         return Decision(tuple(dict.fromkeys(reasons)))
 
+    def conversation(self, conversation_id: str | None, people: Iterable[Address]) -> Decision:
+        """A live conversation being drafted in (M3): its thread rule, everyone in it and everyone
+        being written to. An address-less participant can't be checked, so it excludes."""
+        reasons: list[Reason] = []
+        if conversation_id and (rule := self._rule("thread", self.hasher("thread", conversation_id))):
+            reasons.append(Reason("user", "thread", rule.id))
+        reasons += self.people_reasons(list(people))
+        return Decision(tuple(dict.fromkeys(reasons)))
+
     def chat(self, chat: Chat, *, meeting_hash: str | None = None, series_hash: str | None = None) -> Decision:
         """`meeting_hash`/`series_hash`: the calendar event a meeting chat belongs to, if known."""
         chat_hash = self.hasher("chat", chat.id)

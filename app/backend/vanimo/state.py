@@ -15,6 +15,7 @@ from vanimo.auth.local import LoginThrottle
 from vanimo.auth.obo import OboClient
 from vanimo.config import Settings
 from vanimo.db.session import make_engine
+from vanimo.drafting.context import DirectoryCache, DraftThrottle
 from vanimo.llm.router import LlmClient, ModelRouter
 from vanimo.vault import Vault
 
@@ -28,6 +29,8 @@ class AppState:
     router: ModelRouter
     obo: OboClient | None = None
     login_throttle: LoginThrottle = field(default_factory=LoginThrottle)
+    draft_throttle: DraftThrottle = field(default_factory=DraftThrottle)
+    directory_cache: DirectoryCache = field(default_factory=DirectoryCache)
     _vault: Vault | None = field(default=None, repr=False)
     # Background work started by requests (scans, purge jobs); kept referenced until done.
     tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)

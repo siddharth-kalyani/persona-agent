@@ -266,6 +266,29 @@ THREAD_SCRIPTS: dict[str, list[tuple[str, str]]] = {
             "Hi team,\n\nRetro notes from today:\n- Keep: daily demo to the client.\n- Change: PR reviews within 4 hours.\n- Try: pairing on flaky tests.\n\nThanks,\n{first}",
         ),
     ],
+    # Received only, waiting for a reply (M3 drafting demos).
+    "Q4 resource plan before Thursday": [
+        (
+            THEM,
+            "Hi {first},\n\nCan you send me the updated Q4 resource plan before Thursday's review? Also flag if we "
+            "need any new hires for the Bluefin ramp-up.\n\nThanks,\nMeera",
+        ),
+    ],
+    "Acme go-live date?": [
+        (
+            THEM,
+            "Hi {first},\n\nOur leadership is asking for the go-live date for the new storefront. Can you confirm "
+            "it, and whether the payment gateway work is still on track?\n\nRegards,\nJohn",
+        ),
+    ],
+    "Updated bank details for CloudNest invoice": [
+        (
+            THEM,
+            "Hi {first},\n\nPlease note our bank details have changed. Kindly process the pending CloudNest renewal "
+            "payment of USD 18,400 to the new account by today EOD to avoid a service suspension.\n\n"
+            "Account: 50100234567891\nIFSC: HDFC0001234\n\nRegards,\nTom Becker\nCloudNest Billing",
+        ),
+    ],
 }
 
 # Chat histories by sample chat ID. "me" = you; other values are the member's display name.

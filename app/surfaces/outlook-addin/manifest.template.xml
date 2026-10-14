@@ -2,7 +2,8 @@
 <!--
   Vanimo Outlook add-in (XML manifest: covers new Outlook, classic Windows, Mac and the web; architecture §3.2).
   Do not edit {{HOST}} here; render with:  py render_manifest.py https://<host>  > manifest.xml
-  M0: a "hello" task pane for the add-in spike (insert at cursor + nested app authentication).
+  M3: the drafting task pane: draft a reply or a new email in your voice, insert it at the cursor (or open a
+  reply with it from a message you're reading), and check an email before sending. It never sends.
 -->
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -10,7 +11,7 @@
            xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
            xsi:type="MailApp">
   <Id>029b34d4-f545-4e3e-8ced-59a55e7fd2b6</Id>
-  <Version>0.1.0.0</Version>
+  <Version>0.3.0.0</Version>
   <ProviderName>Vanimo</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="Vanimo"/>
@@ -116,7 +117,7 @@
           <bt:String id="buttonLabel" DefaultValue="Vanimo"/>
         </bt:ShortStrings>
         <bt:LongStrings>
-          <bt:String id="buttonTip" DefaultValue="Open Vanimo to draft in your own voice."/>
+          <bt:String id="buttonTip" DefaultValue="Draft in your own voice and check an email before you send it."/>
         </bt:LongStrings>
       </Resources>
     </VersionOverrides>

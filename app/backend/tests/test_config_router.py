@@ -37,9 +37,10 @@ def test_deployed_envs_require_entra_and_keys() -> None:
     with pytest.raises(ValidationError) as exc:
         Settings(env="prod")
     msg = str(exc.value)
-    assert "VANIMO_ENTRA_TENANT_ID" in msg and "VANIMO_REF_HMAC_KEY" in msg
+    assert "VANIMO_ENTRA_TENANT_ID" in msg and "VANIMO_REF_HMAC_KEY" in msg and "VANIMO_DRAFTER" in msg
     ok = Settings(
         env="prod",
+        drafter="bedrock",
         entra_tenant_id="t",
         entra_client_id="c",
         entra_client_secret_arn="arn:aws:secretsmanager:x",

@@ -295,6 +295,107 @@ export interface SampleWorkspace {
   meetings: SampleMeeting[];
 }
 
+// --- Drafting (M3) ------------------------------------------------------------------------------
+export type Severity = "block" | "warn" | "info";
+
+export interface DraftCheck {
+  code: string;
+  /** block = insert stays off until you confirm; warn = read before sending; info = for your information. */
+  severity: Severity;
+  message: string;
+}
+
+export interface PersonRef {
+  email: string;
+  name?: string | null;
+}
+
+export interface DraftingStatus {
+  generator: "offline" | "bedrock";
+  label: string;
+  defaultModel: string;
+  premiumModel: string;
+  premiumLeftToday: number;
+  reviewDone: boolean;
+  learnedItems: number;
+  sourceKind: "graph" | "sample";
+}
+
+export interface DraftThread {
+  conversationId: string;
+  subject: string | null;
+  sender: PersonRef;
+  receivedAt: string;
+  excluded: boolean;
+  excludedBy: "you" | "organisation" | null;
+  reasons: string[];
+}
+
+export interface ThreadView {
+  conversationId: string;
+  subject: string | null;
+  messages: { sender: PersonRef; sentAt: string; fromMe: boolean; text: string }[];
+  participants: PersonRef[];
+}
+
+export interface DraftRequest {
+  mode: "reply" | "new";
+  surface?: "outlook" | "web";
+  conversationId?: string | null;
+  to?: PersonRef[];
+  cc?: PersonRef[];
+  subject?: string | null;
+  instruction?: string | null;
+  quality?: "auto" | "standard" | "premium";
+  replyAll?: boolean;
+  /** Draft once, in memory, in a conversation you excluded. */
+  oneOff?: boolean;
+}
+
+export interface Draft {
+  id: string | null;
+  text: string;
+  generator: "offline" | "bedrock";
+  label: string;
+  modelId: string;
+  tier: "default" | "premium";
+  routeReason: string;
+  audience: {
+    relationship: string;
+    label: string;
+    to: PersonRef[];
+    cc: PersonRef[];
+    internal: number;
+    external: number;
+  };
+  styleSlice: string | null;
+  learned: boolean;
+  basedOn: number;
+  exemplars: number;
+  checks: DraftCheck[];
+  insertAllowed: boolean;
+  oneOff: boolean;
+  timing: { totalMs: number; modelMs: number | null };
+}
+
+export interface DraftSummary {
+  id: string;
+  createdAt: string;
+  surface: string;
+  mode: string;
+  generator: string;
+  tier: string;
+  modelId: string | null;
+  relationship: string;
+  wordCount: number;
+  latencyMs: number | null;
+  checks: string[];
+  outcome: string | null;
+  rating: string | null;
+}
+
+export type DraftOutcome = "inserted" | "copied" | "opened_reply" | "discarded";
+
 export class Api {
   constructor(
     private readonly base: string,
@@ -365,6 +466,22 @@ export class Api {
   savePersonaSettings = (settings: PersonaSettings) =>
     this.request<PersonaSettings>("PUT", "/api/persona/settings", settings);
   sampleWorkspace = () => this.request<SampleWorkspace>("GET", "/api/sample/workspace");
+
+  draftingStatus = () => this.request<DraftingStatus>("GET", "/api/drafting/status");
+  draftingThreads = () => this.request<DraftThread[]>("GET", "/api/drafting/threads");
+  draftingThread = (conversationId: string) =>
+    this.request<ThreadView>("GET", `/api/drafting/thread?conversationId=${encodeURIComponent(conversationId)}`);
+  createDraft = (req: DraftRequest) => this.request<Draft>("POST", "/api/drafts", req);
+  checkText = (body: string, to: PersonRef[], cc: PersonRef[] = [], conversationId: string | null = null) =>
+    this.request<{ checks: DraftCheck[]; insertAllowed: boolean }>("POST", "/api/drafts/check", {
+      body,
+      to,
+      cc,
+      conversationId,
+    });
+  drafts = () => this.request<DraftSummary[]>("GET", "/api/drafts");
+  draftFeedback = (id: string, feedback: { outcome?: DraftOutcome; rating?: "good" | "bad" }) =>
+    this.request<void>("POST", `/api/drafts/${encodeURIComponent(id)}/feedback`, feedback);
 
   scoping = () => this.request<Scoping>("GET", "/api/admin/scoping");
   setExternalMode = (externalMode: Scoping["externalMode"]) =>

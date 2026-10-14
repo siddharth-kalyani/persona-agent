@@ -25,7 +25,10 @@ SENT_HEADER_FIELDS = (
 )
 # mail/userPrincipalName are used in memory only, to leave the user out of their own Sources index.
 ME_FIELDS = ("id", "displayName", "jobTitle", "department", "mail", "userPrincipalName")
-MANAGER_FIELDS = ("id", "displayName", "jobTitle")
+# The manager's address is used in memory only, to label messages to them ("writing to: your manager").
+MANAGER_FIELDS = ("id", "displayName", "jobTitle", "mail", "userPrincipalName")
+# Received mail for the drafting thread picker (M3): headers only.
+INBOX_HEADER_FIELDS = ("id", "conversationId", "subject", "receivedDateTime", "from", "toRecipients", "ccRecipients")
 
 
 def assert_metadata_only(fields: tuple[str, ...] | list[str]) -> str:
@@ -56,5 +59,18 @@ async def recent_sent_headers(graph: GraphClient, top: int = 5) -> list[dict[str
             "$orderby": "sentDateTime desc",
             "$top": str(top),
         },
+    )
+    return list(page.get("value", []))
+
+
+async def recent_inbox_headers(graph: GraphClient, top: int = 50) -> list[dict[str, Any]]:
+    page = await graph.get(
+        "me/mailFolders/inbox/messages",
+        {
+            "$select": assert_metadata_only(INBOX_HEADER_FIELDS),
+            "$orderby": "receivedDateTime desc",
+            "$top": str(top),
+        },
+        headers={"Prefer": 'IdType="ImmutableId"'},
     )
     return list(page.get("value", []))

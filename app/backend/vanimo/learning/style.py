@@ -95,7 +95,8 @@ def form(line: str) -> str:
         lambda m: m.group() if m.group().lower().strip(".") in _FORM_WORDS else "{name}",
         line,
     )
-    return " ".join(line.split())
+    # Spaces collapse; a line break stays ("Best regards,\n{me_full}" is a two-line sign-off).
+    return "\n".join(" ".join(part.split()) for part in line.split("\n") if part.strip())
 
 
 def greeting_of(l1: str) -> str | None:

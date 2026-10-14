@@ -145,10 +145,25 @@ class MessageHeader:
     to: tuple[Address, ...]
     cc: tuple[Address, ...]
     direction: Literal["sent", "received"]
+    # An unsent draft in the conversation (for example the reply being written right now).
+    is_draft: bool = False
 
     @property
     def participants(self) -> tuple[Address, ...]:
         return (self.sender, *self.to, *self.cc)
+
+
+@dataclass(frozen=True)
+class InboxHeader:
+    """The latest received message of a conversation, metadata only (the drafting thread picker)."""
+
+    id: str
+    conversation_id: str
+    subject: str | None
+    received_at: datetime
+    sender: Address
+    to: tuple[Address, ...] = ()
+    cc: tuple[Address, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -181,6 +196,10 @@ class WorkspaceSource(Protocol):
     async def direct_reports(self) -> list[Address]: ...
 
     async def thread_headers(self, conversation_id: str) -> list[MessageHeader]: ...
+
+    async def recent_received(self, top: int = 25) -> list[InboxHeader]:
+        """Conversations with recent received mail, newest first, one header each (metadata only)."""
+        ...
 
     # --- content (behind the onboarding gate) ---------------------------------------------
     async def message(self, message_id: str) -> MessageContent | None: ...

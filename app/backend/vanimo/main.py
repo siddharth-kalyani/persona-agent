@@ -16,10 +16,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from vanimo.api import admin_scoping, auth, controls, diagnostics, learning, me
+from vanimo.api import admin_scoping, auth, controls, diagnostics, drafting, learning, me
 from vanimo.auth.entra import AuthError
 from vanimo.config import Settings, get_settings
 from vanimo.controls.sweeper import sweep_forever
+from vanimo.drafting.context import DraftError
 from vanimo.graph.client import GraphError
 from vanimo.logs import configure_logging, get_logger
 from vanimo.state import AppState, build_state
@@ -103,6 +104,10 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
         headers = {"WWW-Authenticate": f'Bearer error="{exc.code}"'} if exc.status == 401 else None
         return JSONResponse({"error": exc.code}, status_code=exc.status, headers=headers)
 
+    @app.exception_handler(DraftError)
+    async def _draft_error(_: Request, exc: DraftError) -> JSONResponse:
+        return JSONResponse({"error": exc.code, **exc.extra}, status_code=exc.status)
+
     @app.exception_handler(GraphError)
     async def _graph_error(_: Request, exc: GraphError) -> JSONResponse:
         status = 403 if exc.status in (401, 403) else 502
@@ -141,6 +146,7 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     app.include_router(admin_scoping.router)
     app.include_router(diagnostics.router)
     app.include_router(learning.router)
+    app.include_router(drafting.router)
     return app
 
 

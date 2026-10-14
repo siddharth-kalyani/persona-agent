@@ -96,6 +96,12 @@ def _fold(s: str) -> str:
     return unicodedata.normalize("NFKC", s).casefold()
 
 
+def _name_parts(full_name: str) -> list[str]:
+    """The words of a name without titles and initials ("Dr. R. Anil Kumar" → Anil, Kumar)."""
+    words = [w for w in re.split(r"\s+", full_name.strip()) if w]
+    return [w for w in words if _fold(w).rstrip(".") not in _TITLES and not re.fullmatch(r"\w\.?", w)]
+
+
 class Redactor:
     """One user's redactor: their never-send matcher, gazetteer and token hasher."""
 
@@ -108,18 +114,34 @@ class Redactor:
     def _token(self, kind: str, value: str) -> str:
         return self.hasher(kind, value)[:8]
 
+    def person_base(self, person: Person, *, me: bool = False) -> str:
+        """A person's token stem ("⟦PERSON_3fa2c1d0" or "⟦ME"): add "⟧" (first name), ".full⟧" or ".last⟧".
+        The same stem the learner gives them, so live text and learned text agree."""
+        return "⟦ME" if me else f"⟦PERSON_{self._token('person', person.email or _fold(person.full_name))}"
+
+    def person_forms(self, person: Person, *, me: bool = False) -> dict[str, tuple[str, str]]:
+        """{"full" | "first" | "last": (token, surface)} for writing to someone (greetings, sign-offs)."""
+        base = self.person_base(person, me=me)
+        parts = _name_parts(person.full_name)
+        out = {"full": (base + ".full⟧", " ".join(parts) or person.full_name)}
+        if parts:
+            out["first"] = (base + "⟧", parts[0])
+        if len(parts) >= 2:
+            out["last"] = (base + ".last⟧", parts[-1])
+        return out
+
+    def email_token(self, email: str) -> str:
+        return f"⟦EMAIL_{self._token('email', email.lower())}⟧"
+
     def _name_patterns(self, g: Gazetteer) -> list[tuple[re.Pattern[str], str, str]]:
         """(pattern, token, original form) — longest forms first, so full names win."""
         forms: list[tuple[str, str]] = []  # (surface form, token)
         first_seen: dict[str, str] = {}
         everyone = ([(g.me, True)] if g.me else []) + [(p, False) for p in g.people]
         for person, is_me in everyone:
-            words = [w for w in re.split(r"\s+", person.full_name.strip()) if w]
-            key = person.email or _fold(person.full_name)
-            base = "⟦ME" if is_me else f"⟦PERSON_{self._token('person', key)}"
+            base = self.person_base(person, me=is_me)
             forms.append((person.full_name, base + ".full⟧"))
-            # Titles and initials ("Dr.", "R.") are not name forms; the name is what's left.
-            parts = [w for w in words if _fold(w).rstrip(".") not in _TITLES and not re.fullmatch(r"\w\.?", w)]
+            parts = _name_parts(person.full_name)
             if len(parts) >= 2 and " ".join(parts) != person.full_name:
                 forms.append((" ".join(parts), base + ".full⟧"))
             if len(parts) >= 2:

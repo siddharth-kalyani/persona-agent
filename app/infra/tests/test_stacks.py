@@ -112,6 +112,7 @@ def test_api_tasks_private_with_secrets_injected(templates: tuple[Template, Temp
     # Proxy headers are trusted only from inside the VPC (the ALB), never "*".
     assert "FORWARDED_ALLOW_IPS" in env and env["FORWARDED_ALLOW_IPS"] != "*"
     assert "VANIMO_ENABLE_PASSWORD_AUTH" not in env
+    assert env["VANIMO_DRAFTER"] == "bedrock"
     assert not any("PASSWORD" in n or "SECRET" in n for n in env_names)
     assert container["ReadonlyRootFilesystem"] is True
 

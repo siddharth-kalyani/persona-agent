@@ -127,6 +127,8 @@ export interface ClientAccount {
 export interface Scoping {
   externalMode: "allow_all" | "approved_only";
   accounts: ClientAccount[];
+  /** The organisation allows drafts in people's Outlook Drafts folder (each person still opts in). */
+  serverDrafts: boolean;
 }
 
 export type Outcome = "ok" | "warn" | "fail" | "skipped";
@@ -396,6 +398,76 @@ export interface DraftSummary {
 
 export type DraftOutcome = "inserted" | "copied" | "opened_reply" | "discarded";
 
+// --- Drafts queue, Outlook Drafts folder, edit loop (M4) ----------------------------------------
+export interface DraftingSettings {
+  outlookDrafts: boolean;
+  staleDays: number;
+  allowedByOrganisation: boolean;
+}
+
+export interface QueueItem {
+  conversationId: string;
+  subject: string | null;
+  sender: PersonRef;
+  receivedAt: string;
+  needsReply: boolean;
+  reason: string;
+  excluded: boolean;
+  excludedBy: string | null;
+  ccOnly: boolean;
+  draft: {
+    id: string;
+    createdAt: string;
+    placed: boolean;
+    placedState: string | null;
+    webLink: string | null;
+    outcome: string | null;
+    matchState: string;
+    blocked: boolean;
+  } | null;
+}
+
+export interface QueueView {
+  items: QueueItem[];
+  settings: DraftingSettings;
+  sourceKind: "graph" | "sample";
+}
+
+export interface Prepared {
+  draft: Draft;
+  placed: boolean;
+  webLink: string | null;
+  notPlacedReason: "off" | "organisation_off" | "blocked" | "not_saved" | null;
+}
+
+export type RuleStatus = "candidate" | "active" | "confirmed" | "rejected";
+
+export interface LearnedRule {
+  id: string;
+  scope: string;
+  kind: "greeting" | "sign_off" | "length" | "avoid" | "prefer" | "exclamations";
+  value: string;
+  text: string;
+  status: RuleStatus;
+  evidence: number;
+  contradictions: number;
+  support: number | null;
+  lastSeen: string;
+}
+
+export interface EditSummary {
+  matched: number;
+  sent_as_is?: number;
+  light_edit?: number;
+  heavy_edit?: number;
+  rewritten?: number;
+  sendWithoutEditRate?: number;
+  lightEditRate?: number;
+  medianEditShare?: number;
+  byRelationship?: Record<string, { matched: number; sendWithoutEditRate: number }>;
+  drafts: Record<string, number>;
+}
+
 export class Api {
   constructor(
     private readonly base: string,
@@ -483,11 +555,38 @@ export class Api {
   draftFeedback = (id: string, feedback: { outcome?: DraftOutcome; rating?: "good" | "bad" }) =>
     this.request<void>("POST", `/api/drafts/${encodeURIComponent(id)}/feedback`, feedback);
 
+  queue = () => this.request<QueueView>("GET", "/api/queue");
+  prepare = (conversationId: string, instruction: string | null = null) =>
+    this.request<Prepared>("POST", "/api/queue/prepare", { conversationId, instruction });
+  dismiss = (conversationId: string) => this.request<void>("POST", "/api/queue/dismiss", { conversationId });
+  tidy = () => this.request<Record<string, number>>("POST", "/api/queue/tidy");
+  draftingSettings = () => this.request<DraftingSettings>("GET", "/api/drafting/settings");
+  saveDraftingSettings = (outlookDrafts: boolean, staleDays: number) =>
+    this.request<DraftingSettings>("PUT", "/api/drafting/settings", { outlookDrafts, staleDays });
+  placeDraft = (id: string, text: string, confirmed = false) =>
+    this.request<{ placed: boolean; webLink: string | null }>("POST", `/api/drafts/${encodeURIComponent(id)}/place`, {
+      text,
+      confirmed,
+    });
+  markSent = (id: string, text: string) =>
+    this.request<{ outcome: string; editShare: number; edits: string[] }>(
+      "POST",
+      `/api/drafts/${encodeURIComponent(id)}/sent`,
+      { text },
+    );
+  syncEdits = () =>
+    this.request<{ matched: number; unmatched: number; excluded: number; skipped: boolean }>("POST", "/api/edits/sync");
+  editSummary = () => this.request<EditSummary>("GET", "/api/edits/summary");
+  learnedRules = () => this.request<LearnedRule[]>("GET", "/api/rules");
+  decideRule = (id: string, decision: "keep" | "reject") =>
+    this.request<LearnedRule>("PUT", `/api/rules/${encodeURIComponent(id)}`, { decision });
+
   scoping = () => this.request<Scoping>("GET", "/api/admin/scoping");
   setExternalMode = (externalMode: Scoping["externalMode"]) =>
     this.request<Scoping>("PUT", "/api/admin/scoping/policy", { externalMode });
   addAccount = (account: { name: string; mode: ClientAccount["mode"]; domains: string[]; sensitiveWords: string[] }) =>
     this.request<Scoping>("POST", "/api/admin/scoping/accounts", account);
+  setServerDrafts = (serverDrafts: boolean) => this.request<Scoping>("PUT", "/api/admin/scoping/drafts", { serverDrafts });
   removeAccount = (id: string) => this.request<Scoping>("DELETE", `/api/admin/scoping/accounts/${encodeURIComponent(id)}`);
   runDiagnostics = () => this.request<{ results: CheckResult[] }>("POST", "/api/admin/diagnostics/run");
   headerPass = () => this.request<HeaderPass>("POST", "/api/admin/diagnostics/header-pass");

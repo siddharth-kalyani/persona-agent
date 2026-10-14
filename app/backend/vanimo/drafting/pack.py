@@ -22,6 +22,7 @@ from vanimo.controls.engine import ExclusionEngine
 from vanimo.controls.neversend import Matcher
 from vanimo.db.session import UserRef
 from vanimo.drafting.context import LiveContext
+from vanimo.edits.rules import Rule, rules_for_draft
 from vanimo.learning import style
 from vanimo.learning.embed import cosine, embed
 from vanimo.learning.persona import (
@@ -73,6 +74,7 @@ class PersonaPack:
     settings: PersonaSettings
     exemplars: list[Exemplar]
     stored_tokens: dict[str, str] = field(default_factory=dict)  # owner's values for tokens in exemplars
+    rules: list[Rule] = field(default_factory=list)  # learned from edits (M4): active and confirmed
     excluded_items: int = 0  # items the live rules filtered out (logical exclusion before purge)
 
     @property
@@ -206,6 +208,7 @@ async def load_pack(
             value = vault.decrypt_user(ref.tenant_id, ref.user_id, r.value_enc, "l1_token") or ""
             stored[r.token] = matcher.mask(value)[0] or ""
     overall = cards.get(style.slice_key())
+    learned = await rules_for_draft(conn, vault, ref, source_kind, ctx.audience.relationship, matcher)
     return PersonaPack(
         card_key=card_key,
         card=_mask_card(card, matcher),
@@ -213,5 +216,6 @@ async def load_pack(
         settings=settings,
         exemplars=exemplars,
         stored_tokens=stored,
+        rules=learned,
         excluded_items=excluded,
     )

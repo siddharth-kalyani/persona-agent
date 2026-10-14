@@ -5,12 +5,16 @@ next fetch, retrieval or draft. These jobs do the physical work and leave a rece
 
 * exclusion added   — delete everything derived from the excluded sources: L1 items and drafts
                       whose lineage (thread/chat, participants, their domains) the engine now
-                      excludes, tokens no remaining item uses, and style cards (rebuilt from what's left).
+                      excludes (with their edit events and rule evidence; rules left without
+                      evidence go too), tokens no remaining item uses, and style cards (rebuilt
+                      from what's left).
 * never-send added  — re-mask every display field already stored: the Sources index, L1 text,
                       contexts and subjects (and their vectors), drafts, token values, studio
-                      phrases; style cards are rebuilt so no phrase keeps the word.
+                      phrases; learned rules holding the word are deleted; style cards are
+                      rebuilt so no phrase keeps the word.
 * learning deleted  — the user's "delete what you learned": every L1 item, token, style card,
-                      evaluation and draft is removed (studio settings are the user's own and are kept).
+                      evaluation, draft, edit event and learned rule is removed (studio settings
+                      and drafting settings are the user's own and are kept).
 * removals          — rules and words are revoked going forward; history is not restored.
 
 The target is ≤ 24 h; locally they finish in seconds.
@@ -26,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from vanimo.controls.store import bump_version, load_engine, load_matcher, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
+from vanimo.edits import rules
 from vanimo.learning.embed import embed
 from vanimo.learning.persona import PersonaSettings, mask_settings, rebuild
 from vanimo.logs import get_logger
@@ -130,6 +135,7 @@ async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuil
                     {"x": vault.encrypt_user(t, u, masked, "draft_text"), "id": row.id},
                 )
                 changed_drafts += 1
+        rules_deleted = await rules.scrub(conn, vault, ref, matcher)
         enc = (await conn.execute(text("select settings_enc from vanimo.persona_settings"))).scalar_one_or_none()
         if enc:
             current = PersonaSettings.model_validate_json(vault.decrypt_user(t, u, enc, "persona") or "{}")
@@ -143,6 +149,7 @@ async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuil
         "l1_items_rescrubbed": changed_items,
         "tokens_rescrubbed": changed_tokens,
         "drafts_rescrubbed": changed_drafts,
+        "rules_deleted": rules_deleted,
     }
 
 
@@ -190,9 +197,19 @@ async def purge_excluded_learning(
             .lineage([(p["p"], list(p["d"])) for p in d.people], thread_hash=d.thread_hash)
             .excluded
         ]
+        rules_before = (await conn.execute(text("select count(*) from vanimo.style_rules"))).scalar_one()
         if doomed_drafts:
+            # Their edit events and rule evidence go with them (foreign keys); rules are re-counted.
             await conn.execute(text("delete from vanimo.drafts where id = any(:ids)"), {"ids": doomed_drafts})
-    return {"l1_items_deleted": len(doomed), "tokens_deleted": tokens_deleted, "drafts_deleted": len(doomed_drafts)}
+        if doomed_drafts or doomed:
+            await rules.recount(conn, vault, ref)
+        rules_after = (await conn.execute(text("select count(*) from vanimo.style_rules"))).scalar_one()
+    return {
+        "l1_items_deleted": len(doomed),
+        "tokens_deleted": tokens_deleted,
+        "drafts_deleted": len(doomed_drafts),
+        "rules_deleted": rules_before - rules_after,
+    }
 
 
 async def gc_tokens(conn: AsyncConnection, vault: Vault, ref: UserRef) -> int:
@@ -223,7 +240,7 @@ async def delete_learning(engine: AsyncEngine, ref: UserRef) -> dict[str, int]:
         )
         out["learning_runs_cancelled"] = cancelled.rowcount
         await bump_version(conn, ref)
-        for table in ("l1_items", "l1_tokens", "style_cards", "eval_runs", "drafts"):
+        for table in ("l1_items", "l1_tokens", "style_cards", "eval_runs", "drafts", "style_rules"):
             result = await conn.execute(text(f"delete from vanimo.{table}"))  # noqa: S608
             out[f"{table}_deleted"] = result.rowcount
     return out

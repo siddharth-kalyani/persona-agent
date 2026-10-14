@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import type { PersonaSettings, PersonaSnapshot, StyleCard } from "../../api/client";
 import { useApi } from "../../api/context";
 import { errorText } from "../Home";
+import { EditsCard } from "./EditsCard";
 
 const useStyles = makeStyles({
   stack: { display: "grid", gap: tokens.spacingVerticalL },
@@ -222,6 +223,7 @@ export function Persona() {
           {saved && <Caption1>Saved. Never-send words in phrases are stored as placeholders.</Caption1>}
         </div>
       </Card>
+      <EditsCard />
       {metrics && (
         <Card>
           <CardHeader

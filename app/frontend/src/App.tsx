@@ -12,6 +12,7 @@ import { MyData } from "./pages/controls/MyData";
 import { Setup } from "./pages/controls/Setup";
 import { Diagnostics } from "./pages/Diagnostics";
 import { Draft } from "./pages/drafting/Draft";
+import { Queue } from "./pages/drafting/Queue";
 import { Home } from "./pages/Home";
 import { SampleWorkspace } from "./pages/sample/SampleWorkspace";
 import { SignIn } from "./pages/SignIn";
@@ -57,7 +58,7 @@ export function App() {
   const location = useLocation();
   const ready = auth.signedIn && !auth.mustChangePassword;
   const dataSource = useDataSource(ready);
-  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft"];
+  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft", "/queue"];
   const tab = TAB_PATHS.find((p) => location.pathname.startsWith(p)) ?? "/";
 
   return (
@@ -71,6 +72,7 @@ export function App() {
             <Tab value="/learning">Learning</Tab>
             <Tab value="/persona">Persona</Tab>
             <Tab value="/draft">Draft</Tab>
+            <Tab value="/queue">Queue</Tab>
             <Tab value="/controls">My data</Tab>
             {auth.isAdmin && <Tab value="/admin/scoping">Client scoping</Tab>}
             {auth.isAdmin && <Tab value="/admin/diagnostics">Diagnostics</Tab>}
@@ -102,6 +104,7 @@ export function App() {
             <Route path="/learning" element={<Learning />} />
             <Route path="/persona" element={<Persona />} />
             <Route path="/draft" element={<Draft />} />
+            <Route path="/queue" element={<Queue />} />
             <Route path="/admin/scoping" element={auth.isAdmin ? <ClientScoping /> : <Navigate to="/" />} />
             <Route path="/admin/diagnostics" element={auth.isAdmin ? <Diagnostics /> : <Navigate to="/" />} />
             <Route path="/spikes/teams" element={auth.isAdmin ? <TeamsPrefill /> : <Navigate to="/" />} />

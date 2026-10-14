@@ -156,6 +156,7 @@ class LiveContext:
     decision: Decision
     one_off: bool
     me: Recipient
+    reply_to_id: str | None = None  # the message a reply answers (for a draft in the Outlook Drafts folder)
     suspicious: bool = False
     counts: dict[str, int] = field(default_factory=dict)
 
@@ -172,6 +173,25 @@ class LiveContext:
     def grounding(self) -> str:
         """Everything the draft may rely on (L1): the thread, the subject and the instruction."""
         return "\n".join([m.text for m in self.thread] + [self.subject or "", self.instruction or ""])
+
+
+def build_redactor(
+    matcher: Matcher,
+    hasher: Hasher,
+    directory: Directory,
+    people: Sequence[Address],
+    known_people: Sequence[Person] = (),
+) -> Redactor:
+    """The live redactor: the same gazetteer reach as the learner (directory, everyone in this
+    conversation, the Sources index), so live text and learned text get the same tokens."""
+    g = Gazetteer(me=directory.me)
+    for p in directory.people:
+        g.add(p.full_name, p.email)
+    for a in people:
+        g.add(a.name, a.email)
+    for person in known_people:
+        g.add(person.full_name, person.email)
+    return Redactor(matcher, g, hasher)
 
 
 def _in(domain: str, domains: frozenset[str]) -> bool:
@@ -290,14 +310,7 @@ async def gather(
     if decision.excluded and (decision.by_tenant or not one_off):
         raise refusal(decision)
 
-    g = Gazetteer(me=directory.me)
-    for p in directory.people:
-        g.add(p.full_name, p.email)
-    for a in [*thread_people, *to_list, *cc_list]:
-        g.add(a.name, a.email)
-    for person in known_people:
-        g.add(person.full_name, person.email)
-    redactor = Redactor(matcher, g, hasher)
+    redactor = build_redactor(matcher, hasher, directory, [*thread_people, *to_list, *cc_list], known_people)
     tokens: dict[str, str] = {}
     counts: dict[str, int] = {}
     suspicious = False
@@ -385,6 +398,8 @@ async def gather(
         decision=decision,
         one_off=one_off and decision.excluded,
         me=Recipient(Address(me, directory.me.full_name), me_forms, "⟦ME.full⟧"),
+        reply_to_id=next((h.id for h in reversed(headers) if h.sender.email.lower() != me), None)
+        or (headers[-1].id if headers else None),
         suspicious=suspicious,
         counts=counts,
     )

@@ -22,6 +22,7 @@ import {
   Textarea,
   Title3,
   tokens,
+  Switch,
 } from "@fluentui/react-components";
 import { useEffect, useState } from "react";
 import type { ClientAccount, Scoping } from "../../api/client";
@@ -102,6 +103,22 @@ export function ClientScoping() {
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
+      <Card>
+        <CardHeader
+          header={<Text weight="semibold">Drafts in mailboxes</Text>}
+          description={
+            <Caption1>
+              Lets people choose to have reply drafts put in their Outlook Drafts folder (each person opts in; Vanimo
+              never sends). Turning it off stops new ones; drafts already there stay until people delete them.
+            </Caption1>
+          }
+        />
+        <Switch
+          checked={scoping.serverDrafts}
+          onChange={(_, d) => void run(() => api.setServerDrafts(d.checked))}
+          label="Allow drafts in people's Outlook Drafts folder"
+        />
+      </Card>
       <Card>
         <CardHeader header={<Text weight="semibold">External people</Text>} />
         <RadioGroup

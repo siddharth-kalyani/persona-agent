@@ -189,6 +189,33 @@ export function Draft() {
     }
   }
 
+  async function placeInOutlook() {
+    if (!draft?.id) return;
+    try {
+      const res = await api.placeDraft(draft.id, text, confirmed);
+      setNotice(res.webLink ? "In your Outlook Drafts folder." : "In your Drafts folder (simulated in the sample workspace).");
+    } catch (e) {
+      setError(draftErrorText(e));
+    }
+  }
+
+  async function markSent() {
+    if (!draft?.id) return;
+    try {
+      const res = await api.markSent(draft.id, text);
+      const label = { sent_as_is: "sent as is", light_edit: "a light edit", heavy_edit: "a heavy edit", rewritten: "a rewrite" }[
+        res.outcome
+      ];
+      const learnt = res.edits.filter((e) => e !== "content");
+      setNotice(
+        `Recorded as ${label ?? res.outcome} (${Math.round(res.editShare * 100)}% changed).` +
+          (learnt.length ? ` Vanimo will learn from your changes to: ${learnt.join(", ").replace("_", "-")}.` : ""),
+      );
+    } catch (e) {
+      setError(draftErrorText(e));
+    }
+  }
+
   async function rate(rating: "good" | "bad") {
     setRated(rating);
     if (draft?.id) await api.draftFeedback(draft.id, { rating }).catch(() => undefined);
@@ -347,6 +374,14 @@ export function Draft() {
                     Copy
                   </Button>
                   <Button onClick={() => void checkAgain()}>Check my edits</Button>
+                  {draft.id && target?.kind === "reply" && (
+                    <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void placeInOutlook()}>
+                      Put in my Drafts folder
+                    </Button>
+                  )}
+                  {draft.id && status.sourceKind === "sample" && (
+                    <Button onClick={() => void markSent()}>Mark as sent (sample)</Button>
+                  )}
                   <Button appearance="subtle" onClick={() => void discard()}>
                     Discard
                   </Button>

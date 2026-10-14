@@ -63,6 +63,16 @@ export function draftErrorText(err: unknown): string {
       return "The privacy check couldn't safely prepare this text for the model, so nothing was drafted.";
     case "model_unavailable":
       return "The drafting model didn't answer. Try again in a moment.";
+    case "server_drafts_off":
+      return "Your organisation doesn't allow drafts in mailboxes.";
+    case "already_placed":
+      return "This draft is already in your Drafts folder.";
+    case "confirmation_required":
+      return "Tick the confirmation under the warning first.";
+    case "reply_drafts_only":
+      return "Only replies can go to your Drafts folder; copy a new email instead.";
+    case "already_matched":
+      return "This draft was already marked as sent.";
     case "db_unavailable":
       return "Vanimo is waking up. Try again in a few seconds.";
     default:

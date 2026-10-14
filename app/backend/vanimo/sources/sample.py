@@ -15,6 +15,7 @@ the workspace always looks recent.
 from __future__ import annotations
 
 import random
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -23,10 +24,12 @@ from vanimo.sources.base import (
     Address,
     Chat,
     ChatMessage,
+    DraftItemState,
     Event,
     InboxHeader,
     MessageContent,
     MessageHeader,
+    PlacedDraft,
     Profile,
     SentHeader,
 )
@@ -345,6 +348,18 @@ class SampleSource:
         if chat:
             for m in _chat_messages(self.me, self._now, chat):
                 yield m
+
+    # --- drafts "in the mailbox": the sample Drafts folder is Vanimo's own record of placed drafts
+    async def create_reply_draft(self, message_id: str, text: str, *, reply_all: bool) -> PlacedDraft:
+        if not any(m.id == message_id for m in _conversation(self.me, self._now)):
+            raise ValueError("unknown sample message")
+        return PlacedDraft(id=f"smp-draft-{uuid.uuid4().hex[:12]}", web_link=None)
+
+    async def draft_state(self, item_id: str) -> DraftItemState:
+        return DraftItemState(exists=item_id.startswith("smp-draft-"), is_draft=True, modified_at=None)
+
+    async def delete_draft(self, item_id: str) -> bool:
+        return item_id.startswith("smp-draft-")
 
     async def event_agenda(self, event_id: str) -> str | None:
         event = next((e for e in _events(self.me, self._now) if e.id == event_id), None)

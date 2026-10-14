@@ -70,12 +70,16 @@ class AccountOut(BaseModel):
 class ScopingOut(BaseModel):
     externalMode: ExternalMode
     accounts: list[AccountOut]
+    # Drafts may be put in people's Outlook Drafts folder (each person still opts in). D8: one app
+    # holds Mail.ReadWrite until the Read/Compose split; this is the organisation's switch meanwhile.
+    serverDrafts: bool = True
 
 
 async def _read(state: State, user: CurrentUser) -> ScopingOut:
     v, t = state.vault, user.tenant_id
     async with user_tx(state.engine, user) as conn:
-        mode = (await conn.execute(text("select external_mode from vanimo.tenant_policies"))).scalar_one_or_none()
+        policy = (await conn.execute(text("select external_mode, server_drafts from vanimo.tenant_policies"))).first()
+        mode = policy.external_mode if policy else None
         accounts = (await conn.execute(text("select * from vanimo.client_accounts order by created_at"))).all()
         domains = (await conn.execute(text("select account_id, domain_enc from vanimo.client_account_domains"))).all()
         words = (
@@ -87,6 +91,7 @@ async def _read(state: State, user: CurrentUser) -> ScopingOut:
     counts = {w.account_id: w.n for w in words}
     return ScopingOut(
         externalMode=mode or "allow_all",
+        serverDrafts=policy.server_drafts if policy else True,
         accounts=[
             AccountOut(
                 id=str(a.id),
@@ -137,6 +142,27 @@ async def set_policy(
         jobs = await _enqueue_tenant_purge(conn)  # learned data follows the new rules
         await audit.record(conn, user, f"admin.scoping.mode_{body.externalMode}", request_id=request.state.request_id)
     _start_tenant_jobs(state, user, jobs)
+    return await _read(state, user)
+
+
+class DraftsPolicyIn(BaseModel):
+    serverDrafts: bool
+
+
+@router.put("/drafts", response_model=ScopingOut)
+async def set_drafts_policy(
+    body: DraftsPolicyIn, _: AdminPrincipal, user: CurrentUser, state: State, request: Request
+) -> ScopingOut:
+    async with user_tx(state.engine, user, admin=True) as conn:
+        await conn.execute(
+            text(
+                "insert into vanimo.tenant_policies (tenant_id, server_drafts, updated_by) values (:t, :d, :u) "
+                "on conflict (tenant_id) do update set server_drafts = :d, updated_at = now(), updated_by = :u"
+            ),
+            {"t": user.tenant_id, "d": body.serverDrafts, "u": user.user_id},
+        )
+        action = "admin.server_drafts_on" if body.serverDrafts else "admin.server_drafts_off"
+        await audit.record(conn, user, action, request_id=request.state.request_id)
     return await _read(state, user)
 
 

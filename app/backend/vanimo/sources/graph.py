@@ -18,10 +18,12 @@ from vanimo.sources.base import (
     Address,
     Chat,
     ChatMessage,
+    DraftItemState,
     Event,
     InboxHeader,
     MessageContent,
     MessageHeader,
+    PlacedDraft,
     Profile,
     SentHeader,
 )
@@ -313,6 +315,36 @@ class GraphSource:
         e = await self._g.get(f"me/events/{_safe_id(event_id)}", {"$select": "body"})
         text, _ = _body_text(e.get("body"))
         return text or None
+
+    # --- drafts in the mailbox (M4) ---------------------------------------------------------
+    async def create_reply_draft(self, message_id: str, text: str, *, reply_all: bool) -> PlacedDraft:
+        # `comment` puts the text above the quoted thread and keeps the thread intact (a body
+        # replacement would drop it). Immutable IDs: the ID stays the same when the draft is sent.
+        action = "createReplyAll" if reply_all else "createReply"
+        d = await self._g.post(
+            f"me/messages/{_safe_id(message_id)}/{action}", json={"comment": text}, headers=IMMUTABLE_IDS
+        )
+        return PlacedDraft(id=d["id"], web_link=d.get("webLink"))
+
+    async def draft_state(self, item_id: str) -> DraftItemState:
+        try:
+            m = await self._g.get(
+                f"me/messages/{_safe_id(item_id)}",
+                {"$select": metadata.assert_metadata_only(("id", "isDraft", "lastModifiedDateTime"))},
+                headers=IMMUTABLE_IDS,
+            )
+        except GraphError as exc:
+            if exc.status == 404:
+                return DraftItemState(exists=False)
+            raise
+        return DraftItemState(True, bool(m.get("isDraft")), _dt(m.get("lastModifiedDateTime")))
+
+    async def delete_draft(self, item_id: str) -> bool:
+        state = await self.draft_state(item_id)
+        if not (state.exists and state.is_draft):
+            return False  # never delete something the user sent
+        await self._g.delete(f"me/messages/{_safe_id(item_id)}")
+        return True
 
     async def org_domains(self) -> frozenset[str]:
         org = await self._g.get("organization", {"$select": "verifiedDomains"})

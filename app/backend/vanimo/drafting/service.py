@@ -28,7 +28,7 @@ from vanimo.drafting.context import Audience, DraftError, LiveContext, Mode, gat
 from vanimo.drafting.gate import compose, gate, render
 from vanimo.drafting.generate import OFFLINE_LABEL, BedrockGenerator, Generator, OfflineGenerator
 from vanimo.drafting.pack import load_pack
-from vanimo.drafting.prompt import build
+from vanimo.drafting.prompt import apply_rules, build
 from vanimo.gates import onboarding_state
 from vanimo.learning import style
 from vanimo.learning.backfill import controls_version
@@ -47,7 +47,7 @@ MAX_CHECK_CHARS = 20_000  # of your own words, after the quoted thread is cut of
 @dataclass
 class DraftInput:
     mode: Mode
-    surface: Literal["outlook", "web"]
+    surface: Literal["outlook", "web", "queue"]
     conversation_id: str | None = None
     to: list[Address] | None = None
     cc: list[Address] | None = None
@@ -222,7 +222,7 @@ async def create_draft(
     if gated.blocked:
         log.warning("draft.blocked", error_code=gated.blocked)
         raise DraftError("draft_blocked", 422, reason=gated.blocked)
-    l1 = compose(prompt.greeting, gated.body, prompt.sign_off)
+    l1 = compose(prompt.greeting, apply_rules(gated.body, prompt), prompt.sign_off)
     values = {**pack.stored_tokens, **ctx.tokens}
     shown, removed = render(
         l1, values=values, allowed_marks=prompt.marks, allowed_terms=allowed_terms, blocked_matcher=blocked_matcher
@@ -392,9 +392,9 @@ async def _store(
                 await conn.execute(
                     text(
                         "insert into vanimo.drafts (tenant_id, owner_user_id, source_kind, surface, mode, generator, "
-                        "tier, model_id, relationship, thread_hash, people, text_enc, checks, word_count, latency_ms) "
-                        "values (:t, :u, :k, :surface, :mode, :gen, :tier, :model, :rel, :th, "
-                        "cast(:people as jsonb), :txt, cast(:checks as jsonb), :wc, :ms) returning id"
+                        "tier, model_id, relationship, thread_hash, people, text_enc, checks, word_count, latency_ms, "
+                        "reply_to_enc) values (:t, :u, :k, :surface, :mode, :gen, :tier, :model, :rel, :th, "
+                        "cast(:people as jsonb), :txt, cast(:checks as jsonb), :wc, :ms, :rt) returning id"
                     ),
                     {
                         "t": t,
@@ -412,6 +412,9 @@ async def _store(
                         "checks": json.dumps([{"code": c.code, "severity": c.severity} for c in found]),
                         "wc": len(style._words(l1)),
                         "ms": int(total_ms),
+                        "rt": state.vault.encrypt_user(t, u, ctx.reply_to_id, "draft_reply_to")
+                        if ctx.mode == "reply"
+                        else None,
                     },
                 )
             ).scalar_one()

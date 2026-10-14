@@ -31,6 +31,7 @@ from vanimo.drafting.context import MAX_THREAD_MESSAGES, DraftError, _thread_hea
 from vanimo.drafting.generate import OFFLINE_LABEL
 from vanimo.drafting.service import (
     DraftInput,
+    DraftResult,
     _sample_domains,
     check_text,
     create_draft,
@@ -275,6 +276,10 @@ async def post_draft(
         one_off=body.oneOff,
     )
     result = await create_draft(state, user, source, self_email=me, req=req, request_id=request.state.request_id)
+    return draft_out(result)
+
+
+def draft_out(result: DraftResult) -> DraftOut:
     a = result.audience
     return DraftOut(
         id=result.id,

@@ -173,6 +173,70 @@ Outlook loads add-in pages over HTTPS only, and needs a manifest. With the Docke
    a password account uses the **sample workspace**, so pick a sample conversation to reply to. The draft is inserted
    into the real compose window.
 
+## M4: Drafts folder + edit loop
+
+New: the **Queue** tab, "Put in my Drafts folder" on the Draft page, **Learned from your edits** on the Persona tab,
+and the organisation's **Drafts in mailboxes** switch on the Client scoping tab. Vanimo still never sends.
+
+**Drafts queue** (`vanimo/drafting/queue.py`):
+- **What's waiting.** Recent conversations whose latest message is from someone else, that you haven't answered
+  since. This is worked out from headers only (your inbox and Sent Items). Conversations you marked "No reply
+  needed" are left out.
+- **Triage.** Automated senders and mail you're only copied on rank low. An excluded conversation is listed as
+  excluded and its text is never read. Then, after your review and for at most 12 allowed conversations, the latest
+  message's own words are read in memory to see whether it asks something (question, request, scheduling).
+- **Prepare.** "Prepare draft" (or "Prepare drafts for all", up to 5) runs the M3 drafting service on the
+  conversation.
+
+**Drafts in your Outlook Drafts folder:**
+- **Opt-in per person**, allowed by the organisation (`tenant_policies.server_drafts`, default on). D8: the one
+  internal app holds `Mail.ReadWrite` until the Read/Compose split.
+- **How it's created.** Graph `createReply` with the text as `comment`, so the quoted thread stays, with immutable
+  IDs. It shows in every Outlook client, including mobile.
+- **What goes in.** "Prepare" puts the draft as written. "Put in my Drafts folder" on the Draft page puts in the
+  text on your screen, including your edits; it isn't stored by Vanimo.
+- **Warnings.** A draft with a blocking warning (payment change, look-alike domain) only goes in after you tick the
+  confirmation.
+- **Tidying.** Each time you open the queue, placed drafts older than your setting (3 days by default) are deleted
+  only if they are still unsent and untouched since Vanimo wrote them. If you replied in the conversation yourself,
+  the unused draft is removed. Anything you edited or sent is never touched; delete only ever applies to unsent
+  drafts.
+
+**Edit loop** (`vanimo/edits/`, architecture §9.2, research R05 §2.3 and §7.7):
+1. **Match.** When you open the Queue or Persona tab, pending drafts are matched to your recent Sent Items:
+   - a reply matches the first message you sent in the same conversation after it;
+   - a new email matches a sent message to the same people that shares enough text;
+   - within 72 hours, otherwise the draft is marked unmatched.
+   Headers first: an excluded sent message ends the tracking and is never read. In the sample workspace, **Mark as
+   sent** on the Draft page uses your edited text instead.
+2. **Compare in L1** (the same tokens on both sides, so names are never edits). The outcome is one of:
+   - sent as is (≤ 5% of characters changed);
+   - light edit (≤ 25%);
+   - heavy edit;
+   - rewritten.
+3. **Style edits become rule observations** for that audience: greeting, sign-off, shorter or longer, exclamation
+   marks dropped, a filler phrase deleted ("hope you are having a great week"), one everyday word swapped ("please"
+   → "pls"). Edits touching dates, numbers, names, slots or longer passages are content: counted, never a rule.
+4. **Verify (PROSE-style, rules in the MVP).** A rule becomes **active** only after all of these:
+   - 3 observations from different drafts;
+   - more than twice as many supporting as contradicting, and the latest one supports it;
+   - your own sent mail to that audience agrees, where there are enough messages to judge.
+5. **Confirm.** On the Persona tab: **Keep** (confirmed) or **Not me** (rejected, never used or proposed again).
+   Unconfirmed rules stop being used 90 days after they were last seen.
+6. **Use.** Active and confirmed rules go into the prompt, override the greeting, sign-off and target length, and
+   are applied in code: word swaps (never inside a name, a placeholder or a `[slot]`), no exclamation marks, and a
+   short sentence holding a phrase you always delete is dropped.
+7. **Measure.** The send-without-edit rate (the north star, `docs/03` §5) and the light-edit rate show on the
+   Persona tab.
+
+**What is stored:** the outcome, the share of characters changed, the kinds of edit and the rules (their values
+vault-encrypted). The sent text is never stored.
+**Purges:**
+- an exclusion deletes the drafts its lineage covers, with their edit events and rule evidence, then re-counts the
+  rules; a rule with no evidence left is deleted;
+- a never-send word deletes any rule holding it;
+- "Delete what Vanimo learned" deletes everything above, but keeps your drafting settings.
+
 ## Guarantees built in from M0
 
 - **Tenant and user isolation in the database.**
@@ -300,6 +364,8 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Drafting (M3 vs §9.1–9.2, §9.4) | One streaming call, p95 first token ≤ 2.5 s; persona prefix padded to ≥ 4,096 tokens for caching; post-generation leakage judge; LLM revise on failed style checks | The output gate needs the whole text before anyone sees it, so the draft is returned whole: measure p95 *total* time instead. The persona block is marked for caching but not padded. No leakage judge yet (needs a model): cross-audience leakage is limited by sending other audiences' messages only as shapes. Revise runs once, only on failed checks. Pre-send checks are rules, not a model. No separate "audience card"
  (history with this person beyond the examples), and greeting and sign-off use your most common form rather than a
  sample from your distribution | Measure latency and caching on Bedrock in ap-south-1; add the leakage judge to the release gate before external customers |
+| Drafts in the Drafts folder (M4 vs §3.2, §9.1) | Proactive: a webhook on new mail → "needs reply" triage model → `createReply` in the background (Step Functions); stale-draft cleanup on a schedule | Made when you open the Queue or press Prepare, and tidied when you open it. A background job has no Microsoft 365 token (we keep no refresh tokens, and webhooks need a public endpoint), so nothing happens while you're away. Triage is rules (automated sender, To vs Cc, question/request/scheduling), not a model | After deploy: change notifications + a background token strategy (or the Compose app with application permissions), then proactive drafts for reply-likely mail |
+| Edit loop (M4 vs R05 §2.3, §7.7) | Haiku edit classifier, nightly LLM verification of rule candidates against held-out mail, Teams edits, add-in send-time capture, confidentiality deletions as negative ACL evidence | Rule-based edit taxonomy and deterministic verification against your sent mail; matching runs when you open the Queue or Persona tab; email only (Teams in M5); no send-time capture; content edits are counted only (there is no memory store to correct until M6) | Add the classifier and LLM verification with Bedrock; Teams edits in M5 |
 | Language (D6 vs M2) | English-only drafting in the MVP; Hindi/Hinglish wait for their own quality gate | M2 *labels* each message English, Hinglish or Hindi and keeps their style slices apart, so Hinglish chats don't skew the English cards. Nothing is drafted in Hinglish | Unchanged: Hinglish drafting needs its own quality gate (v1.5) |
 | Never-send matching (M1 review) | Research 12: invisible characters removed | Zero-width spaces are still removed, not treated as spaces, so splitting a word with them ("Fal​con") can't dodge the filter. The cost: two words glued by a zero-width space ("the​falcon") don't match a *word* (they do match a codename) | Revisit with ICU word segmentation |
 | Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |
@@ -320,6 +386,6 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | 2 | Add-in insert/read | Render the manifest and add it in Outlook (*Get add-ins → My add-ins → Add a custom add-in*). Test sign-in and insert in new Outlook, classic, web and Mac:<br>`py surfaces/outlook-addin/render_manifest.py https://<cloudfront-domain> > manifest.xml` |
 | 3 | Graph delta details, `MSIP_Labels` | Diagnostics → *Run checks*: `sent_headers` and `sent_delta_headers` rows. **`uniqueBody` in delta moves to M2:** it needs a message body, and no body is read before the user's review step. The quote-stripper fallback is planned anyway |
 | 4 | Transcript access as organiser/attendee | Diagnostics → `meeting_transcripts` row |
-| 5 | Drafts on Outlook mobile | Diagnostics → *Create test draft*, check the phone, then *Delete* |
+| 5 | Drafts on Outlook mobile | Diagnostics → *Create test draft*, check the phone, then *Delete*. **M4:** also check that a Queue draft (Graph `createReply` with `comment`) keeps its line breaks and shows inside the conversation on iOS/Android, and that an edited-then-sent draft keeps its immutable ID (the Queue shows "You sent it") |
 | 7 | Latency from Mumbai | Diagnostics → *Measure latency* (Haiku 5.5, Sonnet 5.5) |
 | 11 | Data-control Graph checks | Diagnostics:<ul><li>*Run checks*: chat roster, `chatType` and `topic` filters, `conversationId` on forwards, calendar</li><li>*Time the header pass*: how long the M1 metadata review takes to build</li></ul>Header-only subscriptions wait for M1, because they need a public webhook |

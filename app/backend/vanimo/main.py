@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from vanimo.api import admin_scoping, auth, controls, diagnostics, drafting, learning, me
+from vanimo.api import admin_scoping, auth, controls, diagnostics, drafting, edits, learning, me, queue
 from vanimo.auth.entra import AuthError
 from vanimo.config import Settings, get_settings
 from vanimo.controls.sweeper import sweep_forever
@@ -147,6 +147,8 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     app.include_router(diagnostics.router)
     app.include_router(learning.router)
     app.include_router(drafting.router)
+    app.include_router(queue.router)
+    app.include_router(edits.router)
     return app
 
 

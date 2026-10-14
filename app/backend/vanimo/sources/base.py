@@ -167,6 +167,23 @@ class InboxHeader:
 
 
 @dataclass(frozen=True)
+class PlacedDraft:
+    """A reply draft Vanimo put in the user's Outlook Drafts folder (M4)."""
+
+    id: str  # the mailbox item (immutable ID in Microsoft 365)
+    web_link: str | None  # opens it in Outlook on the web
+
+
+@dataclass(frozen=True)
+class DraftItemState:
+    """What became of a placed draft, from metadata only."""
+
+    exists: bool
+    is_draft: bool = False  # False once it was sent (the immutable ID follows it to Sent Items)
+    modified_at: datetime | None = None  # None when unknown (the sample workspace)
+
+
+@dataclass(frozen=True)
 class ChatMessage:
     id: str
     chat_id: str
@@ -207,3 +224,14 @@ class WorkspaceSource(Protocol):
     def chat_messages(self, chat_id: str) -> AsyncIterator[ChatMessage]: ...
 
     async def event_agenda(self, event_id: str) -> str | None: ...
+
+    # --- drafts in the user's mailbox (M4; Mail.ReadWrite; never sends) ----------------------
+    async def create_reply_draft(self, message_id: str, text: str, *, reply_all: bool) -> PlacedDraft:
+        """A reply (or reply-all) draft to `message_id`, with `text` above the quoted thread."""
+        ...
+
+    async def draft_state(self, item_id: str) -> DraftItemState: ...
+
+    async def delete_draft(self, item_id: str) -> bool:
+        """Deletes the item only while it is still an unsent draft. True if deleted."""
+        ...

@@ -73,6 +73,8 @@ class Prompt:
     sign_off: str  # L1, may be ""
     marks: set[str] = field(default_factory=set)  # every ⟦…⟧ mark the prompt contains
     dont: list[str] = field(default_factory=list)  # the user's "never use" phrases (L1)
+    prefer: list[tuple[str, str]] = field(default_factory=list)  # learned word swaps (old, new)
+    no_exclamations: bool = False
 
 
 def _top(dist: list[list[Any]]) -> str | None:
@@ -192,13 +194,37 @@ def _untrusted(text: str) -> str:
     return text.replace("<", "‹").replace(">", "›")  # noqa: RUF001 - deliberate look-alike brackets
 
 
+def _learned(pack: PersonaPack) -> dict[str, Any]:
+    """Learned rules as controls: greeting and sign-off forms, a length nudge, phrases to avoid,
+    word swaps, no exclamation marks (confirmed rules first: load order)."""
+    out: dict[str, Any] = {"avoid": [], "prefer": [], "length": 0, "no_exclamations": False, "lines": []}
+    for r in pack.rules:
+        if r.kind in ("greeting", "sign_off") and r.kind not in out:
+            out[r.kind] = [[r.value, 1.0]]
+        elif r.kind == "length" and not out["length"]:
+            out["length"] = -1 if r.value == "shorter" else 1
+        elif r.kind == "avoid":
+            out["avoid"].append(r.value)
+        elif r.kind == "prefer":
+            old, _, new = r.value.partition(" -> ")
+            out["prefer"].append((old, new))
+        elif r.kind == "exclamations":
+            out["no_exclamations"] = True
+        if r.kind not in ("greeting", "sign_off"):
+            out["lines"].append(f"- {r.text}")
+    return out
+
+
 def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
     card = pack.card
-    words, bounds = target(card, pack.settings.length)
+    learned = _learned(pack)
+    words, bounds = target(card, max(-2, min(2, pack.settings.length + learned["length"])))
     persona = [describe(card, title="How the writer writes to this kind of audience")]
     if pack.overall and pack.card_key != style.slice_key():
         persona.append(describe(pack.overall, title="How the writer writes in general"))
     persona.append(_settings_text(pack))
+    if learned["lines"]:
+        persona.append("Learned from the writer's own edits of earlier drafts:\n" + "\n".join(learned["lines"]))
     system = [
         {"type": "text", "text": SYSTEM_RULES},
         # The persona changes only when the user's cards or settings do: cached across drafts.
@@ -233,7 +259,8 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
         task += " Follow the writer's instruction."
     parts.append(f"{task} Aim for about {words} words (between {bounds[0]} and {bounds[1]}).")
     user = "\n".join(parts)
-    g, s = greeting(card, a.to), sign_off(card)
+    g = greeting({"greetings": learned["greeting"]} if "greeting" in learned else card, a.to)
+    s = sign_off({"sign_offs": learned["sign_off"]} if "sign_off" in learned else card)
     marks = set(L1_MARKS.findall(user)) | set(L1_MARKS.findall(g + "\n" + s))
     return Prompt(
         system=system,
@@ -243,8 +270,37 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
         greeting=g,
         sign_off=s,
         marks=marks,
-        dont=list(pack.settings.phrases_dont),
+        dont=[*pack.settings.phrases_dont, *learned["avoid"]],
+        prefer=learned["prefer"],
+        no_exclamations=learned["no_exclamations"],
     )
+
+
+_PROTECTED = re.compile(rf"{L1_MARKS.pattern}|\[[^\]\n]{{1,40}}\]")
+_PROTECTED_SPLIT = re.compile(f"({_PROTECTED.pattern})")
+
+
+def apply_rules(body: str, prompt: Prompt) -> str:
+    """Learned rules applied in code, whichever generator wrote the body: word swaps, no exclamation
+    marks, and a short sentence holding a phrase the writer always deletes is dropped."""
+    for old, new in prompt.prefer:
+
+        def swap(m: re.Match[str], new: str = new) -> str:
+            return new[:1].upper() + new[1:] if m.group()[:1].isupper() else new
+
+        pattern = re.compile(rf"(?<![\w⟦]){re.escape(old)}(?![\w])", re.I)
+        # Never inside a token, placeholder or [slot]: only the writer's own words change.
+        body = "".join(
+            piece if _PROTECTED.fullmatch(piece) else pattern.sub(swap, piece) for piece in _PROTECTED_SPLIT.split(body)
+        )
+    if prompt.no_exclamations:
+        body = body.replace("!", ".")
+    for phrase in prompt.dont:
+        sentences = re.findall(r"[^.!?\n]+[.!?]?\s*|\n", body)
+        kept = [x for x in sentences if not (phrase.lower() in x.lower() and len(x.split()) <= 12)]
+        if len(kept) < len(sentences) and "".join(kept).strip():
+            body = "".join(kept)
+    return body.strip()
 
 
 def style_problems(body: str, prompt: Prompt) -> list[str]:

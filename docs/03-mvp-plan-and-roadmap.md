@@ -2,6 +2,48 @@
 
 > **Date:** 2026-10-06 · **Assumptions:** 3–6 engineers, ~12-week MVP, M365 mid-market & enterprise buyers (beachhead: client-facing teams at IT-services/consulting firms in the US and India), work-only company-governed recorder. Architecture: `02-solution-architecture.md`; strategy: `01-product-strategy.md`. Research cited as [R01]…[R10].
 > Effort figures are estimates in **engineer-weeks (ew)**. v0.2 aligns scope and targets with the market track [R09] and the hardware track [R08]. **v0.3 (2026-10-09)** adds user data controls (F7) and moves India model residency out of the MVP (F6) [R12]. **2026-10-11:** records founder decision F8 — the MVP keeps plain relationship tables; company-level shared context and graph are planned for later phases [R11].
+> **2026-10-12 — build reality (founder decisions F9 and F10, `05` §1):** the MVP is built by the founder with Claude, inside a large IT organisation, starting with 2–3 internal users. **§0 below is now the build plan.** §1–§4 (team-based scoping, team shapes, 12-week plan) are kept unchanged for reference and for when a team is hired; §5 still defines quality, privacy and data-control exit criteria.
+
+---
+
+## 0. Build reality and the solo build track (2026-10-12) — read this first
+
+**What changed (F9):** the team is the founder plus Claude — no other engineers. The product is developed inside a large IT organisation, so nothing is registered externally for now (no Partner Center, publisher verification, marketplace listings, entities or design-partner LOIs), and budget, pricing and clients are parked. The first users are whoever the organisation grants access to — **2–3 people at first** — and each signs in and onboards themselves.
+
+**MVP start decisions (F10, founder answers to D1–D11):**
+
+| # | Decision | What it means for the build |
+|---|---|---|
+| D1 | Solo build track below, **plus Teams meeting memory in the MVP** | Meeting memory becomes milestone M6 (was "team ≥ 5 only", §2.2 #14) |
+| D2 | **One region first: India (`ap-south-1`)** | One cell; region is configuration, so the US cell (`us-east-1`) is added later without code changes (R-3 deferred). India inference uses Bedrock global profiles (F6) |
+| D3 | **Anyone the organisation grants access to can self-onboard** (2–3 people at first) | Multi-user from day 1: per-user isolation, row-level security and the onboarding flow are built properly, not hard-coded to one mailbox |
+| D4 | **Mode A — no raw content stored** (R-5 confirmed) | Only L1 masked text, derived features and vectors; Microsoft 365 stays the system of record |
+| D5 | **R-21 defaults accepted** (open question 14 a/b/c) | Person exclusions cover every chat the person is in (with an untick preview); one-off in-memory drafts in user-excluded threads; rule-based never-send variants only |
+| D6 | **English only** (open question 5) | Hindi/Hinglish wait for their own quality gate (v1.5) |
+| D7 | **Claude on Amazon Bedrock only** (open question 4) | ~~Haiku 4.5 default~~ **Claude Haiku 5.5 default** (founder, 2026-10-13: newer and much cheaper per token), Sonnet 5.5 for harder drafts; no other AI or STT vendors (meeting memory uses Microsoft's own transcripts). **The AWS account arrives after all milestones are built (founder, 2026-10-13):** until then, every model step runs on a clearly labelled offline stand-in behind the same interface, and quality is measured once Bedrock is connected |
+| D8 | **One Entra app**, single-tenant in the organisation's own tenant (modifies R-6) | One registration holds the read permissions and `Mail.ReadWrite`. **Split into a "Read" app and an opt-in "Compose" app before any external customer** |
+| D9 | **Full client/account scoping admin screen in the MVP** (R-20 confirmed) | Built in M1 on the same rule engine as user exclusions |
+| D10 | Product/code name: **Vanimo** (said *vuh-NEE-mo*; vāṇī "voice" + mo "memory"); **fallback: Tonemo** (tone + memo) | `vanimo` in code, the Entra app, the Teams app and the Outlook add-in. Working name until the organisation's legal team clears it (US + India, classes 9 and 42); the plan docs keep saying "PersonaAgent" until then. Screening notes in `05` §3 |
+| D11 | **Code lives in `app/` in this repository** | `app/backend` (FastAPI), `app/frontend` (React + Vite + TypeScript, Fluent UI, MSAL), `app/infra` (CDK in Python) |
+
+**Solo build track** (durations are rough guesses for one founder working with Claude; re-estimate after M0):
+
+| Milestone | Scope | Rough duration |
+|---|---|---|
+| **M0 — Foundations** | India cell from CDK (Python), region as config; single-tenant Entra app; FastAPI + React skeleton with Entra sign-in; Postgres with row-level security; CI; eval-harness skeleton; week-1 spikes (`05` §5: Teams prefill in existing chats, add-in insert/read, Graph delta details, transcript access, `createReply` on Outlook mobile, latency from Mumbai, data-control Graph checks) | 1–2 weeks |
+| **M1 — Choose what it learns** | Header-only pass → "Choose what PersonaAgent learns from" screen with impact preview and Finish/Skip gate (no bodies fetched before it) · never-send words · one exclusion rule engine · **admin client/account scoping screen (D9)** · purge on exclusion | 3–4 weeks |
+| **M2 — Learn safely** | Backfill of allowed sources only · core redaction L0→L1 (US + India checksum validators, secrets, NER with the directory gazetteer, vault) · thread/relationship labelling · style cards + exemplar index · **Persona Snapshot** + basic persona studio | 3–4 weeks |
+| **M3 — Draft in Outlook** | Outlook add-in (reply + new message at the cursor, audience chip) · drafting service + model router · pre-send checks (invented commitments, wrong recipient, BEC, regulated IDs) | 2–3 weeks |
+| **M4 — Drafts folder + edit loop** | Server-side drafts in the Drafts folder (also reaches Outlook mobile) · drafts queue · draft↔sent matching, diff, rule candidates, weekly confirmation | ~2 weeks |
+| **M5 — Commitments + Teams** | Commitments ledger v0 with nudges in the user's voice · Teams "Draft reply" message action and new-message button (prefill, or Copy if the spike fails) | ~3 weeks |
+| **M6 — Meeting memory (D1)** | Microsoft Teams transcripts (internal meetings with transcription on) → episodes → memory atoms → **recall Q&A with citations** in the web control center (also as a Teams tab); admin health checks for transcript access (plus the Teams application access policy if transcripts are read with application permissions) | 3–4 weeks |
+| | **Total** | **≈ 17–22 weeks** |
+
+**Kept even in the solo build (not negotiable):** no raw mail stored · ID masking before any model call · never-send gate · the human always sends · exclusions applied before any content is read · content-free logs · per-user isolation with canary tests · eval harness from M0.
+
+**Deferred from the MVP by the solo build:** the Teams personal agent (chat with the agent) → v1.5, so meeting Q&A lives in the web app/Teams tab for now · light EA/delegate mode → v1.5 · the US cell → when the first US users need it · Hindi/Hinglish → v1.5 · phone recorder → Phase 2 (unchanged) · super-admin console → operator scripts until there are external tenants · external pentest, legal/trust pack and SOC 2 readiness → before any external customer · everything external in §4 (Partner Center, publisher verification, LOIs, pricing, marketplace).
+
+**Access the founder arranges (not decisions):** the organisation's approval to process the first users' mail and chats with Claude on Bedrock; Entra app registration and admin consent (`Mail.Read`, `Mail.ReadWrite`, `Chat.Read`, `User.Read.All`, `Calendars.Read`, `OnlineMeetingTranscript.Read.All`); a Teams admin to enable meeting transcription (and an application access policy if we read transcripts with application permissions), and to sideload the Teams app and deploy the Outlook add-in; an AWS account that can deploy CDK, with Bedrock access to Claude Haiku 4.5 and Sonnet 5.5 from `ap-south-1`.
 
 ---
 
@@ -119,6 +161,8 @@ A fractional CISO/advisor for customer security reviews is strongly recommended 
 ---
 
 ## 6. Decisions to take before week 1
+
+> **2026-10-12:** answered for the solo build in §0 (F10) — recorder stays Phase 2; server-side drafts yes, but in **one** Entra app for now (D8); product name Vanimo, fallback Tonemo (D10). The rows below are unchanged.
 
 | Decision | Recommendation | Why |
 |---|---|---|

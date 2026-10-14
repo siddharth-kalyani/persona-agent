@@ -1,10 +1,10 @@
 # PersonaAgent — Decisions Log and Open Questions (v0.2)
 
-> **Date:** 2026-10-06, updated 2026-10-09 (F6, F7, R-21) and 2026-10-11 (F8, R-22, research backlog §7). Living document — update as decisions are taken. Research cited as [R01]…[R12] (`docs/research/`).
+> **Date:** 2026-10-06, updated 2026-10-09 (F6, F7, R-21) and 2026-10-11 (F8, R-22, research backlog §7), and 2026-10-12 (F9 build reality, F10 MVP start decisions D1–D11). Living document — update as decisions are taken. Research cited as [R01]…[R12] (`docs/research/`).
 
 ---
 
-## 1. Decisions already taken by the founders (2026-10-05/06, 2026-10-09, 2026-10-11)
+## 1. Decisions already taken by the founders (2026-10-05/06, 2026-10-09, 2026-10-11, 2026-10-12)
 
 | # | Decision | Implication |
 |---|---|---|
@@ -16,10 +16,14 @@
 | F6 | **No India model residency in the MVP** (2026-10-09) — "we will figure that part out later" | India tenants use the same model router as the US on Bedrock **global** profiles; data at rest still stays in the Mumbai cell; the DPA/trust centre disclose AI processing outside India; Indian BFSI/regulated tenants wait for the Phase-2 India residency option (in-country Haiku 4.5 / Sonnet 5 / Opus 5 since 29 Sep 2026). Supersedes R-4 for the MVP (`02-solution-architecture.md` §0 #5, §9.1) |
 | F7 | **User data controls in the MVP** (2026-10-09): a customer-facing screen where users search their DMs (by person), group chats (by name) and email (by address/ID) and exclude them from training entirely, plus a list of words that must never be sent | `02-solution-architecture.md` §6.5 and security invariant #8; metadata-first onboarding (content backfill waits for the user's review); canary release gates; MVP scope and effort in `03-mvp-plan-and-roadmap.md` §1–2. Design choices are in R-21 |
 | F8 | **Graph: keep the MVP simple; build company-level shared context later** (2026-10-11). The MVP keeps plain relationship tables and SQL joins (option A — no graph database, no GraphRAG). Later phases add company-level context, putting the graph/GraphRAG investment (option D) at company level so its cost is shared across the company | `02-solution-architecture.md` §8.6 (levels 1–4, six boundaries, Neptune triggers) and security invariant #9; `03` §7 (Phase 2 → Year 2); risks A7, C12, D10; open questions parked in §7 research backlog — **not researched yet, by founder choice** |
+| F9 | **Build reality** (2026-10-12): the team is the founder + Claude only; built inside a large IT organisation, so nothing is registered externally for now (no Partner Center, publisher verification, marketplace, entities, LOIs); budget, pricing and clients parked; stack FastAPI (Python) + React | Supersedes F3's team size **in practice**; `03` §0 is the build plan; §1–§4 of `03` kept for reference |
+| F10 | **MVP start decisions D1–D11** (2026-10-12): solo build track M0–M6 **with Teams meeting memory**; one region first (**India**, `ap-south-1`, region as config); anyone granted access self-onboards (2–3 people first); Mode A (no raw content); R-21 defaults accepted; English only; Claude on Bedrock only; **one** single-tenant Entra app (split before external customers); **full** client/account scoping admin screen; working product name **Vanimo** (fallback **Tonemo**), pending the organisation's legal clearance; code in `app/` of this repo | Full table and milestones in `03-mvp-plan-and-roadmap.md` §0. Confirms R-5, R-20, R-21; modifies R-2, R-3 (one region first) and R-6 (one app for now) |
 
 ---
 
 ## 2. Recommended decisions — please confirm or override
+
+> **Status 2026-10-12 (F10):** confirmed — R-5, R-20, R-21 (incl. open question 14 a/b/c), R-10 (no fine-tuning). Modified for the solo build — R-2 (solo track M0–M6 with meeting memory; recorder Phase 2), R-3 (India cell first, US later), R-6 (one Entra app until the first external customer). In progress — R-12 (working name Vanimo, fallback Tonemo; formal trademark clearance by the organisation's legal team still needed). Not needed before the build (parked) — R-7, R-8, R-9, R-11 (recorder parts), R-13 (pentest/SOC 2 before external customers), R-14–R-19, R-22 (already settled by F8). The rows below are unchanged.
 
 | # | Recommendation | Alternatives | Evidence |
 |---|---|---|---|
@@ -49,6 +53,10 @@
 ---
 
 ## 3. Open questions for the founders
+
+> **Answered 2026-10-12 (F9/F10):** 2 (register nothing for now), 4 (Claude on Bedrock only), 5 (English only), 6 (yes — `Mail.ReadWrite` available internally), 14 (R-21 defaults accepted). **Parked by founder choice:** 1, 3, 7, 8, 9, 11, 12, 13 (budget, clients, partners, entities, funding). 10 is answered too (working name below).
+
+> **Product name (question 10, 2026-10-12):** working name **Vanimo** (said *vuh-NEE-mo*; vāṇī "voice" + mo "memory"), **fallback Tonemo** (tone + memo). A knock-out screen (web search for products, companies and USPTO marks; RDAP/WHOIS for domains) found no software/AI use of either name. **Vanimo:** vanimo.ai and vanimo.io unregistered, vanimo.com held by a domain portfolio (inquiry page; vaanimo.com unregistered); the only other use is a town and a language in Papua New Guinea; no negative meaning found in Hindi, Spanish, Portuguese, Italian or English (faint "vano" = vain); India company check unverified. **Tonemo:** .ai and .io unregistered, .com registered (no live site); nearest names Tomo and TotemoTech. Rejected in the screen: Vamora ("mora" = arrears; one letter from Varmora), Parlo, Scrivo, Loquo, Saymo, Vocca, Remmi, Voxo, Replio, Ekko (existing products), Voxemo (near the VOXEO mark), Tonzo ("tonto"). **Still needed before any public use:** USPTO and IP India searches in classes 9 and 42, an MCA company-name check and the WIPO Global Brand Database — by the organisation's legal team. Nothing has been registered or bought.
 
 1. **Design partners:** which 3–5 organisations (1–2 US, 1–2 India)? Can your own company be partner #0 (dogfooding on its M365 tenant)?
 2. **Partner programs:** do you already have AWS Partner (Software Path / Marketplace seller) and Microsoft AI Cloud Partner Program accounts? (Speeds up Marketplace listings, co-sell, publisher verification.)

@@ -402,7 +402,7 @@ async def sample_workspace(
         )
         msgs = []
         async for cm in source.chat_messages(c.id):
-            sid = stored.get(hasher("item", f"chat:{cm.id}")) if cm.from_me else None
+            sid = stored.get(hasher("item", f"chat:{c.id}:{cm.id}")) if cm.from_me else None
             st = (
                 "received"
                 if not cm.from_me

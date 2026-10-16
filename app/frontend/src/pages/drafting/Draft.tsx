@@ -38,7 +38,7 @@ import {
   type ThreadView,
 } from "../../api/client";
 import { useApi } from "../../api/context";
-import { DraftView, draftErrorText, hasBlock, RateButtons } from "../../drafting/DraftView";
+import { DraftView, draftErrorText, hasBlock, RateButtons, recheck } from "../../drafting/DraftView";
 import { errorText } from "../Home";
 import { newChatLink } from "../TeamsPrefill";
 
@@ -188,12 +188,14 @@ export function Draft() {
   async function checkAgain() {
     if (!draft) return;
     try {
-      const res = await api.checkText(text, draft.audience.to, draft.audience.cc, draft.oneOff ? null : (target?.kind === "reply" ? target.thread.conversationId : null));
+      const chat = draft.channel === "chat" && target?.kind === "chat";
+      const conversation = draft.oneOff ? null : chat ? target.chat.chatId : target?.kind === "reply" ? target.thread.conversationId : null;
+      const res = await api.checkText(text, draft.audience.to, draft.audience.cc, conversation, chat ? "chat" : "email");
       // A block found when drafting (a payment-change request in the thread) still stands: re-checking
       // your edits can't see the thread of a one-off draft, so it must not clear it.
-      const blocks = draft.checks.filter((c) => c.severity === "block" && !res.checks.some((r) => r.code === c.code));
-      setChecks([...blocks, ...res.checks]);
-      setNotice(res.checks.length || blocks.length ? null : "No problems found in your text.");
+      const merged = recheck(draft.checks, res.checks);
+      setChecks(merged);
+      setNotice(merged.length ? null : "No problems found in your text.");
     } catch (e) {
       setError(draftErrorText(e));
     }
@@ -441,12 +443,12 @@ export function Draft() {
                   <Button appearance="primary" disabled={hasBlock(checks) && !confirmed} onClick={() => void copy()}>
                     Copy
                   </Button>
-                  {draft.channel === "chat" && prefill && (
+                  {draft.channel === "chat" && prefill && (draft.chatUsers?.length ?? 0) > 0 && (
                     <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void openInTeams()}>
                       Open in Teams with this text
                     </Button>
                   )}
-                  {draft.channel !== "chat" && <Button onClick={() => void checkAgain()}>Check my edits</Button>}
+                  <Button onClick={() => void checkAgain()}>Check my edits</Button>
                   {draft.id && target?.kind === "reply" && (
                     <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void placeInOutlook()}>
                       Put in my Drafts folder

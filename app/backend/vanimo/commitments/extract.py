@@ -11,7 +11,10 @@ here sees a name or an identifier. Two extractors behind one interface:
     span checked against the text in code.
 
 Due dates are always resolved here, in code, in the user's time zone (R05 §5.4: model temporal
-reasoning is weak): "by Thursday EOD", "tomorrow", "this week", "12 November", "in 10 mins".
+reasoning is weak): "by Thursday EOD" / "by EOD Friday", "tomorrow", "this week", "12 November",
+"in 10 mins". Conventions: a bare weekday that is today means next week's; "next Friday" is the Friday
+of next calendar week (Monday to Sunday); "this week" is its Friday (its Sunday when said at the
+weekend); "the weekend" is its Saturday; end of day is 18:00.
 """
 
 from __future__ import annotations
@@ -102,9 +105,11 @@ _PART = r"(?:\s+(?P<part>morning|afternoon|evening|night|eod|cob|end\s+of\s+(?:t
 _BY = r"(?:(?:by|before|on|till|until|latest\s+by|no\s+later\s+than)\s+)?"
 _DUE = re.compile(
     rf"(?P<delta>\bin\s+(?P<n>an?|\d{{1,3}})\s*(?P<unit>mins?|minutes|hrs?|hours?)\b)"
+    rf"|(?P<eodday>\b{_BY}(?:eod|cob|end\s+of\s+(?:the\s+)?day)\s+(?:on\s+)?(?P<wd2>{_WD})\b)"
     rf"|(?P<today>\b{_BY}(?:today|tonight|eod|cob|end\s+of\s+(?:the\s+)?day)\b)"
     rf"|(?P<tomorrow>\b{_BY}tomorrow{_PART}\b)"
-    rf"|(?P<week>\b{_BY}(?:(?P<which>this|next)\s+week|end\s+of\s+(?:the\s+)?week|(?:the\s+)?weekend)\b)"
+    rf"|(?P<weekend>\b{_BY}(?:this\s+|the\s+)?weekend\b)"
+    rf"|(?P<week>\b{_BY}(?:(?P<which>this|next)\s+week|end\s+of\s+(?:the\s+)?week)\b)"
     rf"|(?P<weekday>\b{_BY}(?P<this>this\s+|next\s+)?(?P<wd>{_WD})\b{_PART.replace('part', 'part2')}\b)"
     rf"|(?P<date>\b{_BY}(?:(?P<d1>\d{{1,2}})(?:st|nd|rd|th)?\s+(?P<m1>{_MO})\b|(?P<m2>{_MO})\s+(?P<d2>\d{{1,2}})"
     rf"(?:st|nd|rd|th)?\b))"
@@ -138,20 +143,25 @@ def due_date(phrase_match: re.Match[str], made_at: datetime, tz: ZoneInfo) -> da
         return _at(today, time(22) if "tonight" in g["today"].lower() else END_OF_DAY, tz)
     if g["tomorrow"]:
         return _at(today + timedelta(days=1), _part(g["part"]), tz)
+    monday = today - timedelta(days=today.weekday())
+    if g["weekend"]:
+        return _at(max(today, monday + timedelta(days=5)), END_OF_DAY, tz)
     if g["week"]:
-        friday = today + timedelta(days=(4 - today.weekday()) % 7)
         if g["which"] and g["which"].lower() == "next":
-            friday = today + timedelta(days=7 - today.weekday() + 4)
-        elif today.weekday() > 4:
-            friday = today
-        return _at(friday, END_OF_DAY, tz)
+            return _at(monday + timedelta(days=7 + 4), END_OF_DAY, tz)
+        # Said at the weekend, "this week" can only mean what's left of it.
+        return _at(monday + timedelta(days=4 if today.weekday() <= 4 else 6), END_OF_DAY, tz)
+    if g["eodday"]:
+        days = (_WEEKDAYS[g["wd2"].lower()] - today.weekday()) % 7 or 7
+        return _at(today + timedelta(days=days), END_OF_DAY, tz)
     if g["weekday"]:
-        days = (_WEEKDAYS[g["wd"].lower()] - today.weekday()) % 7
+        wd = _WEEKDAYS[g["wd"].lower()]
         prefix = (g["this"] or "").strip().lower()
+        if prefix == "next":  # that day of next calendar week
+            return _at(monday + timedelta(days=7 + wd), _part(g["part2"]), tz)
+        days = (wd - today.weekday()) % 7
         if days == 0 and prefix != "this":
             days = 7
-        if prefix == "next" and days < 7:
-            days += 7 if days == 0 else 0
         return _at(today + timedelta(days=days), _part(g["part2"]), tz)
     if g["date"]:
         day = int(g["d1"] or g["d2"])

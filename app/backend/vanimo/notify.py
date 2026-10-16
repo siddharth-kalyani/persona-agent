@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from vanimo.controls.store import load_engine
 from vanimo.db.session import UserRef, user_tx
+from vanimo.edits.rules import DECAY_DAYS
 from vanimo.logs import get_logger
 from vanimo.vault import Vault
 
@@ -87,7 +88,13 @@ async def due_notes(conn: AsyncConnection, vault: Vault, ref: UserRef, *, now: d
         due += 0 if excluded else 1
     if due:
         notes.append(Note("commitments_due", now.astimezone(zone).strftime("%Y-%m-%d"), due))
-    active = (await conn.execute(text("select count(*) from vanimo.style_rules where status = 'active'"))).scalar_one()
+    # Only rules still in use: an unconfirmed rule stops after 90 days without an observation (M4).
+    active = (
+        await conn.execute(
+            text("select count(*) from vanimo.style_rules where status = 'active' and last_seen > :cutoff"),
+            {"cutoff": now - timedelta(days=DECAY_DAYS)},
+        )
+    ).scalar_one()
     if active:
         year, week, _ = now.astimezone(zone).isocalendar()
         notes.append(Note("rules_to_confirm", f"{year}-W{week:02d}", active))
@@ -149,15 +156,21 @@ class TeamsNotifier:
         return resp.status_code in (200, 202, 204)
 
 
+MAX_ATTEMPTS = 3
+
+
 async def deliver(engine: AsyncEngine, ref: UserRef, notifier: TeamsNotifier | None) -> int:
-    """Pending notifications go to Teams (or are marked 'off' when Teams isn't available)."""
+    """Pending notifications (and failed ones, up to 3 tries) go to Teams; 'off' when Teams isn't
+    available or the person already read it in the app."""
     sent = 0
     async with user_tx(engine, ref) as conn:
         pending = (
             await conn.execute(
                 text(
-                    "select id, kind, count from vanimo.notifications where teams_state = 'pending' order by created_at"
-                )
+                    "select id, kind, count, read_at from vanimo.notifications where teams_state = 'pending' "
+                    "or (teams_state = 'failed' and teams_attempts < :max) order by created_at"
+                ),
+                {"max": MAX_ATTEMPTS},
             )
         ).all()
         if not pending:
@@ -167,7 +180,7 @@ async def deliver(engine: AsyncEngine, ref: UserRef, notifier: TeamsNotifier | N
         ).scalar_one_or_none()
         oid = (await conn.execute(text("select entra_oid from vanimo.users"))).scalar_one()
     for n in pending:
-        if notifier is None or allowed is False or not GUID.match(oid or ""):
+        if n.read_at is not None or notifier is None or allowed is False or not GUID.match(oid or ""):
             state = "off"
         else:
             try:
@@ -178,7 +191,11 @@ async def deliver(engine: AsyncEngine, ref: UserRef, notifier: TeamsNotifier | N
         sent += state == "sent"
         async with user_tx(engine, ref) as conn:
             await conn.execute(
-                text("update vanimo.notifications set teams_state = :s where id = :id"), {"s": state, "id": n.id}
+                text(
+                    "update vanimo.notifications set teams_state = :s, "
+                    "teams_attempts = teams_attempts + case when :s = 'off' then 0 else 1 end where id = :id"
+                ),
+                {"s": state, "id": n.id},
             )
     return sent
 

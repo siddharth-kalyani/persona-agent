@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from vanimo.sources.base import (
@@ -315,10 +315,11 @@ class SampleSource:
 
     async def chats(self) -> AsyncIterator[Chat]:
         for chat in _chats(self.me, self._now):
-            yield chat
+            yield replace(chat, last_message_at=chat.last_activity_at)  # sample activity is the last message
 
     async def chat(self, chat_id: str) -> Chat | None:
-        return next((c for c in _chats(self.me, self._now) if c.id == chat_id), None)
+        chat = next((c for c in _chats(self.me, self._now) if c.id == chat_id), None)
+        return replace(chat, last_message_at=chat.last_activity_at) if chat else None
 
     async def events(self, start: datetime, end: datetime) -> AsyncIterator[Event]:
         for event in _events(self.me, self._now):

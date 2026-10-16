@@ -268,10 +268,15 @@ Vanimo still never sends.
 **Commitments ledger** (`vanimo/commitments/`, research R05 §5.3–5.4):
 1. **Where promises come from.** Only your own sent emails and Teams chat messages, from allowed sources, already
    redacted to L1. They are found in two places:
-   - after every learning run, in what it learned (the last 60 days, work mail only);
+   - after every learning run, in what it learned (the last 60 days, work mail only). It looks at most 200 messages
+     per run, newest first; a message that already has promises isn't looked at again. With Bedrock each is a
+     model call, so the run keeps its heartbeat, and a failed call skips that message only;
    - each time you open the Commitments tab, in what you sent since the last look. This reads headers and rosters
-     first; an excluded message is never read. At most 60 messages per look, oldest first; the rest wait for the
-     next one. With no learning run yet, it looks at the last week.
+     first; an excluded message is never read. At most 60 messages per look, oldest first, cut only between two
+     different send times; the rest wait for the next one. With no learning run yet, it looks at the last week.
+   - **Teams chats:** Graph's chat list doesn't say when the last message was posted (its "last updated" is a
+     rename or a roster change, and the last-message preview carries text). So every allowed chat is asked for
+     messages since the last look, filtered by Graph, up to 200 chats per look.
 2. **What counts as a promise.** A first-person future with something to deliver: "I'll revert with the final
    runbook tomorrow", "we will add Lisa to the bridge", chat's "will share the metrics by Friday evening", "sharing
    mine in 10 mins". Never a question, a condition, a negation, a request to someone else or someone else's promise
@@ -282,20 +287,23 @@ Vanimo still never sends.
      falls back to the rules.
 3. **Due dates are worked out in code**, never by the model, in the cell's time zone (India: IST). Examples: "by
    Thursday EOD" (18:00), "tomorrow evening", "this week" (Friday), "next week", "12 November", "by the 31st", "in
-   10 mins". A weekday that is today means next week's.
+   10 mins", "by EOD Friday". A weekday that is today means next week's. "Next Friday" is the Friday of next calendar
+   week. "This week" said at the weekend means its Sunday, and "the weekend" means Saturday.
 4. **The list.** Grouped as overdue, due in the next day, later and no date given, with the sentence as you wrote
    it and who it was to.
    - "Looks done" when a later message of yours in the same thread or chat delivers it ("PFA the final cutover
      runbook"); you confirm.
    - Actions: **Done**, **Not a promise**, **Remind me tomorrow**, **Reopen**. Finding a promise again never
-     reopens or duplicates it.
+     reopens or duplicates it. A promise's key is an HMAC of its message and its sentence, not its position in an
+     extractor's answer.
    - The page shows how many of the promises you decided on were real (the ≥ 80 % precision target, `docs/03` §5).
 5. **Follow-up in your voice.** **Draft a follow-up** → "It's done", "Running late" (with a new date) or "Still on
    it". It is drafted where the promise was made: an email reply in the same conversation (copy it or put it in
    your Drafts folder) or a message in the same Teams chat. This goes through the drafting service, so the
    conversation is checked against your rules again first.
-6. **Stored:** the promise and its short form (L1, vault-encrypted), the due date, the status and lineage, and the
-   conversation or chat ID (encrypted). The message text isn't stored.
+6. **Stored:** the promise and its short form (L1, vault-encrypted, never-send words masked, also in what a model
+   wrote), the due date, the status and lineage, and the conversation or chat ID (encrypted). The message text isn't
+   stored. The list masks never-send words as they are now, before the scrub job reaches the stored text.
    - Exclusions purge promises by lineage, and the list hides them at once.
    - Never-send words re-mask them.
    - "Delete what Vanimo learned" deletes them.
@@ -309,16 +317,23 @@ Vanimo still never sends.
   - no greeting or sign-off is added, and your chat style card is used.
 - **Teams can't type into the message box**, so the dialog offers **Copy**. **Open the chat with this text** appears
   only when your admin turns it on, after spike 1 shows the prefill works in existing chats (Microsoft documents it
-  for new chats only). Channels aren't supported yet.
+  for new chats only), and only for 1:1 chats. For a group, Teams would open or create a chat with exactly those
+  people, which may not be the one you're answering. Channels aren't supported yet.
+- **Check my edits** works on Teams drafts and follow-ups too: your own words (regulated IDs, another client's
+  name, never-send words) and, in an allowed chat, a payment-change request in the last messages. Recipient rules
+  are for email only.
 - **The bot endpoint** (`/api/teams/messages`) answers only Teams' `fetchTask` and checks every request's Bot
-  Framework token: issuer, audience, the key's channel endorsement and `serviceUrl`; tokens from our own Entra
-  tenant are accepted too.
+  Framework token: issuer, audience, the key's channel endorsement and `serviceUrl`. A token from our own Entra
+  tenant counts only from a caller app ID listed in `VANIMO_TEAMS_BOT_CALLERS`, which is off by default: any app in
+  the tenant could get a token for the bot's ID. Turn it on with the Bot Connector's ID if Microsoft moves Teams to
+  Entra-issued tokens; check a real request first.
   - Teams puts the message's text in that request. It's never read, logged or stored.
   - The dialog gets the chat and message IDs in an encrypted 10-minute handle, valid only for the person it was
     made for, so no ID appears in a URL.
 - **The Vanimo tab** in Teams is the Commitments list, and it's where activity notifications link.
 - **The Draft page** lists your recent Teams chats too, the same way, for the web and the sample workspace.
-- **Teams edit loop.** A chat draft matches the first message you posted in that chat after it (72 h). Chat edits
+- **Teams edit loop.** A chat draft matches a message you posted in that chat after it (72 h) that shares enough
+  text with it, so "one sec" is never taken for the draft. A discarded draft isn't tracked (email too). Chat edits
   teach only phrases, word swaps and exclamation marks; greeting, sign-off and length rules come from email only.
   In the sample workspace, **Mark as sent** works for chat drafts too.
 
@@ -329,7 +344,11 @@ Vanimo still never sends.
 - **Where.** In the web app (Notifications in the header), and in your Teams activity feed when your organisation
   allows it and the Teams app is installed. This uses the app-only permission `TeamsActivity.Send`, because a
   person can't notify themselves (`infra/entra/README.md`).
-- **When.** The sweeper makes and delivers them every 5 minutes; opening the app brings yours up to date.
+- **When.** The sweeper makes and delivers them every 5 minutes, people notified longest ago first. Opening the app
+  brings yours up to date.
+  - One already read in the app isn't pushed to Teams.
+  - A failed Teams delivery is retried up to 3 times.
+  - Only rules still in use count as "to confirm".
 
 **Try it on the sample workspace:**
 1. Run Learning, then open **Commitments**: "Share the UAT access list" (to Karan, due Friday EOD), "Send you the

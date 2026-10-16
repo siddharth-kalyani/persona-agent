@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     web_url: str = "http://localhost:5173"
     teams_app_id: str = ""
     teams_bot_id: str = ""
+    # App IDs allowed to call the bot with an Entra-issued token (the Bot Connector, once Microsoft
+    # moves channels to Entra tokens; check a real request's `azp` first). Empty: Bot Framework tokens only.
+    teams_bot_callers: list[str] = Field(default_factory=list)
     graph_timeout_s: float = 20.0
 
     # Models (D7: Claude on Bedrock only). Haiku 5.5 by default (founder, 2026-10-13); Sonnet 5.5 for premium drafts.

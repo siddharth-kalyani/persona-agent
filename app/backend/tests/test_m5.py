@@ -76,12 +76,26 @@ def test_promises_are_the_writers_own_future_actions() -> None:
         ("I'll send it in 10 mins.", "in 10 mins", "2026-10-14 11:40"),
         ("I'll fix it by the 31st.", "by the 31st", "2026-10-31 18:00"),
         ("I'll send it today.", "today", "2026-10-14 18:00"),
+        ("I'll send it by EOD Friday.", "by EOD Friday", "2026-10-16 18:00"),  # not today's EOD
+        ("I'll send it by COB Monday.", "by COB Monday", "2026-10-19 18:00"),
+        ("I'll send it next Friday.", "next Friday", "2026-10-23 18:00"),  # next calendar week
+        ("I'll send it next Monday.", "next Monday", "2026-10-19 18:00"),
+        ("I'll send it this Friday.", "this Friday", "2026-10-16 18:00"),
+        ("I'll fix it over the weekend.", "the weekend", "2026-10-17 18:00"),
     ],
 )
 def test_due_dates_are_resolved_in_code(sentence: str, phrase: str, local: str) -> None:
     got_phrase, due = find_due(sentence, WED, IST)
     assert got_phrase == phrase
     assert due is not None and due.astimezone(IST).strftime("%Y-%m-%d %H:%M") == local
+
+
+def test_week_words_said_at_the_weekend() -> None:
+    saturday = datetime(2026, 10, 17, 6, 0, tzinfo=UTC)
+    _, due = find_due("We will revert this week.", saturday, IST)
+    assert due is not None and due.astimezone(IST).strftime("%a %d %H:%M") == "Sun 18 18:00"
+    _, due = find_due("I'll fix it this weekend.", saturday, IST)
+    assert due is not None and due.astimezone(IST).strftime("%a %d") == "Sat 17"
 
 
 def test_no_date_inside_a_mark_and_none_without_one() -> None:
@@ -282,11 +296,11 @@ async def test_follow_up_is_drafted_where_the_promise_was_made(client: httpx.Asy
     assert resp.status_code == 200, resp.text
     d = resp.json()
     assert d["channel"] == "email" and "Monday" in d["text"] and d["id"]
-    chat = next(c for c in items if c["channel"] == "chat")
+    chat = next(c for c in items if c["channel"] == "chat" and c["relationship"] == "external")  # Karan, 1:1
     resp = await client.post(f"/api/commitments/{chat['id']}/follow-up", json={"kind": "done"}, headers=h)
     assert resp.status_code == 200, resp.text
     d = resp.json()
-    assert d["channel"] == "chat" and d["chatUsers"]
+    assert d["channel"] == "chat" and d["chatUsers"] == ["karan.malhotra@bluefinbank.example"]
     # A chat message has no greeting or sign-off line added.
     assert not d["text"].rstrip().endswith(("Thanks,", "regards,")) and "Best regards" not in d["text"]
     drafts = (await client.get("/api/drafts", headers=h)).json()

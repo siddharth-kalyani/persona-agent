@@ -33,9 +33,9 @@ function teamsHost(inTeams: boolean): TeamsHost {
   if (!inTeams) return browserHost();
   return {
     openChat: async (users, message) => {
-      if (!chat.isSupported()) return browserHost().openChat(users, message);
-      if (users.length === 1) await chat.openChat({ user: users[0]!, message });
-      else await chat.openGroupChat({ users, message });
+      // 1:1 chats only (the API offers no others until spike 1 shows group prefill opens the right chat).
+      if (!chat.isSupported() || users.length !== 1) return browserHost().openChat(users, message);
+      await chat.openChat({ user: users[0]!, message });
     },
     close: () => {
       if (dialog.isSupported()) dialog.url.submit();

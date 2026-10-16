@@ -18,7 +18,7 @@ import {
 } from "@fluentui/react-components";
 import { useEffect, useState } from "react";
 import { type Api, ApiError, type Draft, type DraftChat, type DraftCheck, type TeamsDialogTarget } from "../api/client";
-import { DraftView, draftErrorText, hasBlock, RateButtons } from "../drafting/DraftView";
+import { DraftView, draftErrorText, hasBlock, RateButtons, recheck } from "../drafting/DraftView";
 import { newChatLink } from "../pages/TeamsPrefill";
 
 const useStyles = makeStyles({
@@ -130,6 +130,18 @@ export function TeamsDraft({
     }
   }
 
+  async function checkAgain() {
+    if (!draft || !chatId) return;
+    try {
+      const res = await api.checkText(text, draft.audience.to, [], draft.oneOff ? null : chatId, "chat");
+      const merged = recheck(draft.checks, res.checks);
+      setChecks(merged);
+      setNotice(merged.length ? null : "No problems found in your text.");
+    } catch (e) {
+      setError(draftErrorText(e));
+    }
+  }
+
   async function openChat() {
     if (!draft?.chatUsers?.length) return;
     try {
@@ -208,11 +220,12 @@ export function TeamsDraft({
               <Button appearance="primary" disabled={hasBlock(checks) && !confirmed} onClick={() => void copy()}>
                 Copy
               </Button>
-              {prefill && (
+              {prefill && (draft.chatUsers?.length ?? 0) > 0 && (
                 <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void openChat()}>
                   Open the chat with this text
                 </Button>
               )}
+              <Button onClick={() => void checkAgain()}>Check my edits</Button>
               {draft.id && <RateButtons rated={rated} onRate={(r) => { setRated(r); void api.draftFeedback(draft.id!, { rating: r }).catch(() => undefined); }} />}
             </>
           }

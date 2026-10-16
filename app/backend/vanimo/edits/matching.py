@@ -16,9 +16,10 @@ lineage (so excluding anyone on the real reply purges the evidence too) — neve
 Everything is written under the controls lock, and only if the user's controls didn't change
 since the sync began (§6.5 X4).
 
-Teams chat drafts (M5) match the first message the user posted in the same chat after the draft,
-the same way: the chat's roster is decided on first, then only the user's own messages since the
-oldest pending draft are read. Edits to chat drafts teach only channel-neutral rules (phrases,
+Teams chat drafts (M5) match a message the user posted in the same chat after the draft that shares
+enough text with it (chats are chatty: "one sec" is not the draft being sent), the same way otherwise:
+the chat's roster is decided on first, then only the user's own messages since the oldest pending
+draft are read. Edits to chat drafts teach only channel-neutral rules (phrases,
 word swaps, exclamation marks): greeting, sign-off and length are email habits.
 
 The sample workspace has no new sent mail, so its "Mark as sent" action feeds the user's edited
@@ -160,8 +161,9 @@ async def _pending(state: AppState, user: UserRef, source_kind: str) -> list[Any
                 await conn.execute(
                     text(
                         "select id, mode, channel, thread_hash, meeting_hash, series_hash, people, text_enc, "
-                        "created_at, relationship, checked_sent, chat_ref_enc "
-                        "from vanimo.drafts where match_state = 'pending' and source_kind = :k order by created_at"
+                        "created_at, relationship, checked_sent, chat_ref_enc from vanimo.drafts "
+                        "where match_state = 'pending' and source_kind = :k "
+                        "and outcome is distinct from 'discarded' order by created_at"
                     ),
                     {"k": source_kind},
                 )
@@ -340,7 +342,7 @@ async def _sync_chats(
         )
         done: set[Any] = set()
         for m in mine:
-            sh = hasher("sent", f"chat:{m.id}")
+            sh = hasher("sent", f"chat:{chat_id}:{m.id}")
             if sh in claimed:
                 continue
             open_drafts = [
@@ -349,11 +351,20 @@ async def _sync_chats(
             ]  # fmt: skip
             if not open_drafts:
                 continue
-            latest, older = open_drafts[-1], [d.id for d in open_drafts[:-1]]
             sent_l1 = _chat_l1(ctx, m.text, list(chat.members))
             if sent_l1 is None:
                 continue
-            draft_l1 = state.vault.decrypt_user(t, u, latest.text_enc, "draft_text") or ""
+            # The latest draft this message resembles; drafts made before it in this chat are superseded.
+            similar = [
+                (d, draft_l1)
+                for d in reversed(open_drafts)
+                if similarity(draft_l1 := state.vault.decrypt_user(t, u, d.text_enc, "draft_text") or "", sent_l1)
+                >= REWRITE_SIMILARITY
+            ]
+            if not similar:
+                continue  # an unrelated message ("one sec"): not this draft being sent
+            latest, draft_l1 = similar[0]
+            older = [d.id for d in open_drafts if d.created_at < latest.created_at]
             result = await _store_match(
                 state,
                 user,

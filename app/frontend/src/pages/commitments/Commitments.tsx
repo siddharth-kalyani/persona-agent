@@ -26,7 +26,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import type { Commitment, Draft, DraftCheck, FollowUpKind, Ledger } from "../../api/client";
 import { useApi } from "../../api/context";
-import { DraftView, draftErrorText, hasBlock } from "../../drafting/DraftView";
+import { DraftView, draftErrorText, hasBlock, recheck } from "../../drafting/DraftView";
 import { newChatLink } from "../TeamsPrefill";
 
 const useStyles = makeStyles({
@@ -151,6 +151,18 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
     }
   }
 
+  async function checkAgain(d: Draft) {
+    try {
+      // The follow-up's conversation is the promise's: the API knows it, the page doesn't (no ID here).
+      const res = await api.checkText(text, d.audience.to, d.audience.cc, null, d.channel === "chat" ? "chat" : "email");
+      const merged = recheck(d.checks, res.checks);
+      setChecks(merged);
+      setNotice(merged.length ? null : "No problems found in your text.");
+    } catch (e) {
+      setNotice(draftErrorText(e));
+    }
+  }
+
   async function place(d: Draft) {
     if (!d.id) return;
     try {
@@ -239,6 +251,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
                     Open in Teams with this text
                   </Button>
                 )}
+                <Button onClick={() => void checkAgain(draft.draft)}>Check my edits</Button>
                 {draft.draft.channel !== "chat" && draft.draft.id && (
                   <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void place(draft.draft)}>
                     Put in my Drafts folder

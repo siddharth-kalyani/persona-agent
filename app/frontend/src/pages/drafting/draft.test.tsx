@@ -152,7 +152,7 @@ describe("Draft page: Teams chats (M5)", () => {
       expect(create).toHaveBeenCalledWith(expect.objectContaining({ mode: "reply", channel: "chat", conversationId: "smp-chat-002" })),
     );
     expect(await screen.findByRole("button", { name: "Open in Teams with this text" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Check my edits" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Check my edits" })).toBeInTheDocument(); // chat edits are checked too
     expect(screen.queryByRole("button", { name: "Put in my Drafts folder" })).toBeNull();
   });
 });

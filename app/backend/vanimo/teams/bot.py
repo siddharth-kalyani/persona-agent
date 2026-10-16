@@ -15,8 +15,9 @@ identity, so no chat or message ID ever appears in a URL or a log.
 
 Incoming requests are authenticated as Bot Framework requires: a JWT from the Bot Connector service
 (issuer https://api.botframework.com, keys from login.botframework.com with the channel's
-endorsement, audience = our bot ID, serviceUrl claim = the activity's), or, as channels move to
-Entra-issued tokens, one from our own Entra tenant for the bot ID.
+endorsement, audience = our bot ID, serviceUrl claim = the activity's). As channels move to
+Entra-issued tokens, one from our own tenant for the bot ID is accepted only from a caller app ID
+listed in VANIMO_TEAMS_BOT_CALLERS (off by default: any app in the tenant could get such a token).
 """
 
 from __future__ import annotations
@@ -94,9 +95,14 @@ class BotAuth:
             if claims.get("serviceUrl") != activity.get("serviceUrl"):
                 raise AuthError("service_url_mismatch", 403)
         elif tenant and issuer in entra_issuers:
+            # Any app in our tenant can get a token for the bot's ID, so an Entra-issued token counts
+            # only from a caller we were told is the Bot Connector (VANIMO_TEAMS_BOT_CALLERS; empty: off).
             claims = self._decode(token, await self._entra.get(header["kid"]), bot_id, issuer)
-            if claims.get("tid") not in (None, tenant):
+            caller = claims.get("azp") or claims.get("appid")
+            if claims.get("tid") != tenant:
                 raise AuthError("wrong_tenant", 403)
+            if not caller or caller not in self._s.teams_bot_callers:
+                raise AuthError("unknown_bot_caller", 403)
         else:
             raise AuthError("invalid_issuer")
 

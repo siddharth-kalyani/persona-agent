@@ -81,7 +81,7 @@ class DraftResult:
     model_ms: float | None
     extra: dict[str, Any] = field(default_factory=dict)
     channel: str = "email"
-    chat_users: list[str] = field(default_factory=list)  # Teams: who "Open chat" opens it with
+    chat_users: list[str] = field(default_factory=list)  # Teams 1:1: who "Open chat" opens it with
 
     @property
     def insert_allowed(self) -> bool:
@@ -377,7 +377,9 @@ async def create_draft(
         total_ms=total_ms,
         model_ms=body.total_ms if generator.kind == "bedrock" else None,
         channel=ctx.channel,
-        chat_users=[r.address.email for r in ctx.audience.to] if ctx.channel == "chat" else [],
+        # "Open the chat with this text" only for 1:1 chats: for a group, Teams would open (or create) the
+        # chat with exactly those people, which may not be the chat being answered (until spike 1 says).
+        chat_users=[r.address.email for r in ctx.audience.to] if ctx.chat_type == "oneOnOne" else [],
     )
 
 
@@ -504,11 +506,16 @@ async def check_text(
     to: list[Address],
     cc: list[Address],
     conversation_id: str | None,
+    channel: Literal["email", "chat"] = "email",
 ) -> list[Check]:
     """Checks on what the user is about to send (their words, L0, in memory only). The thread is
     read only if the review is done and the conversation is allowed; an organisation-excluded
-    conversation gets the recipient checks only."""
+    conversation gets the recipient checks only. `channel="chat"`: a Teams message, where
+    `conversation_id` is the chat and its roster are the recipients."""
     from vanimo.redaction.parse import strip_quotes
+
+    if channel == "chat":
+        return await _check_chat(state, user, source, self_email=self_email, body=body, chat_id=conversation_id)
 
     limits = state.settings
     state.draft_throttle.check(
@@ -576,4 +583,69 @@ async def check_text(
     )
     if blocked_terms.count(own):
         found.append(Check("never_send_word", "warn", "This email contains a word from your never-send list."))
+    return list({c.code: c for c in found}.values())
+
+
+async def _check_chat(
+    state: AppState, user: UserRef, source: WorkspaceSource, *, self_email: str, body: str, chat_id: str | None
+) -> list[Check]:
+    """A Teams message about to be sent: the roster decides before the chat's last messages are read
+    (for the payment-change check); a chat Vanimo may not use gets only the checks on your own words."""
+    limits = state.settings
+    state.draft_throttle.check(
+        f"check:{user.user_id}", per_minute=limits.drafts_per_minute * 4, per_day=limits.drafts_per_day * 4
+    )
+    hasher = hasher_for(state.vault, user)
+    sample_domains = _sample_domains(source)
+    async with user_tx(state.engine, user) as conn:
+        onboarding, _ = await onboarding_state(conn, source.kind)
+        ex_engine = await load_engine(conn, state.vault, user, self_email=self_email, extra_org_domains=sample_domains)
+        terms = await load_terms(conn, state.vault, user)
+        known, _ = await _known(conn, state, user)
+        accounts = await _client_accounts(conn, state, user)
+        meeting = await _chat_meeting(conn, hasher, chat_id)
+    me = self_email.lower()
+    chat = await source.chat(chat_id) if chat_id and onboarding == "review_done" else None
+    members = [a for a in (chat.members if chat else ()) if a.email and a.email.lower() != me]
+    found: list[Check] = []
+    directory = await state.directory_cache.get((str(user.user_id), source.kind), source, self_email)
+    org = set(directory.org_domains) | set(sample_domains)
+    found += chk.sender_lookalike(members, known_domains=known, org_domains=org)
+    received: list[str] = []
+    usable = (
+        chat is not None
+        and not (chat.chat_type == "meeting" and meeting is None)
+        and not ex_engine.chat(
+            chat, meeting_hash=meeting[0] if meeting else None, series_hash=meeting[1] if meeting else None
+        ).excluded
+    )
+    if usable and chat is not None:
+        chat_hash = hasher("chat", chat.id)
+        msgs = sorted([m async for m in source.chat_messages(chat.id)], key=lambda m: m.created_at)
+        received = [
+            m.text[:4000]
+            for m in msgs[-8:]
+            if not m.from_me and not ex_engine.people_reasons([m.sender], chat_hash=chat_hash)
+        ][-2:]
+    elif chat is not None:
+        found.append(
+            Check(
+                "text_not_checked",
+                "info",
+                "Vanimo doesn't use this chat, so only your own words were checked, not the messages before them.",
+            )
+        )
+    own = body[:MAX_CHECK_CHARS]
+    found += chk.payment_change(received, own, sender_lookalike=any(c.code == "lookalike_sender" for c in found))
+    found += chk.cross_client(own, members, accounts, ex_engine.domain_hashes)
+    found += chk.regulated_ids(own)
+    blocked_terms = Matcher(
+        [
+            Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"])
+            for t in terms
+            if not t["allow_in_drafts"]
+        ]
+    )
+    if blocked_terms.count(own):
+        found.append(Check("never_send_word", "warn", "This message contains a word from your never-send list."))
     return list({c.code: c for c in found}.values())

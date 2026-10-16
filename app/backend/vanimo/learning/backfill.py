@@ -164,6 +164,7 @@ async def run_learning(
                 extractor or OfflineExtractor(),
                 tz or ZoneInfo("UTC"),
                 started_at,
+                beat=beat,  # each model call can be slow: keep the run alive (and stop if it was cancelled)
             )
         except Exception as exc:  # the ledger is extra: learning itself succeeded
             log.warning("learning.commitments_failed", error_type=type(exc).__name__)
@@ -430,7 +431,7 @@ async def collect(
             ctx = run[-CONTEXT_MESSAGES:]
             label_and_add(
                 "chat",
-                m.id,
+                f"{c.id}:{m.id}",  # chat message IDs are unique only within their chat
                 chat_hash,
                 list(c.members),
                 [x.sender for x in ctx],

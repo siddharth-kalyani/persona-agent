@@ -35,6 +35,13 @@ export function hasBlock(checks: DraftCheck[]): boolean {
   return checks.some((c) => c.severity === "block");
 }
 
+/** Checks after "Check my edits": a block found when drafting (a payment-change request in the
+ * thread) still stands, since re-checking your edits may not see the thread. */
+export function recheck(drafted: DraftCheck[], found: DraftCheck[]): DraftCheck[] {
+  const blocks = drafted.filter((c) => c.severity === "block" && !found.some((r) => r.code === c.code));
+  return [...blocks, ...found];
+}
+
 /** Plain-language reasons a draft couldn't be made (codes from the API, never content). */
 export function draftErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return "Something went wrong. Try again.";

@@ -24,7 +24,8 @@ from vanimo.api.drafting import DraftOut, draft_out
 from vanimo.api.learning import self_email
 from vanimo.commitments import scan as scanning
 from vanimo.commitments.extract import OFFLINE_LABEL
-from vanimo.controls.store import load_engine
+from vanimo.controls.neversend import render_removed
+from vanimo.controls.store import load_engine, load_matcher
 from vanimo.db.session import user_tx
 from vanimo.drafting.context import DraftError
 from vanimo.drafting.service import DraftInput, _sample_domains, create_draft
@@ -86,6 +87,7 @@ async def list_commitments(
     now = datetime.now(UTC)
     async with user_tx(state.engine, user) as conn:
         engine = await load_engine(conn, v, user, self_email=me, extra_org_domains=_sample_domains(source))
+        matcher = await load_matcher(conn, v, user)
         rows = (
             await conn.execute(
                 text(
@@ -101,6 +103,11 @@ async def list_commitments(
             r.token: v.decrypt_user(t, u, r.value_enc, "l1_token") or ""
             for r in (await conn.execute(text("select token, value_enc from vanimo.l1_tokens"))).all()
         }
+
+    def show(l1: str | None) -> str:
+        # Names back for the owner; never-send words as they are now, before the scrub job reaches it.
+        return render_removed(matcher.mask(rehydrate(l1 or "", tokens))[0]) or ""
+
     hidden = 0
     live = []
     for r in rows:
@@ -119,9 +126,9 @@ async def list_commitments(
         CommitmentOut(
             id=str(r.id),
             channel=r.channel,
-            what=rehydrate(v.decrypt_user(t, u, r.what_enc, "commitment_what") or "", tokens),
-            sentence=rehydrate(v.decrypt_user(t, u, r.text_enc, "commitment_text") or "", tokens),
-            duePhrase=rehydrate(p, tokens) if (p := v.decrypt_user(t, u, r.due_phrase_enc, "commitment_due")) else None,
+            what=show(v.decrypt_user(t, u, r.what_enc, "commitment_what")),
+            sentence=show(v.decrypt_user(t, u, r.text_enc, "commitment_text")),
+            duePhrase=show(p) if (p := v.decrypt_user(t, u, r.due_phrase_enc, "commitment_due")) else None,
             dueAt=r.due_at,
             madeAt=r.made_at,
             relationship=r.relationship,

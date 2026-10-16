@@ -5,14 +5,17 @@ Promises come from learned items (after a learning run) and from the incremental
 redacted to L1. Before storing, the user's controls version is re-checked under the same lock as
 purges and scrubs (§6.5 X4): a rule or never-send word added meanwhile wins, and nothing is stored.
 
-A promise keeps its key (the item's HMAC and its position in it), so finding it again never makes
-a duplicate and never reopens one the user marked done or "not a promise".
+A promise's key is an HMAC of its item and its normalised sentence, so finding it again (even with
+another extractor, or a model answering in another order) never makes a duplicate and never reopens
+one the user marked done or "not a promise". A message that already has promises isn't looked at
+again, and a learning run looks at most `MAX_PER_RUN` messages (each is a model call on Bedrock).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+import re
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -26,12 +29,14 @@ from vanimo.controls.store import load_matcher, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.learning.backfill import controls_version
 from vanimo.logs import get_logger
-from vanimo.redaction.marks import TOKEN
+from vanimo.redaction.marks import L1_MARKS, TOKEN
 from vanimo.vault import Vault
 
 log = get_logger("vanimo.commitments")
 
 WINDOW = timedelta(days=60)  # promises older than this aren't worth a ledger entry
+MAX_PER_RUN = 200  # messages looked at per learning run, newest first
+BEAT_EVERY = 20
 
 
 @dataclass
@@ -70,14 +75,49 @@ def wanted(unit: Unit, now: datetime) -> bool:
     return unit.relationship != "personal" and unit.sent_at >= now - WINDOW
 
 
-async def find(units: Iterable[Unit], extractor: Extractor, tz: ZoneInfo, now: datetime) -> list[Candidate]:
+async def _no_beat() -> None:
+    return None
+
+
+async def find(
+    units: Iterable[Unit],
+    extractor: Extractor,
+    tz: ZoneInfo,
+    now: datetime,
+    *,
+    seen: frozenset[str] = frozenset(),
+    limit: int | None = None,
+    counts: dict[str, int] | None = None,
+    beat: Callable[[], Awaitable[None]] = _no_beat,
+) -> list[Candidate]:
+    """Promises in the newest wanted units. A unit that already has promises (`seen`) is skipped; one
+    the extractor fails on is skipped and counted, never the whole batch."""
+    counts = counts if counts is not None else {}
+    todo = sorted((u for u in units if wanted(u, now) and u.item_hash not in seen), key=lambda u: u.sent_at)
+    if limit is not None and len(todo) > limit:
+        counts["over_limit"] = len(todo) - limit
+        todo = todo[-limit:]
     out: list[Candidate] = []
-    for u in units:
-        if not wanted(u, now):
+    for i, u in enumerate(todo, 1):
+        try:
+            found = await extractor.find(u.text, made_at=u.sent_at, tz=tz)
+        except Exception as exc:
+            counts["extract_failed"] = counts.get("extract_failed", 0) + 1
+            log.warning("commitments.extract_failed", error_type=type(exc).__name__)
             continue
-        for n, f in enumerate(await extractor.find(u.text, made_at=u.sent_at, tz=tz)):
-            out.append(Candidate(u, n, f))
+        out += [Candidate(u, n, f) for n, f in enumerate(found)]
+        if i % BEAT_EVERY == 0:
+            await beat()
     return out
+
+
+async def seen_items(engine: AsyncEngine, ref: UserRef) -> frozenset[str]:
+    async with user_tx(engine, ref) as conn:
+        return frozenset((await conn.execute(text("select distinct item_hash from vanimo.commitments"))).scalars())
+
+
+def _norm(sentence: str) -> str:
+    return re.sub(r"\s+", " ", sentence).strip(" .!").lower()
 
 
 def _tokens_in(c: Candidate) -> dict[str, tuple[str, str]]:
@@ -108,13 +148,18 @@ async def save(
         tokens: dict[str, tuple[str, str]] = {}
         for c in candidates:
             f, unit = c.found, c.unit
+
+            def m(value: str | None) -> str | None:
+                # Never-send words as they are now, also in what a model wrote (the output gate's rule).
+                return matcher.mask(value, opaque=L1_MARKS)[0] if value else value
+
             row = await conn.execute(
                 text(
                     "insert into vanimo.commitments (tenant_id, owner_user_id, source_kind, channel, item_hash, "
-                    "ordinal, thread_hash, meeting_hash, series_hash, people, relationship, made_at, text_enc, "
-                    "what_enc, due_at, due_phrase_enc, ref_enc, extractor) values (:t, :u, :k, :ch, :ih, :n, :th, "
-                    ":mh, :sh, cast(:people as jsonb), :rel, :at, :txt, :what, :due, :phrase, :ref, :ex) "
-                    "on conflict (owner_user_id, item_hash, ordinal) do nothing returning id"
+                    "ordinal, promise_hash, thread_hash, meeting_hash, series_hash, people, relationship, made_at, "
+                    "text_enc, what_enc, due_at, due_phrase_enc, ref_enc, extractor) values (:t, :u, :k, :ch, :ih, "
+                    ":n, :ph, :th, :mh, :sh, cast(:people as jsonb), :rel, :at, :txt, :what, :due, :phrase, :ref, "
+                    ":ex) on conflict (owner_user_id, promise_hash) do nothing returning id"
                 ),
                 {
                     "t": t,
@@ -122,17 +167,18 @@ async def save(
                     "k": source_kind,
                     "ch": unit.channel,
                     "ih": unit.item_hash,
-                    "n": c.ordinal,
+                    "n": min(c.ordinal, 20),
+                    "ph": vault.key_hash(t, "promise", f"{unit.item_hash}:{_norm(f.sentence)}"),
                     "th": unit.thread_hash,
                     "mh": unit.meeting_hash,
                     "sh": unit.series_hash,
                     "people": json.dumps([{"p": p, "d": d} for p, d in unit.people]),
                     "rel": unit.relationship,
                     "at": unit.sent_at,
-                    "txt": vault.encrypt_user(t, u, f.sentence, "commitment_text"),
-                    "what": vault.encrypt_user(t, u, f.what, "commitment_what"),
+                    "txt": vault.encrypt_user(t, u, m(f.sentence), "commitment_text"),
+                    "what": vault.encrypt_user(t, u, m(f.what), "commitment_what"),
                     "due": f.due_at,
-                    "phrase": vault.encrypt_user(t, u, f.due_phrase, "commitment_due"),
+                    "phrase": vault.encrypt_user(t, u, m(f.due_phrase), "commitment_due"),
                     "ref": vault.encrypt_user(t, u, unit.ref, "commitment_ref"),
                     "ex": extractor,
                 },
@@ -211,8 +257,10 @@ async def from_learning(
     extractor: Extractor,
     tz: ZoneInfo,
     started_at: datetime,
+    beat: Callable[[], Awaitable[None]] = _no_beat,
 ) -> Saved | None:
-    """After a learning run: promises in the items it just stored (same lineage, same L1)."""
+    """After a learning run: promises in the items it just stored (same lineage, same L1). Messages
+    that already have promises aren't looked at again; at most `MAX_PER_RUN`, newest first."""
     units = [
         Unit(
             channel=i.channel,
@@ -230,7 +278,10 @@ async def from_learning(
         for i in items
     ]
     now = datetime.now(UTC)
-    found = await find(units, extractor, tz, now)
+    counts: dict[str, int] = {}
+    found = await find(
+        units, extractor, tz, now, seen=await seen_items(engine, ref), limit=MAX_PER_RUN, counts=counts, beat=beat
+    )
     return await save(
         engine, vault, ref, source_kind, found, units, version, extractor=extractor.kind, scanned_until=started_at
     )

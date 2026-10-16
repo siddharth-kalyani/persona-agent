@@ -41,6 +41,7 @@ log = get_logger("vanimo.commitments")
 
 FIRST_SCAN = timedelta(days=7)  # with no learning run yet: the last week only
 MAX_PER_SCAN = 60  # messages read per call; the rest wait for the next one
+MAX_CHATS = 200  # chats asked for new messages per call (Graph can't tell which chats are quiet)
 MIN_INTERVAL_S = 60.0
 MAX_CHARS = 8000
 
@@ -129,8 +130,14 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
             continue
         pending.append(_Pending(h.sent_at, "email", h.id, h.conversation_id, list(h.participants)))
     by_url = meeting_links([e async for e in source.events(now - CALENDAR_BACK, now + CALENDAR_AHEAD)])
+    asked = 0
     async for c in source.chats():
-        if c.last_activity_at is not None and c.last_activity_at <= since:
+        # Only a known last-message time says a chat is quiet; otherwise Graph is asked for messages
+        # since the mark (filtered server-side), after the roster decided.
+        if c.last_message_at is not None and c.last_message_at <= since:
+            continue
+        if asked >= MAX_CHATS:
+            out.counts["chats_not_checked"] = out.counts.get("chats_not_checked", 0) + 1
             continue
         ids = by_url.get(c.join_url or "") if c.chat_type == "meeting" else None
         if c.chat_type == "meeting" and ids is None:
@@ -140,11 +147,17 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
         if ex_engine.chat(c, meeting_hash=meeting[0], series_hash=meeting[1]).excluded:
             out.excluded += 1
             continue
+        asked += 1
         async for m in source.chat_messages(c.id, since=since):
             if m.from_me and m.created_at > since:
                 pending.append(_Pending(m.created_at, "chat", m.id, c.id, list(c.members), meeting, m.text))
     pending.sort(key=lambda p: p.at)
-    batch = pending[:MAX_PER_SCAN]
+    batch = pending
+    if len(pending) > MAX_PER_SCAN:
+        # Cut only between two different times, so the next call (which reads after `until`) never
+        # skips a message sent at the same instant as the last one read here.
+        edge = pending[MAX_PER_SCAN].at
+        batch = [p for p in pending[:MAX_PER_SCAN] if p.at < edge] or [p for p in pending if p.at == edge]
     out.pending = len(pending) > len(batch)
 
     # 3. Only now the text of the allowed messages, redacted to L1 in memory.
@@ -168,7 +181,8 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
         units.append(
             store.Unit(
                 channel=p.channel,
-                item_hash=hasher("item", f"{p.channel}:{p.id}"),
+                # Chat message IDs are unique only within their chat: the chat is part of the key.
+                item_hash=hasher("item", f"email:{p.id}" if p.channel == "email" else f"chat:{p.thread_ref}:{p.id}"),
                 thread_hash=hasher("thread" if p.channel == "email" else "chat", p.thread_ref),
                 people=[(hasher("person", e), ex_engine.domain_hashes(a.domain)) for e, a in sorted(others.items())],
                 relationship=labels.relationship(
@@ -188,7 +202,14 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
 
     # 4. Promises, stored only if the controls are as they were when this scan began.
     extractor = extractor_for(state)
-    found = await store.find(units, extractor, state.settings.cell_config.zone, now)
+    found = await store.find(
+        units,
+        extractor,
+        state.settings.cell_config.zone,
+        now,
+        seen=await store.seen_items(state.engine, user),
+        counts=out.counts,
+    )
     until = batch[-1].at if out.pending and batch else now
     saved = await store.save(
         state.engine,

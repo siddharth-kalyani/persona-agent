@@ -245,9 +245,11 @@ async def drafting_chats(
             seen.append(c)
         if len(seen) >= MAX_CHAT_LIST:
             break
-    seen.sort(key=lambda c: c.last_activity_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+    # The last message's time where the source knows it (Graph's chat list doesn't: there it's the last
+    # rename or roster change), so on Microsoft 365 the picker offers up to 50, not only the 25 "latest".
+    seen.sort(key=lambda c: c.last_message_at or c.last_activity_at or datetime.min.replace(tzinfo=UTC), reverse=True)
     out = []
-    for c in seen[:25]:
+    for c in seen[: 25 if all(c.last_message_at for c in seen) else 50]:
         meeting = meetings.get(hasher("chat", c.id))
         if c.chat_type == "meeting" and not (meeting and meeting[0]):
             excluded, by, reasons = True, "unverifiable", ["meeting_unknown"]
@@ -443,6 +445,7 @@ class CheckIn(BaseModel):
     to: list[PersonIn] = Field(default_factory=list, max_length=100)
     cc: list[PersonIn] = Field(default_factory=list, max_length=100)
     conversationId: str | None = Field(None, max_length=512)
+    channel: Literal["email", "chat"] = "email"  # chat: conversationId is the Teams chat
 
 
 class ChecksOut(BaseModel):
@@ -465,6 +468,7 @@ async def post_check(
         to=[p.address() for p in body.to],
         cc=[p.address() for p in body.cc],
         conversation_id=body.conversationId,
+        channel=body.channel,
     )
     return ChecksOut(
         checks=[CheckOut(code=c.code, severity=c.severity, message=c.message) for c in found],
@@ -535,7 +539,8 @@ async def draft_feedback(
             await conn.execute(
                 text(
                     "update vanimo.drafts set outcome = coalesce(:o, outcome), rating = coalesce(:r, rating), "
-                    "outcome_at = now() where id = :id returning id"
+                    "outcome_at = now(), match_state = case when :o = 'discarded' and match_state = 'pending' "
+                    "then 'not_tracked' else match_state end where id = :id returning id"
                 ),
                 {"o": body.outcome, "r": body.rating, "id": draft_id},
             )

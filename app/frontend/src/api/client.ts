@@ -636,12 +636,19 @@ export class Api {
   draftingChat = (chatId: string) =>
     this.request<ChatView>("GET", `/api/drafting/chat?chatId=${encodeURIComponent(chatId)}`);
   createDraft = (req: DraftRequest) => this.request<Draft>("POST", "/api/drafts", req);
-  checkText = (body: string, to: PersonRef[], cc: PersonRef[] = [], conversationId: string | null = null) =>
+  checkText = (
+    body: string,
+    to: PersonRef[],
+    cc: PersonRef[] = [],
+    conversationId: string | null = null,
+    channel: "email" | "chat" = "email",
+  ) =>
     this.request<{ checks: DraftCheck[]; insertAllowed: boolean }>("POST", "/api/drafts/check", {
       body,
       to,
       cc,
       conversationId,
+      channel,
     });
   drafts = () => this.request<DraftSummary[]>("GET", "/api/drafts");
   draftFeedback = (id: string, feedback: { outcome?: DraftOutcome; rating?: "good" | "bad" }) =>

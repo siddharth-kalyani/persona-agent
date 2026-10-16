@@ -96,6 +96,10 @@ class Chat:
     # False when the full roster couldn't be read, or a member has no address (guest, anonymous):
     # the engine can't vouch for who is in the chat, so its content is never read (fail-closed).
     members_complete: bool = True
+    # When the last message was posted, if the source knows it from metadata. Graph's chat list
+    # doesn't (its lastUpdatedDateTime is a rename or roster change, and the last-message preview
+    # carries text), so None there: callers must not skip a chat as quiet on `last_activity_at`.
+    last_message_at: datetime | None = None
 
 
 @dataclass(frozen=True)

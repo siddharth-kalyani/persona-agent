@@ -56,6 +56,13 @@ class Vault:
     def decrypt_tenant(self, tenant: uuid.UUID, token: str | None, purpose: str) -> str | None:
         return self._decrypt(f"tenant/{tenant}", token, purpose)
 
+    def encrypt_app(self, plaintext: str, purpose: str) -> str:
+        """Short-lived opaque handles the app hands out (the Teams dialog link, M5): not user data."""
+        return self._encrypt("app", plaintext, purpose) or ""
+
+    def decrypt_app(self, token: str, purpose: str) -> str:
+        return self._decrypt("app", token, purpose) or ""
+
     def _encrypt(self, scope: str, plaintext: str | None, purpose: str) -> str | None:
         if plaintext is None:
             return None

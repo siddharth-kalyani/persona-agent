@@ -1,0 +1,73 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.30/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.30",
+  "version": "0.5.0",
+  "id": "6eb7a34e-98f7-47fd-a00a-58b5f900f9be",
+  "developer": {
+    "name": "Vanimo (internal)",
+    "websiteUrl": "{{HOST}}/",
+    "privacyUrl": "{{HOST}}/",
+    "termsOfUseUrl": "{{HOST}}/"
+  },
+  "name": { "short": "Vanimo", "full": "Vanimo: drafts in your voice" },
+  "description": {
+    "short": "Draft Teams replies in your own voice. Vanimo never sends.",
+    "full": "Vanimo drafts replies and new messages in your own voice from what it learned of how you write, with checks before you send, and keeps track of what you promised. It never sends anything: you copy or open the draft, read it, and send it yourself."
+  },
+  "icons": { "color": "color.png", "outline": "outline.png" },
+  "accentColor": "#2F5BA8",
+  "staticTabs": [
+    {
+      "entityId": "home",
+      "name": "Commitments",
+      "contentUrl": "{{HOST}}/teams.html?tab=commitments",
+      "websiteUrl": "{{HOST}}/commitments",
+      "scopes": ["personal"]
+    }
+  ],
+  "composeExtensions": [
+    {
+      "botId": "{{BOT_ID}}",
+      "commands": [
+        {
+          "id": "draftReply",
+          "type": "action",
+          "title": "Draft reply",
+          "description": "Draft a reply to this message in your voice",
+          "context": ["message"],
+          "fetchTask": true
+        },
+        {
+          "id": "newDraft",
+          "type": "action",
+          "title": "Draft with Vanimo",
+          "description": "Draft a new message in your voice",
+          "context": ["compose", "commandBox"],
+          "fetchTask": true
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity"],
+  "validDomains": ["{{DOMAIN}}"],
+  "webApplicationInfo": { "id": "{{CLIENT_ID}}", "resource": "api://{{CLIENT_ID}}" },
+  "activities": {
+    "activityTypes": [
+      {
+        "type": "commitmentsDue",
+        "description": "Promises you made that are due soon or overdue",
+        "templateText": "{count} of your promises are due soon or overdue"
+      },
+      {
+        "type": "rulesToConfirm",
+        "description": "Weekly: learned writing rules waiting for your decision",
+        "templateText": "{count} learned rules to confirm"
+      },
+      {
+        "type": "reviewReminder",
+        "description": "Your review of what Vanimo learns from is waiting",
+        "templateText": "Choose what Vanimo learns from"
+      }
+    ]
+  }
+}

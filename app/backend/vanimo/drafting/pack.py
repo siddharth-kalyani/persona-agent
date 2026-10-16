@@ -156,7 +156,7 @@ async def load_pack(
 ) -> PersonaPack:
     cards = await load_cards(conn, vault, ref, source_kind)
     settings = mask_settings(await load_settings(conn, vault, ref), matcher)
-    found = style.lookup(cards, ctx.audience.relationship, "email", "english") if cards else None
+    found = style.lookup(cards, ctx.audience.relationship, ctx.channel, "english") if cards else None
     card_key, card = found if found else (None, DEFAULT_CARD)
     items = await load_items(conn, vault, ref, source_kind)
     lineage = {
@@ -169,20 +169,22 @@ async def load_pack(
         ).all()
     }
     allowed_items = [i for i in items if i.id in lineage and _allowed(i, ex_engine, lineage[i.id])]
-    card, card_key = _email_habits(card, card_key, allowed_items, ctx.audience.relationship)
-    thread_hash = hasher("thread", ctx.conversation_id) if ctx.conversation_id else None
+    if ctx.channel == "email":  # a chat has no greeting or sign-off habits to borrow
+        card, card_key = _email_habits(card, card_key, allowed_items, ctx.audience.relationship)
+    kind = "chat" if ctx.channel == "chat" else "thread"
+    thread_hash = hasher(kind, ctx.conversation_id) if ctx.conversation_id else None
     audience = {hasher("person", r.address.email) for r in ctx.audience.to + ctx.audience.cc}
     query = embed(ctx.last_received or ctx.instruction or ctx.subject or "")
     scored: list[tuple[float, StoredItem, str]] = []
     excluded = len(items) - len(allowed_items)
     for item in allowed_items:
         row = lineage[item.id]
-        same_thread = thread_hash is not None and item.thread_hash == thread_hash
+        same_thread = thread_hash is not None and item.thread_hash == thread_hash and item.channel == ctx.channel
         same_people = _verbatim({p["p"] for p in row.people}, audience)
         sim = cosine(query, item.vec) if item.vec else 0.0
         score = sim + (2.0 if same_thread else 0) + (1.0 if same_people else 0)
         score += (0.15 if item.relationship == ctx.audience.relationship else 0) + (
-            0.1 if item.channel == "email" else 0
+            0.1 if item.channel == ctx.channel else 0
         )
         if not (same_thread or same_people) and sim < MIN_SIMILARITY:
             continue

@@ -289,6 +289,21 @@ THREAD_SCRIPTS: dict[str, list[tuple[str, str]]] = {
             "Account: 50100234567891\nIFSC: HDFC0001234\n\nRegards,\nTom Becker\nCloudNest Billing",
         ),
     ],
+    # Promises made this week (M5 commitments ledger).
+    "Bluefin UAT environment access": [
+        (THEM, "Hi {first}, our testers still can't log in to the UAT environment. Who should we talk to?"),
+        (
+            ME,
+            "Dear Karan,\n\nApologies for the delay. I'll share the UAT access list by Friday EOD, and Vikram will confirm the test accounts tomorrow.\n\nBest regards,\n{full}",
+        ),
+    ],
+    "Re: Onboarding checklist for Ana": [
+        (THEM, "Hi {first}, is there a checklist for my first two weeks?"),
+        (
+            ME,
+            "Hi Ana,\n\nI will send you the onboarding checklist by Monday. Let me also check the laptop request today.\n\nThanks,\n{first}",
+        ),
+    ],
 }
 
 # Chat histories by sample chat ID. "me" = you; other values are the member's display name.

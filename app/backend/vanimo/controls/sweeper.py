@@ -2,12 +2,14 @@
 
 Every few minutes: scans and learning runs still "running" after 2 hours are marked failed (so the UI offers a
 retry instead of spinning), and purge/scrub jobs left pending or running are run again (they are
-idempotent). Uses SECURITY DEFINER functions from migration 0005, which return IDs only.
+idempotent). Uses SECURITY DEFINER functions from migration 0005, which return IDs only. Then (M5)
+the notifications round: `vanimo.notify.run_once`.
 """
 
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -42,10 +44,17 @@ async def sweep_once(engine: AsyncEngine, vault: Vault) -> tuple[int, int]:
     return failed, len(jobs)
 
 
-async def sweep_forever(engine: AsyncEngine, vault: Vault) -> None:
+async def sweep_forever(engine: AsyncEngine, vault: Vault, notifications: Any = None) -> None:
+    """`notifications`: an async callable run each round after the jobs (M5: make and deliver the
+    content-free notifications)."""
     while True:
         try:
             await sweep_once(engine, vault)
         except Exception as exc:  # keep sweeping; the next round retries
             log.warning("sweeper.failed", error_type=type(exc).__name__)
+        if notifications is not None:
+            try:
+                await notifications()
+            except Exception as exc:
+                log.warning("sweeper.notify_failed", error_type=type(exc).__name__)
         await asyncio.sleep(INTERVAL_S)

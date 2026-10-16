@@ -120,6 +120,29 @@ export function ClientScoping() {
         />
       </Card>
       <Card>
+        <CardHeader
+          header={<Text weight="semibold">Teams</Text>}
+          description={
+            <Caption1>
+              Teams has no way for an app to type into the message box. Vanimo can open a chat with the draft already
+              typed in (never sent), which Microsoft documents for new chats only: turn it on once the Teams prefill
+              test (week-1 spike 1) shows it works in existing chats on your Teams clients. Until then people copy the
+              draft. Notifications carry counts only, never content.
+            </Caption1>
+          }
+        />
+        <Switch
+          checked={scoping.teamsPrefill}
+          onChange={(_, d) => void run(() => api.setTeamsPolicy(d.checked, scoping.teamsNotifications))}
+          label="Open Teams chats with the draft typed in"
+        />
+        <Switch
+          checked={scoping.teamsNotifications}
+          onChange={(_, d) => void run(() => api.setTeamsPolicy(scoping.teamsPrefill, d.checked))}
+          label="Send reminders to people's Teams activity feed"
+        />
+      </Card>
+      <Card>
         <CardHeader header={<Text weight="semibold">External people</Text>} />
         <RadioGroup
           value={scoping.externalMode}

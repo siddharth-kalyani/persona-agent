@@ -126,11 +126,22 @@ class GraphSource:
             sender=_addr(m.get("from")),  # the scan drops it when it's the user themselves
         )
 
-    async def sent_headers(self) -> AsyncIterator[SentHeader]:
+    async def sent_headers(self, since: datetime | None = None) -> AsyncIterator[SentHeader]:
+        if since is None:
+            path = "me/mailFolders/sentitems/messages/delta"
+            params = {"$select": metadata.assert_metadata_only(SENT_FIELDS)}
+        else:  # only what was sent after `since` (the commitments scan), oldest first
+            path = "me/mailFolders/sentitems/messages"
+            params = {
+                "$select": metadata.assert_metadata_only(SENT_FIELDS),
+                "$filter": f"sentDateTime gt {since.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                "$orderby": "sentDateTime asc",
+                "$top": "50",
+            }
         async for page in self._g.pages(
-            "me/mailFolders/sentitems/messages/delta",
-            {"$select": metadata.assert_metadata_only(SENT_FIELDS)},
-            max_pages=10_000,
+            path,
+            params,
+            max_pages=10_000 if since is None else 20,
             headers={"Prefer": 'odata.maxpagesize=100, IdType="ImmutableId"'},
         ):
             for m in page.get("value", []):
@@ -142,30 +153,40 @@ class GraphSource:
         # /me/chats is unverified, and the default chat properties carry no message content.)
         async for page in self._g.pages("me/chats", {"$expand": "members", "$top": "50"}, max_pages=1_000):
             for c in page.get("value", []):
-                members_raw = c.get("members") or []
-                complete = True
-                if len(members_raw) >= GRAPH_MEMBER_PAGE:
-                    try:
-                        full: list[dict[str, Any]] = []
-                        async for mp in self._g.pages(f"chats/{c['id']}/members", max_pages=100):
-                            full += mp.get("value", [])
-                        members_raw = full or members_raw
-                    except GraphError:
-                        complete = False  # we can't see everyone: the chat's content is never read
-                if any(not _member(m) for m in members_raw):
-                    complete = False  # a guest or anonymous member without an address
-                yield Chat(
-                    id=c["id"],
-                    chat_type=c.get("chatType", "group")
-                    if c.get("chatType") in ("oneOnOne", "group", "meeting")
-                    else "group",
-                    topic=c.get("topic"),
-                    members=tuple(a for a in (_member(m) for m in members_raw) if a),
-                    last_activity_at=_dt(c.get("lastUpdatedDateTime")),
-                    hidden=bool((c.get("viewpoint") or {}).get("isHidden")),
-                    join_url=(c.get("onlineMeetingInfo") or {}).get("joinWebUrl"),
-                    members_complete=complete,
-                )
+                yield await self._chat(c)
+
+    async def chat(self, chat_id: str) -> Chat | None:
+        try:
+            c = await self._g.get(f"me/chats/{_safe_id(chat_id, _CHAT_ID)}", {"$expand": "members"})
+        except GraphError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return await self._chat(c)
+
+    async def _chat(self, c: dict[str, Any]) -> Chat:
+        members_raw = c.get("members") or []
+        complete = True
+        if len(members_raw) >= GRAPH_MEMBER_PAGE:
+            try:
+                full: list[dict[str, Any]] = []
+                async for mp in self._g.pages(f"chats/{c['id']}/members", max_pages=100):  # an ID from Graph itself
+                    full += mp.get("value", [])
+                members_raw = full or members_raw
+            except GraphError:
+                complete = False  # we can't see everyone: the chat's content is never read
+        if any(not _member(m) for m in members_raw):
+            complete = False  # a guest or anonymous member without an address
+        return Chat(
+            id=c["id"],
+            chat_type=c.get("chatType", "group") if c.get("chatType") in ("oneOnOne", "group", "meeting") else "group",
+            topic=c.get("topic"),
+            members=tuple(a for a in (_member(m) for m in members_raw) if a),
+            last_activity_at=_dt(c.get("lastUpdatedDateTime")),
+            hidden=bool((c.get("viewpoint") or {}).get("isHidden")),
+            join_url=(c.get("onlineMeetingInfo") or {}).get("joinWebUrl"),
+            members_complete=complete,
+        )
 
     async def events(self, start: datetime, end: datetime) -> AsyncIterator[Event]:
         async for page in self._g.pages(
@@ -287,7 +308,7 @@ class GraphSource:
             raise
         return self._content(m, await self._me())
 
-    async def chat_messages(self, chat_id: str) -> AsyncIterator[ChatMessage]:
+    async def chat_messages(self, chat_id: str, since: datetime | None = None) -> AsyncIterator[ChatMessage]:
         me = await self._me()
         safe = _safe_id(chat_id, _CHAT_ID)
         # Senders are matched to the roster by directory ID, so person rules (keyed by address)
@@ -297,17 +318,28 @@ class GraphSource:
             for mem in page.get("value", []):
                 if mem.get("userId") and mem.get("email"):
                     roster[mem["userId"]] = mem["email"].lower()
-        async for page in self._g.pages(f"chats/{safe}/messages", {"$top": "50"}, max_pages=20):
+        params = {"$top": "50"}
+        if since is not None:
+            # Graph filters chat messages only on lastModifiedDateTime, and only with a matching
+            # $orderby (newest first); created-before-since messages edited later are dropped below.
+            params |= {
+                "$orderby": "lastModifiedDateTime desc",
+                "$filter": f"lastModifiedDateTime gt {since.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            }
+        async for page in self._g.pages(f"chats/{safe}/messages", params, max_pages=20):
             for m in page.get("value", []):
                 if m.get("messageType") != "message" or m.get("deletedDateTime"):
                     continue
                 user = ((m.get("from") or {}).get("user")) or {}
+                created = _dt(m.get("createdDateTime")) or EPOCH
+                if since is not None and created <= since:
+                    continue
                 text, _hidden = _body_text(m.get("body"))
                 yield ChatMessage(
                     id=m["id"],
                     chat_id=chat_id,
                     sender=Address(email=roster.get(user.get("id") or "", ""), name=user.get("displayName")),
-                    created_at=_dt(m.get("createdDateTime")) or EPOCH,
+                    created_at=created,
                     text=text,
                     from_me=bool(me.id) and user.get("id") == me.id,
                 )

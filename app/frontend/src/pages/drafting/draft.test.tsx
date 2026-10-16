@@ -128,3 +128,31 @@ describe("Draft page", () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe("Draft page: Teams chats (M5)", () => {
+  it("drafts a reply in a Teams chat and opens it in Teams only when allowed", async () => {
+    const a = api();
+    vi.spyOn(a, "draftingChats").mockResolvedValue([
+      { chatId: "smp-chat-002", chatType: "oneOnOne", label: "Rahul Verma", members: 2, lastActivityAt: null, excluded: false, excludedBy: null, reasons: [] },
+    ]); // prettier-ignore
+    vi.spyOn(a, "draftingChat").mockResolvedValue({
+      chatId: "smp-chat-002", label: "Rahul Verma",
+      messages: [{ sender: { email: "rahul.verma@kestrel.example", name: "Rahul Verma" }, sentAt: "2026-10-13T10:00:00Z", fromMe: false, text: "Done, it's on UAT now." }],
+    }); // prettier-ignore
+    vi.spyOn(a, "teamsConfig").mockResolvedValue({ prefill: true, appId: null });
+    const create = vi.spyOn(a, "createDraft").mockResolvedValue({
+      ...DRAFT, checks: [], insertAllowed: true, text: "great, thanks!", channel: "chat", chatUsers: ["rahul.verma@kestrel.example"],
+    }); // prettier-ignore
+    const user = userEvent.setup();
+    wrap(a);
+    await user.click(await screen.findByText("Rahul Verma"));
+    expect(await screen.findByText("Done, it's on UAT now.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Draft" }));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ mode: "reply", channel: "chat", conversationId: "smp-chat-002" })),
+    );
+    expect(await screen.findByRole("button", { name: "Open in Teams with this text" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check my edits" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Put in my Drafts folder" })).toBeNull();
+  });
+});

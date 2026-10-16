@@ -129,6 +129,9 @@ export interface Scoping {
   accounts: ClientAccount[];
   /** The organisation allows drafts in people's Outlook Drafts folder (each person still opts in). */
   serverDrafts: boolean;
+  /** Teams (M5): open a chat with the draft typed in (after the prefill spike); else Copy only. */
+  teamsPrefill: boolean;
+  teamsNotifications: boolean;
 }
 
 export type Outcome = "ok" | "warn" | "fail" | "skipped";
@@ -342,8 +345,12 @@ export interface ThreadView {
 
 export interface DraftRequest {
   mode: "reply" | "new";
-  surface?: "outlook" | "web";
+  surface?: "outlook" | "web" | "teams";
+  /** "chat": a Teams chat; conversationId is then the chat ID. */
+  channel?: "email" | "chat";
   conversationId?: string | null;
+  /** Teams: the chat message being answered. */
+  messageId?: string | null;
   to?: PersonRef[];
   cc?: PersonRef[];
   subject?: string | null;
@@ -378,6 +385,9 @@ export interface Draft {
   insertAllowed: boolean;
   oneOff: boolean;
   timing: { totalMs: number; modelMs: number | null };
+  channel?: "email" | "chat";
+  /** Teams: who "Open chat" opens the chat with. */
+  chatUsers?: string[];
 }
 
 export interface DraftSummary {
@@ -396,7 +406,86 @@ export interface DraftSummary {
   rating: string | null;
 }
 
-export type DraftOutcome = "inserted" | "copied" | "opened_reply" | "discarded";
+export type DraftOutcome = "inserted" | "copied" | "opened_reply" | "opened_chat" | "discarded";
+
+// --- Teams chats, commitments, notifications (M5) -------------------------------------------------
+export interface DraftChat {
+  chatId: string;
+  chatType: "oneOnOne" | "group" | "meeting";
+  label: string;
+  members: number;
+  lastActivityAt: string | null;
+  excluded: boolean;
+  excludedBy: "you" | "organisation" | "unverifiable" | null;
+  reasons: string[];
+}
+
+export interface ChatView {
+  chatId: string;
+  label: string;
+  messages: { sender: PersonRef; sentAt: string; fromMe: boolean; text: string }[];
+}
+
+export interface Commitment {
+  id: string;
+  channel: "email" | "chat";
+  what: string;
+  sentence: string;
+  duePhrase: string | null;
+  dueAt: string | null;
+  madeAt: string;
+  relationship: string;
+  status: "open" | "done" | "dismissed";
+  statusAt: string | null;
+  snoozedUntil: string | null;
+  /** A later message of yours in the same thread seems to deliver it. */
+  looksDoneAt: string | null;
+  extractor: "offline" | "bedrock";
+}
+
+export interface Ledger {
+  items: Commitment[];
+  open: number;
+  overdue: number;
+  dueSoon: number;
+  capturedThisWeek: number;
+  precision: number | null;
+  decided: number;
+  label: string;
+  hidden: number;
+}
+
+export interface CommitmentScan {
+  found: number;
+  hints: number;
+  read: number;
+  excluded: number;
+  pending: boolean;
+  skipped: boolean;
+}
+
+export type FollowUpKind = "done" | "late" | "update";
+
+export interface AppNotification {
+  id: string;
+  kind: "commitments_due" | "rules_to_confirm" | "review_reminder";
+  count: number;
+  text: string;
+  createdAt: string;
+  read: boolean;
+  teams: "pending" | "sent" | "failed" | "off";
+}
+
+export interface TeamsConfig {
+  prefill: boolean;
+  appId: string | null;
+}
+
+export interface TeamsDialogTarget {
+  mode: "reply" | "new" | "channel";
+  chatId: string | null;
+  messageId: string | null;
+}
 
 // --- Drafts queue, Outlook Drafts folder, edit loop (M4) ----------------------------------------
 export interface DraftingSettings {
@@ -543,6 +632,9 @@ export class Api {
   draftingThreads = () => this.request<DraftThread[]>("GET", "/api/drafting/threads");
   draftingThread = (conversationId: string) =>
     this.request<ThreadView>("GET", `/api/drafting/thread?conversationId=${encodeURIComponent(conversationId)}`);
+  draftingChats = () => this.request<DraftChat[]>("GET", "/api/drafting/chats");
+  draftingChat = (chatId: string) =>
+    this.request<ChatView>("GET", `/api/drafting/chat?chatId=${encodeURIComponent(chatId)}`);
   createDraft = (req: DraftRequest) => this.request<Draft>("POST", "/api/drafts", req);
   checkText = (body: string, to: PersonRef[], cc: PersonRef[] = [], conversationId: string | null = null) =>
     this.request<{ checks: DraftCheck[]; insertAllowed: boolean }>("POST", "/api/drafts/check", {
@@ -584,7 +676,23 @@ export class Api {
   decideRule = (id: string, decision: "keep" | "reject") =>
     this.request<LearnedRule>("PUT", `/api/rules/${encodeURIComponent(id)}`, { decision });
 
+  commitments = (status: "open" | "done" | "dismissed" | "all" = "open") =>
+    this.request<Ledger>("GET", `/api/commitments?status=${status}`);
+  scanCommitments = () => this.request<CommitmentScan>("POST", "/api/commitments/scan");
+  decideCommitment = (id: string, action: "done" | "dismiss" | "reopen" | "snooze", days = 1) =>
+    this.request<void>("PUT", `/api/commitments/${encodeURIComponent(id)}`, { action, days });
+  followUp = (id: string, kind: FollowUpKind, newDate: string | null = null, note: string | null = null) =>
+    this.request<Draft>("POST", `/api/commitments/${encodeURIComponent(id)}/follow-up`, { kind, newDate, note });
+
+  notifications = () => this.request<{ items: AppNotification[]; unread: number }>("GET", "/api/notifications");
+  markNotificationsRead = (id: string | null = null) => this.request<void>("POST", "/api/notifications/read", { id });
+
+  teamsConfig = () => this.request<TeamsConfig>("GET", "/api/teams/config");
+  teamsDialog = (handle: string) => this.request<TeamsDialogTarget>("POST", "/api/teams/dialog", { handle });
+
   scoping = () => this.request<Scoping>("GET", "/api/admin/scoping");
+  setTeamsPolicy = (teamsPrefill: boolean, teamsNotifications: boolean) =>
+    this.request<Scoping>("PUT", "/api/admin/scoping/teams", { teamsPrefill, teamsNotifications });
   setExternalMode = (externalMode: Scoping["externalMode"]) =>
     this.request<Scoping>("PUT", "/api/admin/scoping/policy", { externalMode });
   addAccount = (account: { name: string; mode: ClientAccount["mode"]; domains: string[]; sensitiveWords: string[] }) =>

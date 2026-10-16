@@ -64,6 +64,22 @@ The API rejects any token without one of these roles, even if Entra let the pers
 
 > `OnlineMeetings.Read` is not in the access list in `docs/03` §0. It's needed to find a meeting's ID from the calendar event, before its transcripts can be listed.
 
+**Application permission (M5), also on this app:**
+
+| Permission | Used for | Milestone |
+|---|---|---|
+| `TeamsActivity.Send` (Application) | Reminders in people's own Teams activity feed (promises due, rules to confirm, the review). A person can't send a notification to themselves with a delegated token, so this one is app-only. Notifications carry counts only, never content | M5 |
+
+> `TeamsActivity.Send` is not in the access list in `docs/03` §0. Without it Vanimo still works: notifications show in the web app only.
+
+## 6b. Teams app and bot (M5)
+
+1. **Bot.** Teams message actions ("Draft reply") need a bot registration. In the Teams Developer Portal: **Tools → Bot management → New bot** (single tenant, no Azure subscription needed). Set its **endpoint** to `https://<cloudfront-domain>/api/teams/messages`. Note the bot ID. Vanimo answers only Teams' `composeExtension/fetchTask` requests on it and checks every request's Bot Framework token; no client secret is needed because it never posts as the bot.
+2. **Package.** `py app/surfaces/teams-app/render_manifest.py https://<cloudfront-domain> <bot-id> <this app's client ID> vanimo-teams.zip` builds the Teams app (manifest + icons). The manifest's `webApplicationInfo.id` is this Entra app, which is what lets it send activity notifications.
+3. **Settings.** Deploy with `-c teams_app_id=6eb7a34e-98f7-47fd-a00a-58b5f900f9be -c teams_bot_id=<bot-id>` (or `VANIMO_TEAMS_APP_ID` / `VANIMO_TEAMS_BOT_ID` locally).
+4. **Install.** A Teams admin uploads the zip (Teams admin center → Manage apps → Upload) or allows custom app upload; people add it from Apps. Activity notifications only reach people who have the app installed.
+5. **Sign-in inside Teams** uses nested app authentication: the `brk-multihub://<cloudfront-domain>` redirect URI in step 2 covers Teams too.
+
 ## 7. Client secret (Certificates & secrets)
 
 Create a client secret (6–12 months). **Never put it in code or Git.**

@@ -42,6 +42,17 @@ SYSTEM_RULES = (
     "You write email bodies for one person, in their own voice. You never send anything; they review and send.\n\n"
     "Rules:\n" + "\n".join(f"{n}. {rule}" for n, rule in enumerate(_RULES, 1))
 )
+# Teams chats (M5): the same rules, but a chat message has no subject, sign-off or signature, and a
+# greeting only where the writer greets in chat.
+_CHAT_RULES = (
+    "Write only the message: no subject, no sign-off and no signature. Start with a short greeting only if the "
+    "writer usually greets in chat. Chat messages are short.",
+    *_RULES[1:],
+)
+CHAT_SYSTEM_RULES = (
+    "You write Microsoft Teams chat messages for one person, in their own voice. You never send anything; they "
+    "review and send.\n\nRules:\n" + "\n".join(f"{n}. {rule}" for n, rule in enumerate(_CHAT_RULES, 1))
+).replace("<thread> and <subject>", "<thread> and <subject> (the chat's name)")
 
 # Phrases that make text sound machine-written ("AI tells"); never in a draft.
 AI_TELLS = (
@@ -229,6 +240,13 @@ def _learned(pack: PersonaPack) -> dict[str, Any]:
 def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
     card = pack.card
     learned = _learned(pack)
+    chat = ctx.channel == "chat"
+    if chat:
+        # Greeting, sign-off and length rules were learned from emails: not a chat's habits.
+        learned["length"] = 0
+        learned.pop("greeting", None)
+        learned.pop("sign_off", None)
+        learned["lines"] = [f"- {r.text}" for r in pack.rules if r.kind in ("avoid", "prefer", "exclamations")]
     words, bounds = target(card, max(-2, min(2, pack.settings.length + learned["length"])))
     persona = [describe(card, title="How the writer writes to this kind of audience")]
     if pack.overall and pack.card_key != style.slice_key():
@@ -237,7 +255,7 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
     if learned["lines"]:
         persona.append("Learned from the writer's own edits of earlier drafts:\n" + "\n".join(learned["lines"]))
     system = [
-        {"type": "text", "text": SYSTEM_RULES},
+        {"type": "text", "text": CHAT_SYSTEM_RULES if chat else SYSTEM_RULES},
         # The persona changes only when the user's cards or settings do: cached across drafts.
         {
             "type": "text",
@@ -246,10 +264,16 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
         },
     ]
     a = ctx.audience
-    parts = [f"<audience>Writing to {a.label}: {', '.join(r.token for r in a.to)}."]
-    if a.cc:
-        parts.append(f"Copied: {len(a.cc)} more.")
-    parts.append("</audience>")
+    if chat and ctx.chat_type == "oneOnOne":
+        parts = [f"<audience>A Teams 1:1 chat with {a.label}: {', '.join(r.token for r in a.to)}.</audience>"]
+    elif chat:
+        named = ", ".join(r.token for r in a.to[:8]) + (f" and {len(a.to) - 8} more" if len(a.to) > 8 else "")
+        parts = [f"<audience>A Teams group chat with {len(a.to)} other people ({a.label}): {named}.</audience>"]
+    else:
+        parts = [f"<audience>Writing to {a.label}: {', '.join(r.token for r in a.to)}."]
+        if a.cc:
+            parts.append(f"Copied: {len(a.cc)} more.")
+        parts.append("</audience>")
     if pack.exemplars:
         parts.append("<examples>")
         for ex in pack.exemplars:
@@ -264,14 +288,17 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
         parts.append("</thread>")
     if ctx.subject:
         parts.append(f"<subject>{_untrusted(ctx.subject)}</subject>")
-    task = "Write the body of the reply." if ctx.mode == "reply" else "Write the body of a new email."
+    if chat:
+        task = "Write the reply to the last message." if ctx.mode == "reply" else "Write a new message for this chat."
+    else:
+        task = "Write the body of the reply." if ctx.mode == "reply" else "Write the body of a new email."
     if ctx.instruction:
         parts.append(f"<instruction>{_untrusted(ctx.instruction)}</instruction>")
         task += " Follow the writer's instruction."
     parts.append(f"{task} Aim for about {words} words (between {bounds[0]} and {bounds[1]}).")
     user = "\n".join(parts)
-    g = greeting({"greetings": learned["greeting"]} if "greeting" in learned else card, a.to)
-    s = sign_off({"sign_offs": learned["sign_off"]} if "sign_off" in learned else card)
+    g = "" if chat else greeting({"greetings": learned["greeting"]} if "greeting" in learned else card, a.to)
+    s = "" if chat else sign_off({"sign_offs": learned["sign_off"]} if "sign_off" in learned else card)
     marks = set(L1_MARKS.findall(user)) | set(L1_MARKS.findall(g + "\n" + s))
     return Prompt(
         system=system,

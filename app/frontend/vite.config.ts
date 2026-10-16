@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-// Two entry points: the web control center (index.html) and the Outlook add-in task pane (addin.html).
+// Entry points: the web control center (index.html), the Outlook add-in task pane (addin.html), the
+// Teams dialog and tab (teams.html, M5) and the MSAL redirect bridge (redirect.html).
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -25,7 +26,8 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000, // Fluent UI + MSAL; split per page in M1 when routes grow
     rolldownOptions: {
       input: { main: fileURLToPath(new URL("index.html", import.meta.url)), addin: fileURLToPath(new URL("addin.html", import.meta.url)),
-        redirect: fileURLToPath(new URL("redirect.html", import.meta.url)), },
+        redirect: fileURLToPath(new URL("redirect.html", import.meta.url)),
+        teams: fileURLToPath(new URL("teams.html", import.meta.url)), },
     },
   },
   test: {

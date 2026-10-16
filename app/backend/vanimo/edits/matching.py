@@ -16,12 +16,18 @@ lineage (so excluding anyone on the real reply purges the evidence too) — neve
 Everything is written under the controls lock, and only if the user's controls didn't change
 since the sync began (§6.5 X4).
 
+Teams chat drafts (M5) match the first message the user posted in the same chat after the draft,
+the same way: the chat's roster is decided on first, then only the user's own messages since the
+oldest pending draft are read. Edits to chat drafts teach only channel-neutral rules (phrases,
+word swaps, exclamation marks): greeting, sign-off and length are email habits.
+
 The sample workspace has no new sent mail, so its "Mark as sent" action feeds the user's edited
 text through the same path (`record_sent`).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -47,6 +53,13 @@ MATCH_WINDOW = timedelta(hours=72)
 RECENT_SENT = 50
 MAX_FETCHES = 10  # sent bodies read per sync (denial of wallet, Graph throttling)
 MAX_CANDIDATES = 5
+EMAIL_ONLY_EDITS = frozenset({"greeting", "sign_off", "length"})  # never learned from a chat
+
+
+def _for_channel(comparison: Comparison, channel: str) -> Comparison:
+    if channel != "chat":
+        return comparison
+    return dataclasses.replace(comparison, edits=[e for e in comparison.edits if e.kind not in EMAIL_ONLY_EDITS])
 
 
 async def _context(state: AppState, user: UserRef, source: WorkspaceSource, self_email: str) -> dict[str, Any]:
@@ -131,7 +144,7 @@ async def _store_match(
             draft_id=str(draft.id),
             source_kind=source_kind,
             relationship=draft.relationship,
-            comparison=comparison,
+            comparison=_for_channel(comparison, getattr(draft, "channel", "email")),
         )
         if sent_hash:
             await conn.execute(
@@ -146,7 +159,8 @@ async def _pending(state: AppState, user: UserRef, source_kind: str) -> list[Any
             (
                 await conn.execute(
                     text(
-                        "select id, mode, thread_hash, people, text_enc, created_at, relationship, checked_sent "
+                        "select id, mode, channel, thread_hash, meeting_hash, series_hash, people, text_enc, "
+                        "created_at, relationship, checked_sent, chat_ref_enc "
                         "from vanimo.drafts where match_state = 'pending' and source_kind = :k order by created_at"
                     ),
                     {"k": source_kind},
@@ -168,9 +182,11 @@ async def _set_state(state: AppState, user: UserRef, ids: list[Any], new_state: 
 async def sync(state: AppState, user: UserRef, source: WorkspaceSource, *, self_email: str) -> dict[str, int]:
     """Match pending drafts to recent sent mail. Returns content-free counts."""
     counts = {"matched": 0, "unmatched": 0, "excluded": 0, "superseded": 0, "pending": 0}
-    pending = await _pending(state, user, source.kind)
-    if not pending:
+    everything = await _pending(state, user, source.kind)
+    if not everything:
         return counts
+    pending = [d for d in everything if d.channel == "email"]
+    chats = [d for d in everything if d.channel == "chat"]
     ctx = await _context(state, user, source, self_email)
     hasher, me = ctx["hasher"], self_email.lower()
     async with user_tx(state.engine, user) as conn:
@@ -276,9 +292,98 @@ async def sync(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
         if d.id not in done and d.id not in deferred and d.mode == "reply" and now > d.created_at + MATCH_WINDOW:
             await _set_state(state, user, [d.id], "unmatched")
             counts["unmatched"] += 1
-    counts["pending"] = len(pending) - sum(counts[k] for k in ("matched", "unmatched", "excluded", "superseded"))
+    if chats and await _sync_chats(state, user, ctx, source, chats, claimed, counts, me, now) == "changed":
+        return counts
+    counts["pending"] = len(everything) - sum(counts[k] for k in ("matched", "unmatched", "excluded", "superseded"))
     log.info("edits.sync", count=counts["matched"], outcome=f"unmatched_{counts['unmatched']}")
     return counts
+
+
+async def _sync_chats(
+    state: AppState,
+    user: UserRef,
+    ctx: dict[str, Any],
+    source: WorkspaceSource,
+    drafts: list[Any],
+    claimed: set[str],
+    counts: dict[str, int],
+    me: str,
+    now: datetime,
+) -> str:
+    """Teams drafts: in each chat, every message the user posted claims the latest draft made before
+    it (older ones are superseded). The roster decides before any message is read."""
+    hasher, engine = ctx["hasher"], ctx["engine"]
+    t, u = user.tenant_id, user.user_id
+    by_chat: dict[str, list[Any]] = {}
+    for d in drafts:
+        chat_id = state.vault.decrypt_user(t, u, d.chat_ref_enc, "draft_chat")
+        if chat_id:
+            by_chat.setdefault(chat_id, []).append(d)
+    reads = 0
+    for chat_id, group in by_chat.items():
+        group.sort(key=lambda d: d.created_at)
+        expired = [d.id for d in group if now > d.created_at + MATCH_WINDOW]
+        if reads >= MAX_FETCHES:
+            continue  # stay pending for the next sync
+        chat = await source.chat(chat_id)
+        meeting = (group[0].meeting_hash, group[0].series_hash)
+        if chat is None or engine.chat(chat, meeting_hash=meeting[0], series_hash=meeting[1]).excluded:
+            ids = [d.id for d in group]
+            await _set_state(state, user, ids, "excluded" if chat else "unmatched")
+            counts["excluded" if chat else "unmatched"] += len(ids)
+            continue
+        reads += 1
+        since = group[0].created_at - timedelta(minutes=1)
+        mine = sorted(
+            [m async for m in source.chat_messages(chat_id, since=since) if m.from_me and m.created_at >= since],
+            key=lambda m: m.created_at,
+        )
+        done: set[Any] = set()
+        for m in mine:
+            sh = hasher("sent", f"chat:{m.id}")
+            if sh in claimed:
+                continue
+            open_drafts = [
+                d for d in group
+                if d.id not in done and d.created_at <= m.created_at <= d.created_at + MATCH_WINDOW
+            ]  # fmt: skip
+            if not open_drafts:
+                continue
+            latest, older = open_drafts[-1], [d.id for d in open_drafts[:-1]]
+            sent_l1 = _chat_l1(ctx, m.text, list(chat.members))
+            if sent_l1 is None:
+                continue
+            draft_l1 = state.vault.decrypt_user(t, u, latest.text_enc, "draft_text") or ""
+            result = await _store_match(
+                state,
+                user,
+                ctx,
+                latest,
+                compare(draft_l1, sent_l1),
+                source.kind,
+                sent_hash=sh,
+                sent_people=_lineage(ctx, list(chat.members), me),
+            )
+            if result == "changed":
+                return "changed"
+            if result == "recorded":
+                claimed.add(sh)
+                counts["matched"] += 1
+                await _set_state(state, user, older, "superseded")
+                counts["superseded"] += len(older)
+                done.update([latest.id, *older])
+        stale = [i for i in expired if i not in done]
+        await _set_state(state, user, stale, "unmatched")
+        counts["unmatched"] += len(stale)
+    return "ok"
+
+
+def _chat_l1(ctx: dict[str, Any], body: str, people: list[Address]) -> str | None:
+    redactor = build_redactor(ctx["matcher"], ctx["hasher"], ctx["directory"], people, ctx["known_people"])
+    try:
+        return redactor.redact(strip_signature_noise(body)[:8000]).text
+    except RedactionBlocked:
+        return None
 
 
 async def _try(
@@ -324,7 +429,7 @@ async def record_sent(
         d = (
             await conn.execute(
                 text(
-                    "select id, mode, thread_hash, people, text_enc, created_at, relationship, match_state "
+                    "select id, mode, channel, thread_hash, people, text_enc, created_at, relationship, match_state "
                     "from vanimo.drafts where id = :id and source_kind = 'sample'"
                 ),
                 {"id": draft_id},
@@ -336,7 +441,7 @@ async def record_sent(
         raise DraftError("already_matched", 409)
     ctx = await _context(state, user, source, self_email)
     people = [Address(p.email or "", p.full_name) for p in ctx["known_people"] if p.email]
-    sent_l1 = _to_l1(ctx, sent_text, people)
+    sent_l1 = _chat_l1(ctx, sent_text, people) if d.channel == "chat" else _to_l1(ctx, sent_text, people)
     if sent_l1 is None:
         raise DraftError("text_blocked", 422)
     draft_l1 = state.vault.decrypt_user(user.tenant_id, user.user_id, d.text_enc, "draft_text") or ""

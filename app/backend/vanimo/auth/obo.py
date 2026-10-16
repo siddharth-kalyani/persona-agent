@@ -55,3 +55,16 @@ class OboClient:
         if error in ("invalid_grant", "interaction_required", "consent_required"):
             raise ConsentRequired()
         raise AuthError("obo_failed", 502)
+
+    async def app_token(self) -> str:
+        """An app-only Graph token (client credentials), for what no user request carries: Teams
+        activity notifications to the user themselves (a user can't notify themselves, M5)."""
+        try:
+            result = await anyio.to_thread.run_sync(
+                lambda: self._client().acquire_token_for_client(scopes=GRAPH_DEFAULT_SCOPE)
+            )
+        except (ValueError, requests.RequestException) as exc:
+            raise AuthError("entra_unavailable", 503) from exc
+        if "access_token" in result:
+            return result["access_token"]
+        raise AuthError("app_token_failed", 502)

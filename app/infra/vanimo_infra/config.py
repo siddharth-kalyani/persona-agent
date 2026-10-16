@@ -21,6 +21,9 @@ class DeployConfig:
     backend_dir: str
     # Normally looked up at synth time; set explicitly in tests or if the lookup is blocked.
     cloudfront_prefix_list_id: str | None = None
+    # Teams (M5): the Teams app's manifest ID and its bot's ID (Developer Portal bot registration).
+    teams_app_id: str = ""
+    teams_bot_id: str = ""
 
     @property
     def prefix(self) -> str:
@@ -49,4 +52,6 @@ def from_context(node, root: str) -> DeployConfig:  # node: constructs.Node
         web_dist=get("web_dist", os.path.join(root, "..", "frontend", "dist")) or "",
         backend_dir=get("backend_dir", os.path.join(root, "..", "backend")) or "",
         cloudfront_prefix_list_id=get("cloudfront_prefix_list_id"),
+        teams_app_id=get("teams_app_id", "") or "",
+        teams_bot_id=get("teams_bot_id", "") or "",
     )

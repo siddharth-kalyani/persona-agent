@@ -76,6 +76,9 @@ class Item:
     word_count: int
     meeting_hash: str | None = None
     series_hash: str | None = None
+    # The conversation or chat it came from (in memory only; a commitment found in it keeps it
+    # encrypted, so a follow-up can be drafted in the same place).
+    ref: str | None = None
 
 
 @dataclass
@@ -109,13 +112,27 @@ async def start_run(engine: AsyncEngine, ref: UserRef, source_kind: str) -> str:
 
 
 async def run_learning(
-    engine: AsyncEngine, vault: Vault, ref: UserRef, source: WorkspaceSource, *, self_email: str, run_id: str
+    engine: AsyncEngine,
+    vault: Vault,
+    ref: UserRef,
+    source: WorkspaceSource,
+    *,
+    self_email: str,
+    run_id: str,
+    extractor: Any = None,
+    tz: Any = None,
 ) -> None:
-    """Runs to completion and records the outcome on the run row (never raises)."""
+    """Runs to completion and records the outcome on the run row (never raises). `extractor` and
+    `tz`: how promises are found in what was learned (M5 commitments; offline rules by default)."""
+    from zoneinfo import ZoneInfo
+
+    from vanimo.commitments import store as commitments
+    from vanimo.commitments.extract import OfflineExtractor
     from vanimo.learning import persona  # style cards are rebuilt after every run
     from vanimo.learning.evaluate import offline_baseline
 
     kind = source.kind
+    started_at = datetime.now(UTC)
     try:
         await require_review_done(engine, ref, kind)
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -136,7 +153,23 @@ async def run_learning(
                     raise
         cards = await persona.rebuild(engine, vault, ref, kind)
         metrics = await offline_baseline(engine, vault, ref, kind)
+        try:
+            found = await commitments.from_learning(
+                engine,
+                vault,
+                ref,
+                kind,
+                collected.items,
+                version,
+                extractor or OfflineExtractor(),
+                tz or ZoneInfo("UTC"),
+                started_at,
+            )
+        except Exception as exc:  # the ledger is extra: learning itself succeeded
+            log.warning("learning.commitments_failed", error_type=type(exc).__name__)
+            found = None
         counts = dict(collected.counts) | {"stored": len(collected.items), "style_cards": cards}
+        counts["commitments"] = found.stored if found else 0
         counts |= {f"eval_{k}": v for k, v in metrics.items() if isinstance(v, int | float)}
         await _finish(engine, ref, run_id, "done", counts, version)
         log.info("learning.done", count=len(collected.items))
@@ -265,6 +298,7 @@ async def collect(
         *,
         hidden: bool = False,
         meeting: tuple[str | None, str | None] = (None, None),
+        ref: str | None = None,
     ) -> None:
         body = strip_signature_noise(body).strip()
         if not body:
@@ -309,6 +343,7 @@ async def collect(
                 word_count=len(ws),
                 meeting_hash=meeting[0],
                 series_hash=meeting[1],
+                ref=ref,
             )
         )
         out.counts[f"{channel}_learned"] += 1
@@ -360,6 +395,7 @@ async def collect(
                 m.body,
                 ctx_msg.body if ctx_msg else None,
                 hidden=m.hidden or bool(ctx_msg and ctx_msg.hidden),
+                ref=conv,
             )
 
     # Chats: the roster decides; context is the run of messages just before the user's reply.
@@ -403,6 +439,7 @@ async def collect(
                 m.text,
                 "\n".join(x.text for x in ctx) or None,
                 meeting=meeting,
+                ref=c.id,
             )
             run = []
     await beat()

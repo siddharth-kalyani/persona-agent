@@ -161,6 +161,11 @@ class LiveContext:
     redirects: list[tuple[Address, Address]] = field(default_factory=list)
     suspicious: bool = False
     counts: dict[str, int] = field(default_factory=dict)
+    # Teams (M5): a chat reply or a new chat message. `conversation_id` is then the chat ID.
+    channel: Literal["email", "chat"] = "email"
+    chat_type: str | None = None  # oneOnOne | group | meeting
+    meeting_hash: str | None = None  # a meeting chat's meeting and series (lineage)
+    series_hash: str | None = None
 
     @property
     def received(self) -> list[str]:
@@ -409,4 +414,134 @@ async def gather(
         ],
         suspicious=suspicious,
         counts=counts,
+    )
+
+
+# --- Teams chats (M5) ----------------------------------------------------------------------------
+MAX_CHAT_MESSAGES = 8  # the most recent messages of the chat given to the drafter
+MAX_CHAT_MEMBERS = 250
+
+
+async def gather_chat(
+    source: WorkspaceSource,
+    *,
+    ex_engine: ExclusionEngine,
+    matcher: Matcher,
+    hasher: Hasher,
+    directory: Directory,
+    self_email: str,
+    chat_id: str,
+    meeting: tuple[str | None, str | None] | None,
+    mode: Mode,
+    instruction: str | None,
+    message_id: str | None = None,
+    one_off: bool = False,
+    known_people: Sequence[Person] = (),
+) -> LiveContext:
+    """The live context of a Teams chat, in the learner's order: the roster (metadata) decides first,
+    then the last few messages are read and redacted. `meeting`: a meeting chat's (meeting, series)
+    hashes from the Sources index; a meeting chat without them can't be checked against meeting
+    rules, so it's refused (fail-closed). `message_id`: the message a reply answers (Teams' "Draft
+    reply" action); the context ends there."""
+    me = self_email.lower()
+    chat = await source.chat(chat_id)
+    if chat is None:
+        raise DraftError("chat_not_found", 404)
+    if len(chat.members) > MAX_CHAT_MEMBERS:
+        raise DraftError("too_many_recipients", 422)
+    if chat.chat_type == "meeting" and meeting is None:
+        raise DraftError("conversation_excluded", 403, by="unverifiable", reasons=["meeting_unknown"])
+    meeting_hash, series_hash = meeting or (None, None)
+    decision = ex_engine.chat(chat, meeting_hash=meeting_hash, series_hash=series_hash)
+    if decision.excluded and (decision.by_tenant or not one_off):
+        raise refusal(decision)
+
+    others = _dedupe(list(chat.members), me)
+    if not others:
+        raise DraftError("recipients_required", 422)
+    redactor = build_redactor(matcher, hasher, directory, list(chat.members), known_people)
+    tokens: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    suspicious = False
+
+    def red(text: str | None, what: str) -> Redacted | None:
+        nonlocal suspicious
+        if not text or not text.strip():
+            return None
+        try:
+            r = redactor.redact(text[:MAX_MESSAGE_CHARS])
+        except RedactionBlocked as e:
+            raise DraftError(f"{what}_blocked", 422, reason=e.reason) from None
+        tokens.update({t: v for t, (_, v) in r.tokens.items()})
+        for k, n in r.counts.items():
+            counts[k] = counts.get(k, 0) + n
+        suspicious = suspicious or r.suspicious
+        return r
+
+    def recipient(a: Address) -> Recipient:
+        forms = redactor.person_forms(Person(a.name, a.email)) if a.name else {}
+        tokens.update({tok: name for tok, name in forms.values()})
+        if forms:
+            return Recipient(a, forms, forms["full"][0])
+        tok = redactor.email_token(a.email)
+        tokens[tok] = a.email
+        return Recipient(a, forms, tok)
+
+    me_forms = redactor.person_forms(directory.me, me=True)
+    tokens.update({tok: name for tok, name in me_forms.values()})
+
+    # Two-phase: only now the chat's text, the last few messages up to the one being answered.
+    chat_hash = hasher("chat", chat.id)
+    messages = sorted([m async for m in source.chat_messages(chat.id)], key=lambda m: m.created_at)
+    if message_id is not None:
+        cut = next((i for i, m in enumerate(messages) if m.id == message_id), None)
+        if cut is None:
+            raise DraftError("message_not_found", 404)
+        messages = messages[: cut + 1]
+    thread: list[ThreadMessage] = []
+    dropped = 0
+    for m in messages[-MAX_CHAT_MESSAGES:]:
+        if not m.from_me and ex_engine.people_reasons([m.sender], chat_hash=chat_hash):
+            dropped += 1  # someone not on the roster (left the chat): can't be checked, left out
+            continue
+        r = red(strip_signature_noise(m.text), "thread")
+        if r is None:
+            continue
+        sender = "⟦ME.full⟧" if m.from_me else recipient(m.sender).token if m.sender.email else "someone"
+        thread.append(ThreadMessage(sender, m.from_me, m.created_at, r.text))
+    if dropped:
+        counts["context_excluded"] = dropped
+    if mode == "reply" and not any(not m.from_me for m in thread):
+        raise DraftError("thread_empty", 404)
+
+    instr = red(instruction, "instruction")
+    topic = red(chat.topic, "subject") if chat.topic else None
+    audience = Audience(
+        relationship=labels.relationship(
+            others, manager=directory.manager, reports=directory.reports, org_domains=directory.org_domains
+        ),
+        to=[recipient(a) for a in others],
+        cc=[],
+        internal=sum(1 for a in others if _in(a.domain, directory.org_domains)),
+        external=sum(1 for a in others if not _in(a.domain, directory.org_domains)),
+    )
+    return LiveContext(
+        mode=mode,
+        conversation_id=chat.id,
+        audience=audience,
+        thread=thread,
+        subject=topic.text if topic else None,
+        instruction=instr.text if instr else None,
+        tokens=tokens,
+        thread_people=list(chat.members),
+        decision=decision,
+        one_off=one_off and decision.excluded,
+        me=Recipient(Address(me, directory.me.full_name), me_forms, "⟦ME.full⟧"),
+        reply_to_id=message_id or (messages[-1].id if messages else None),
+        suspicious=suspicious,
+        counts=counts,
+        channel="chat",
+        chat_type=chat.chat_type,
+        meeting_hash=meeting_hash,
+        series_hash=series_hash,
     )

@@ -100,7 +100,12 @@ THREADS: list[_Thread] = [
     _Thread("Q4 resource plan before Thursday", (MANAGER,), (), 1),
     _Thread("Acme go-live date?", (ACME[0],), (), 1),
     _Thread("Updated bank details for CloudNest invoice", (LOOKALIKE_VENDOR,), (), 1),
+    # Promises you made this week (M5 commitments): recent, appended so earlier IDs stay stable.
+    _Thread("Bluefin UAT environment access", (BLUEFIN[0],), (PEERS[0],), 2),
+    _Thread("Re: Onboarding checklist for Ana", (REPORTS[1],), (), 2),
 ]
+WAITING_END = 27  # the waiting threads keep their times however many threads follow them
+RECENT_DAYS = {"Bluefin UAT environment access": 3.2, "Re: Onboarding checklist for Ana": 1.4}
 
 LARGE_GROUP = tuple(
     [MANAGER, *REPORTS, *PEERS, EXEC]
@@ -223,7 +228,9 @@ def _conversation(self_addr: Address, now: datetime) -> list[MessageContent]:
         script = THREAD_SCRIPTS[thread.subject]
         waiting = all(who != ME for who, _ in script)
         if waiting:  # received only, waiting for your reply: the most recent mail in the inbox
-            start_days = 0.3 + 0.4 * (len(THREADS) - t_index)
+            start_days = 0.3 + 0.4 * (WAITING_END - t_index)
+        elif thread.subject in RECENT_DAYS:
+            start_days = RECENT_DAYS[thread.subject]
         history: list[MessageContent] = []
         for m, (who, text) in enumerate(script):
             prefix = "" if m == 0 or thread.subject.lower().startswith(("re:", "fw:", "fwd:")) else "Re: "
@@ -301,13 +308,17 @@ class SampleSource:
     async def recent_sent(self, top: int = 5) -> list[SentHeader]:
         return _sent(self.me, self._now)[:top]
 
-    async def sent_headers(self) -> AsyncIterator[SentHeader]:
+    async def sent_headers(self, since: datetime | None = None) -> AsyncIterator[SentHeader]:
         for header in _sent(self.me, self._now):
-            yield header
+            if since is None or header.sent_at > since:
+                yield header
 
     async def chats(self) -> AsyncIterator[Chat]:
         for chat in _chats(self.me, self._now):
             yield chat
+
+    async def chat(self, chat_id: str) -> Chat | None:
+        return next((c for c in _chats(self.me, self._now) if c.id == chat_id), None)
 
     async def events(self, start: datetime, end: datetime) -> AsyncIterator[Event]:
         for event in _events(self.me, self._now):
@@ -343,11 +354,12 @@ class SampleSource:
         """Sample-only convenience for the Sample workspace screen."""
         return _conversation(self.me, self._now)
 
-    async def chat_messages(self, chat_id: str) -> AsyncIterator[ChatMessage]:
+    async def chat_messages(self, chat_id: str, since: datetime | None = None) -> AsyncIterator[ChatMessage]:
         chat = next((c for c in _chats(self.me, self._now) if c.id == chat_id), None)
         if chat:
             for m in _chat_messages(self.me, self._now, chat):
-                yield m
+                if since is None or m.created_at > since:
+                    yield m
 
     # --- drafts "in the mailbox": the sample Drafts folder is Vanimo's own record of placed drafts
     async def create_reply_draft(self, message_id: str, text: str, *, reply_all: bool) -> PlacedDraft:

@@ -43,6 +43,8 @@ export function draftErrorText(err: unknown): string {
       return "Finish the “Choose what Vanimo learns from” review first (My data → Set up).";
     case "conversation_excluded":
       if (err.body.by === "organisation") return "Your organisation excludes this conversation, so Vanimo can't draft in it.";
+      if (err.body.by === "unverifiable" && Array.isArray(err.body.reasons) && err.body.reasons.includes("meeting_unknown"))
+        return "Vanimo can't tie this meeting chat to its meeting, so it can't check it against your meeting rules. Run a new scan on My data first.";
       if (err.body.by === "unverifiable")
         return "Someone in this conversation has no email address Vanimo can check against your rules, so it isn't used.";
       return "You excluded this conversation, so Vanimo doesn't use it.";
@@ -51,8 +53,20 @@ export function draftErrorText(err: unknown): string {
     case "recipients_required":
       return "Add at least one recipient.";
     case "thread_not_found":
-    case "thread_empty":
       return "Vanimo couldn't find this conversation in your mailbox.";
+    case "thread_empty":
+      return "There's nothing to reply to here yet. For a chat, turn on “New message” and say what it should say.";
+    case "chat_not_found":
+    case "message_not_found":
+      return "Vanimo couldn't find this chat or message in Teams.";
+    case "chat_required":
+      return "Pick a Teams chat first.";
+    case "no_conversation":
+      return "Vanimo doesn't know where this promise was made, so it can't draft the follow-up there.";
+    case "handle_expired":
+    case "handle_not_yours":
+    case "invalid_handle":
+      return "This Teams dialog has expired. Close it and choose “Draft reply” again.";
     case "too_many_drafts":
       return "That's a lot of drafts in a short time. Wait a minute and try again.";
     case "draft_blocked":

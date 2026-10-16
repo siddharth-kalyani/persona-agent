@@ -4,8 +4,8 @@ Logical exclusion is immediate: the engine reads rules live, so a new rule appli
 next fetch, retrieval or draft. These jobs do the physical work and leave a receipt:
 
 * exclusion added   — delete everything derived from the excluded sources: L1 items and drafts
-                      whose lineage (thread/chat, participants, their domains) the engine now
-                      excludes (with their edit events and rule evidence; rules left without
+                      and promises (M5) whose lineage (thread/chat, participants, their domains)
+                      the engine now excludes (with their edit events and rule evidence; rules left without
                       evidence go too), tokens no remaining item uses, and style cards (rebuilt
                       from what's left).
 * never-send added  — re-mask every display field already stored: the Sources index, L1 text,
@@ -13,7 +13,7 @@ next fetch, retrieval or draft. These jobs do the physical work and leave a rece
                       phrases; learned rules holding the word are deleted; style cards are
                       rebuilt so no phrase keeps the word.
 * learning deleted  — the user's "delete what you learned": every L1 item, token, style card,
-                      evaluation, draft, edit event and learned rule is removed (studio settings
+                      evaluation, draft, edit event, learned rule and promise is removed (studio settings
                       and drafting settings are the user's own and are kept).
 * removals          — rules and words are revoked going forward; history is not restored.
 
@@ -80,6 +80,11 @@ async def scrub_index(engine: AsyncEngine, vault: Vault, ref: UserRef) -> int:
 
 SAMPLE_ORG_DOMAINS = frozenset({SAMPLE_DOMAIN})
 L1_FIELDS = [("subject_enc", "l1_subject"), ("text_enc", "l1_text"), ("context_enc", "l1_context")]
+COMMITMENT_FIELDS = [
+    ("text_enc", "commitment_text"),
+    ("what_enc", "commitment_what"),
+    ("due_phrase_enc", "commitment_due"),
+]
 
 
 async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuild_sources: list[str]) -> dict[str, int]:
@@ -135,6 +140,26 @@ async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuil
                     {"x": vault.encrypt_user(t, u, masked, "draft_text"), "id": row.id},
                 )
                 changed_drafts += 1
+        changed_commitments = 0
+        rows = (await conn.execute(text("select id, text_enc, what_enc, due_phrase_enc from vanimo.commitments"))).all()
+        for row in rows:
+            masked = {
+                col: matcher.mask(vault.decrypt_user(t, u, getattr(row, col), purpose), opaque=L1_MARKS)
+                for col, purpose in COMMITMENT_FIELDS
+            }
+            if any(hits for _, hits in masked.values()):
+                await conn.execute(
+                    text(
+                        "update vanimo.commitments set text_enc = :x, what_enc = :w, due_phrase_enc = :d where id = :id"
+                    ),
+                    {
+                        "x": vault.encrypt_user(t, u, masked["text_enc"][0], "commitment_text"),
+                        "w": vault.encrypt_user(t, u, masked["what_enc"][0], "commitment_what"),
+                        "d": vault.encrypt_user(t, u, masked["due_phrase_enc"][0], "commitment_due"),
+                        "id": row.id,
+                    },
+                )
+                changed_commitments += 1
         rules_deleted = await rules.scrub(conn, vault, ref, matcher)
         enc = (await conn.execute(text("select settings_enc from vanimo.persona_settings"))).scalar_one_or_none()
         if enc:
@@ -149,6 +174,7 @@ async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuil
         "l1_items_rescrubbed": changed_items,
         "tokens_rescrubbed": changed_tokens,
         "drafts_rescrubbed": changed_drafts,
+        "commitments_rescrubbed": changed_commitments,
         "rules_deleted": rules_deleted,
     }
 
@@ -188,15 +214,26 @@ async def purge_excluded_learning(
                     rebuild_sources.append(r.source_kind)
         if doomed:
             await conn.execute(text("delete from vanimo.l1_items where id = any(:ids)"), {"ids": doomed})
-        tokens_deleted = await gc_tokens(conn, vault, ref) if doomed else 0
-        drafts = (await conn.execute(text("select id, source_kind, thread_hash, people from vanimo.drafts"))).all()
-        doomed_drafts = [
-            d.id
-            for d in drafts
-            if (sample_engine if d.source_kind == "sample" else ex_engine)
-            .lineage([(p["p"], list(p["d"])) for p in d.people], thread_hash=d.thread_hash)
-            .excluded
-        ]
+        promises = (
+            await conn.execute(
+                text(
+                    "select id, source_kind, channel, thread_hash, meeting_hash, series_hash, people "
+                    "from vanimo.commitments"
+                )
+            )
+        ).all()
+        doomed_promises = [c.id for c in promises if _excluded(c, ex_engine, sample_engine)]
+        if doomed_promises:
+            await conn.execute(text("delete from vanimo.commitments where id = any(:ids)"), {"ids": doomed_promises})
+        tokens_deleted = await gc_tokens(conn, vault, ref) if doomed or doomed_promises else 0
+        drafts = (
+            await conn.execute(
+                text(
+                    "select id, source_kind, channel, thread_hash, meeting_hash, series_hash, people from vanimo.drafts"
+                )
+            )
+        ).all()
+        doomed_drafts = [d.id for d in drafts if _excluded(d, ex_engine, sample_engine)]
         rules_before = (await conn.execute(text("select count(*) from vanimo.style_rules"))).scalar_one()
         if doomed_drafts:
             await remember_placed(conn, doomed_drafts)
@@ -209,8 +246,22 @@ async def purge_excluded_learning(
         "l1_items_deleted": len(doomed),
         "tokens_deleted": tokens_deleted,
         "drafts_deleted": len(doomed_drafts),
+        "commitments_deleted": len(doomed_promises),
         "rules_deleted": rules_before - rules_after,
     }
+
+
+def _excluded(row: Any, ex_engine: Any, sample_engine: Any) -> bool:
+    """A stored draft or promise re-checked from its lineage: the email thread or the chat (and a
+    meeting chat's meeting) it came from, and everyone in it with their domains."""
+    engine = sample_engine if row.source_kind == "sample" else ex_engine
+    return engine.lineage(
+        [(p["p"], list(p["d"])) for p in row.people],
+        thread_hash=row.thread_hash if row.channel == "email" else None,
+        chat_hash=row.thread_hash if row.channel == "chat" else None,
+        meeting_hash=row.meeting_hash,
+        series_hash=row.series_hash,
+    ).excluded
 
 
 async def remember_placed(conn: AsyncConnection, draft_ids: list[Any]) -> None:
@@ -232,6 +283,9 @@ async def gc_tokens(conn: AsyncConnection, vault: Vault, ref: UserRef) -> int:
     used: set[str] = set()
     for row in (await conn.execute(text("select subject_enc, text_enc, context_enc from vanimo.l1_items"))).all():
         for col, purpose in L1_FIELDS:
+            used |= set(TOKEN.findall(vault.decrypt_user(t, u, getattr(row, col), purpose) or ""))
+    for row in (await conn.execute(text("select text_enc, what_enc from vanimo.commitments"))).all():
+        for col, purpose in COMMITMENT_FIELDS[:2]:
             used |= set(TOKEN.findall(vault.decrypt_user(t, u, getattr(row, col), purpose) or ""))
     stored = (await conn.execute(text("select token from vanimo.l1_tokens"))).scalars().all()
     unused = [tok for tok in stored if tok not in used]
@@ -256,7 +310,16 @@ async def delete_learning(engine: AsyncEngine, ref: UserRef) -> dict[str, int]:
         await bump_version(conn, ref)
         all_drafts = list((await conn.execute(text("select id from vanimo.drafts"))).scalars().all())
         await remember_placed(conn, all_drafts)
-        for table in ("l1_items", "l1_tokens", "style_cards", "eval_runs", "drafts", "style_rules"):
+        for table in (
+            "l1_items",
+            "l1_tokens",
+            "style_cards",
+            "eval_runs",
+            "drafts",
+            "style_rules",
+            "commitments",
+            "commitment_scans",
+        ):
             result = await conn.execute(text(f"delete from vanimo.{table}"))  # noqa: S608
             out[f"{table}_deleted"] = result.rowcount
     return out

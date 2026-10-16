@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from vanimo import audit
 from vanimo.api.deps import CurrentPrincipal, CurrentUser, State, UserSource
+from vanimo.commitments.scan import extractor_for
 from vanimo.controls.jobs import run_job
 from vanimo.controls.store import add_purge_job, hasher_for, load_engine
 from vanimo.db.session import UserRef, user_tx
@@ -124,7 +125,14 @@ async def start_learning(
     background = getattr(source, "for_background", None)
     task = state.spawn(
         backfill.run_learning(
-            state.engine, state.vault, user, background() if background else source, self_email=email, run_id=run_id
+            state.engine,
+            state.vault,
+            user,
+            background() if background else source,
+            self_email=email,
+            run_id=run_id,
+            extractor=extractor_for(state),
+            tz=state.settings.cell_config.zone,
         )
     )
     async with user_tx(state.engine, user) as conn:

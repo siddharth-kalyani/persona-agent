@@ -1,11 +1,12 @@
 """The drafting service (MVP plan M3; architecture §7.2 S12, §9.1-§9.2).
 
-    rate limit → onboarding gate → exclusions on the conversation (metadata) → live thread to L1
+    rate limit → onboarding gate → exclusions on the conversation or chat (metadata) → live thread to L1
     → persona pack (exemplars post-filtered) → model route → generate the body → output gate
     → greeting + body + sign-off → re-hydrate for the owner → pre-send checks → store (L1)
 
 Nothing is ever sent: the draft goes back to the user's screen. Logs carry codes, counts and
-timings only.
+timings only. Emails (M3) and Teams chats (M5) go through the same steps; a chat has no subject,
+greeting or sign-off, and its roster is what the exclusion engine decides on.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from vanimo.controls.store import hasher_for, load_engine, load_terms, lock_user
 from vanimo.db.session import UserRef, user_tx
 from vanimo.drafting import checks as chk
 from vanimo.drafting.checks import Check, ClientAccount
-from vanimo.drafting.context import Audience, DraftError, LiveContext, Mode, gather
+from vanimo.drafting.context import Audience, DraftError, LiveContext, Mode, gather, gather_chat
 from vanimo.drafting.gate import compose, gate, render
 from vanimo.drafting.generate import OFFLINE_LABEL, BedrockGenerator, Generator, OfflineGenerator
 from vanimo.drafting.pack import load_pack
@@ -47,8 +48,8 @@ MAX_CHECK_CHARS = 20_000  # of your own words, after the quoted thread is cut of
 @dataclass
 class DraftInput:
     mode: Mode
-    surface: Literal["outlook", "web", "queue"]
-    conversation_id: str | None = None
+    surface: Literal["outlook", "web", "queue", "teams", "commitments"]
+    conversation_id: str | None = None  # an email conversation, or the chat ID for a Teams draft
     to: list[Address] | None = None
     cc: list[Address] | None = None
     subject: str | None = None
@@ -56,6 +57,8 @@ class DraftInput:
     quality: Quality = "auto"
     reply_all: bool = False
     one_off: bool = False
+    channel: Literal["email", "chat"] = "email"
+    message_id: str | None = None  # Teams: the chat message being answered
 
 
 @dataclass
@@ -77,6 +80,8 @@ class DraftResult:
     total_ms: float
     model_ms: float | None
     extra: dict[str, Any] = field(default_factory=dict)
+    channel: str = "email"
+    chat_users: list[str] = field(default_factory=list)  # Teams: who "Open chat" opens it with
 
     @property
     def insert_allowed(self) -> bool:
@@ -157,6 +162,8 @@ async def create_draft(
     )
     if req.mode == "new" and not (req.instruction and req.instruction.strip()):
         raise DraftError("instruction_required", 422)
+    if req.channel == "chat" and not req.conversation_id:
+        raise DraftError("chat_required", 422)
     await require_review(state, user, source)
 
     hasher = hasher_for(state.vault, user)
@@ -168,6 +175,7 @@ async def create_draft(
         known, known_people = await _known(conn, state, user)
         accounts = await _client_accounts(conn, state, user)
         version = await controls_version(conn)
+        meeting = await _chat_meeting(conn, hasher, req.conversation_id) if req.channel == "chat" else None
     matcher = Matcher([Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms])
     blocked_matcher = Matcher(
         [
@@ -179,23 +187,40 @@ async def create_draft(
     allowed_terms = {t["term_id"]: t["text"] for t in terms if t["allow_in_drafts"]}
 
     directory = await state.directory_cache.get((str(user.user_id), source.kind), source, self_email)
-    ctx = await gather(
-        source,
-        ex_engine=ex_engine,
-        matcher=matcher,
-        hasher=hasher,
-        directory=directory,
-        self_email=self_email,
-        mode=req.mode,
-        conversation_id=req.conversation_id,
-        to=req.to,
-        cc=req.cc,
-        subject=req.subject,
-        instruction=req.instruction,
-        reply_all=req.reply_all,
-        one_off=req.one_off,
-        known_people=known_people,
-    )
+    if req.channel == "chat":
+        ctx = await gather_chat(
+            source,
+            ex_engine=ex_engine,
+            matcher=matcher,
+            hasher=hasher,
+            directory=directory,
+            self_email=self_email,
+            chat_id=req.conversation_id or "",
+            meeting=meeting,
+            mode=req.mode,
+            instruction=req.instruction,
+            message_id=req.message_id,
+            one_off=req.one_off,
+            known_people=known_people,
+        )
+    else:
+        ctx = await gather(
+            source,
+            ex_engine=ex_engine,
+            matcher=matcher,
+            hasher=hasher,
+            directory=directory,
+            self_email=self_email,
+            mode=req.mode,
+            conversation_id=req.conversation_id,
+            to=req.to,
+            cc=req.cc,
+            subject=req.subject,
+            instruction=req.instruction,
+            reply_all=req.reply_all,
+            one_off=req.one_off,
+            known_people=known_people,
+        )
     async with user_tx(state.engine, user) as conn:
         pack = await load_pack(conn, state.vault, user, source.kind, ctx, ex_engine, hasher, matcher)
     prompt = build(ctx, pack)
@@ -247,9 +272,10 @@ async def create_draft(
     found += chk.sender_lookalike(_senders(ctx), known_domains=known, org_domains=org)
     found += chk.reply_to_redirect(ctx.redirects, known_domains=known, org_domains=org)
     found += chk.payment_change(received, shown, sender_lookalike=chk.blocked(found))
-    found += chk.recipient_checks(
-        recipients, thread_people=ctx.thread_people, known_domains=known, org_domains=org, me=self_email
-    )
+    if ctx.channel == "email":  # a chat's members are its roster, not recipients the user picked
+        found += chk.recipient_checks(
+            recipients, thread_people=ctx.thread_people, known_domains=known, org_domains=org, me=self_email
+        )
     found += chk.cross_client(shown, recipients, accounts, ex_engine.domain_hashes)
     found += chk.invented_facts(shown, grounding)
     found += chk.fill_ins(shown)
@@ -258,8 +284,8 @@ async def create_draft(
             Check(
                 "hidden_content",
                 "warn",
-                "The email you're replying to had hidden text, which was removed before drafting. Hidden text is a "
-                "common way to trick AI assistants.",
+                f"The {'chat' if ctx.channel == 'chat' else 'email'} you're replying to had hidden text, which was "
+                "removed before drafting. Hidden text is a common way to trick AI assistants.",
             )
         )
     found += gated.notes
@@ -350,7 +376,26 @@ async def create_draft(
         one_off=ctx.one_off,
         total_ms=total_ms,
         model_ms=body.total_ms if generator.kind == "bedrock" else None,
+        channel=ctx.channel,
+        chat_users=[r.address.email for r in ctx.audience.to] if ctx.channel == "chat" else [],
     )
+
+
+async def _chat_meeting(
+    conn: AsyncConnection, hasher: Any, chat_id: str | None
+) -> tuple[str | None, str | None] | None:
+    """A meeting chat's meeting and series, as the header pass linked them (by the join link)."""
+    if not chat_id:
+        return None
+    row = (
+        await conn.execute(
+            text("select chat_type, meeting_hash, series_hash from vanimo.source_chats where key_hash = :h"),
+            {"h": hasher("chat", chat_id)},
+        )
+    ).first()
+    if row is None or row.chat_type != "meeting" or not row.meeting_hash:
+        return None
+    return row.meeting_hash, row.series_hash
 
 
 def _senders(ctx: LiveContext) -> list[Address]:
@@ -395,9 +440,10 @@ async def _store(
                     text(
                         "insert into vanimo.drafts (tenant_id, owner_user_id, source_kind, surface, mode, generator, "
                         "tier, model_id, relationship, thread_hash, people, text_enc, checks, word_count, latency_ms, "
-                        "reply_to_enc, audience_enc) values (:t, :u, :k, :surface, :mode, :gen, :tier, :model, :rel, "
-                        ":th, "
-                        "cast(:people as jsonb), :txt, cast(:checks as jsonb), :wc, :ms, :rt, :aud) returning id"
+                        "reply_to_enc, audience_enc, channel, meeting_hash, series_hash, chat_ref_enc) "
+                        "values (:t, :u, :k, :surface, :mode, :gen, :tier, :model, :rel, :th, cast(:people as jsonb), "
+                        ":txt, "
+                        "cast(:checks as jsonb), :wc, :ms, :rt, :aud, :ch, :mh, :sh, :cr) returning id"
                     ),
                     {
                         "t": t,
@@ -409,7 +455,16 @@ async def _store(
                         "tier": tier,
                         "model": model_id,
                         "rel": ctx.audience.relationship,
-                        "th": hasher("thread", ctx.conversation_id) if ctx.conversation_id else None,
+                        "th": hasher("chat" if ctx.channel == "chat" else "thread", ctx.conversation_id)
+                        if ctx.conversation_id
+                        else None,
+                        "ch": ctx.channel,
+                        "mh": ctx.meeting_hash,
+                        "sh": ctx.series_hash,
+                        # The chat itself, so the Teams edit loop can find the message the user sent.
+                        "cr": state.vault.encrypt_user(t, u, ctx.conversation_id, "draft_chat")
+                        if ctx.channel == "chat"
+                        else None,
                         "people": json.dumps(lineage),
                         "txt": state.vault.encrypt_user(t, u, l1, "draft_text"),
                         "checks": json.dumps([{"code": c.code, "severity": c.severity} for c in found]),
@@ -428,7 +483,7 @@ async def _store(
                             "draft_audience",
                         ),
                         "rt": state.vault.encrypt_user(t, u, ctx.reply_to_id, "draft_reply_to")
-                        if ctx.mode == "reply"
+                        if ctx.mode == "reply" and ctx.channel == "email"
                         else None,
                     },
                 )

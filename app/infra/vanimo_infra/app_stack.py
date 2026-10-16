@@ -26,7 +26,7 @@ from vanimo_infra.data_stack import DataStack
 
 API_PORT = 8000
 
-# Main web app: same-origin API, Entra sign-in redirects only, no framing (Teams tab gets its own path later).
+# Main web app: same-origin API, Entra sign-in redirects only, no framing (the Teams dialog and tab use /teams.html, M5).
 WEB_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
     "connect-src 'self' https://login.microsoftonline.com; frame-src 'self' https://login.microsoftonline.com; "
@@ -45,6 +45,17 @@ ADDIN_CSP = (
     "default-src 'self'; script-src 'self' https://appsforoffice.microsoft.com; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; connect-src 'self' https://login.microsoftonline.com; "
     "frame-src 'self' https://login.microsoftonline.com; object-src 'none'; base-uri 'self'"
+)
+
+# Teams dialog and personal tab (/teams.html, M5): TeamsJS is bundled, so only framing by Teams and
+# Microsoft 365 hosts is added. Report-only, like the add-in, until the Teams spike confirms the hosts
+# on every client; enforce right after it.
+TEAMS_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+    "connect-src 'self' https://login.microsoftonline.com; frame-src 'self' https://login.microsoftonline.com; "
+    "object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://teams.microsoft.com "
+    "https://*.teams.microsoft.com https://teams.cloud.microsoft https://*.cloud.microsoft https://*.office.com "
+    "https://*.microsoft365.com"
 )
 
 SPA_REWRITE = """
@@ -140,7 +151,7 @@ class AppStack(Stack):
             ),
         )
         task.add_to_execution_role_policy(decrypt_secrets)
-        task.add_container(
+        api_container = task.add_container(
             "api",
             image=image,
             logging=ecs.LogDrivers.aws_logs(stream_prefix="api", log_group=log_group),
@@ -156,6 +167,9 @@ class AppStack(Stack):
                 "VANIMO_DRAFTER": "bedrock",
                 # uvicorn trusts X-Forwarded-For only from the ALB (inside the VPC).
                 "FORWARDED_ALLOW_IPS": data.vpc.vpc_cidr_block,
+                # Teams (M5): empty until the Teams app and its bot are registered.
+                "VANIMO_TEAMS_APP_ID": cfg.teams_app_id,
+                "VANIMO_TEAMS_BOT_ID": cfg.teams_bot_id,
             },
             secrets={
                 "VANIMO_DB_APP_PASSWORD": ecs.Secret.from_secrets_manager(app_password),
@@ -290,6 +304,24 @@ class AppStack(Stack):
                 strict_transport_security=hsts,
             ),
         )
+        teams_headers = cf.ResponseHeadersPolicy(
+            self,
+            "TeamsHeaders",
+            security_headers_behavior=cf.ResponseSecurityHeadersBehavior(
+                content_type_options=cf.ResponseHeadersContentTypeOptions(override=True),
+                referrer_policy=cf.ResponseHeadersReferrerPolicy(
+                    referrer_policy=cf.HeadersReferrerPolicy.NO_REFERRER, override=True
+                ),
+                strict_transport_security=hsts,
+            ),
+            custom_headers_behavior=cf.ResponseCustomHeadersBehavior(
+                custom_headers=[
+                    cf.ResponseCustomHeader(
+                        header="Content-Security-Policy-Report-Only", value=TEAMS_CSP, override=True
+                    )
+                ]
+            ),
+        )
         spa = cf.Function(
             self, "SpaRewrite", code=cf.FunctionCode.from_inline(SPA_REWRITE), runtime=cf.FunctionRuntime.JS_2_0
         )
@@ -329,6 +361,11 @@ class AppStack(Stack):
                     viewer_protocol_policy=cf.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     response_headers_policy=addin_headers,
                 ),
+                "/teams.html": cf.BehaviorOptions(
+                    origin=web_origin,
+                    viewer_protocol_policy=cf.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    response_headers_policy=teams_headers,
+                ),
                 "/redirect.html": cf.BehaviorOptions(
                     origin=web_origin,
                     viewer_protocol_policy=cf.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -359,6 +396,8 @@ class AppStack(Stack):
         )
 
         url = f"https://{distribution.distribution_domain_name}"
+        # Teams dialogs load from the web app's own origin.
+        api_container.add_environment("VANIMO_WEB_URL", url)
         CfnOutput(self, "WebUrl", value=url, description="Vanimo web app (also the add-in host)")
         CfnOutput(self, "RedirectUri", value=f"{url}/redirect.html", description="Add as a SPA redirect URI in Entra")
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)

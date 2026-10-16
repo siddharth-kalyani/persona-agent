@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +27,12 @@ class Cell:
     bedrock_region: str
     # Models a tenant in this cell may use (per-tenant allow-list, architecture §9.1).
     model_allow_list: tuple[str, ...]
+    # Where "by Thursday EOD" is resolved (commitments, M5) until users can set their own.
+    time_zone: str = "UTC"
+
+    @property
+    def zone(self) -> ZoneInfo:
+        return ZoneInfo(self.time_zone)
 
 
 CELLS: dict[str, Cell] = {
@@ -35,6 +42,7 @@ CELLS: dict[str, Cell] = {
         data_region="IN",
         bedrock_region="ap-south-1",
         model_allow_list=("anthropic.claude-haiku-5-5", "anthropic.claude-sonnet-5-5"),
+        time_zone="Asia/Kolkata",
     ),
     # Added later without code changes (D2): deploy the same stacks with VANIMO_CELL=us.
     "us": Cell(
@@ -43,6 +51,7 @@ CELLS: dict[str, Cell] = {
         data_region="US",
         bedrock_region="us-east-1",
         model_allow_list=("anthropic.claude-haiku-5-5", "anthropic.claude-sonnet-5-5"),
+        time_zone="America/New_York",
     ),
 }
 
@@ -74,6 +83,13 @@ class Settings(BaseSettings):
     api_scope_name: str = "access_as_user"
 
     graph_base_url: str = "https://graph.microsoft.com/v1.0"
+
+    # Teams (M5). The web app's own origin (Teams dialogs and tabs load from it), the Teams app's
+    # manifest ID (activity-feed deep links) and the bot's ID (a Developer Portal bot registration:
+    # message actions need one). Empty: no Teams surface, in-app notifications only.
+    web_url: str = "http://localhost:5173"
+    teams_app_id: str = ""
+    teams_bot_id: str = ""
     graph_timeout_s: float = 20.0
 
     # Models (D7: Claude on Bedrock only). Haiku 5.5 by default (founder, 2026-10-13); Sonnet 5.5 for premium drafts.

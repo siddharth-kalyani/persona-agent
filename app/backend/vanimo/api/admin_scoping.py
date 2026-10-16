@@ -73,12 +73,23 @@ class ScopingOut(BaseModel):
     # Drafts may be put in people's Outlook Drafts folder (each person still opts in). D8: one app
     # holds Mail.ReadWrite until the Read/Compose split; this is the organisation's switch meanwhile.
     serverDrafts: bool = True
+    # Teams (M5): open a chat with the draft typed in (turn on once the week-1 prefill spike passed
+    # in existing chats; otherwise people copy the draft), and Teams activity notifications.
+    teamsPrefill: bool = False
+    teamsNotifications: bool = True
 
 
 async def _read(state: State, user: CurrentUser) -> ScopingOut:
     v, t = state.vault, user.tenant_id
     async with user_tx(state.engine, user) as conn:
-        policy = (await conn.execute(text("select external_mode, server_drafts from vanimo.tenant_policies"))).first()
+        policy = (
+            await conn.execute(
+                text(
+                    "select external_mode, server_drafts, teams_prefill, teams_notifications "
+                    "from vanimo.tenant_policies"
+                )
+            )
+        ).first()
         mode = policy.external_mode if policy else None
         accounts = (await conn.execute(text("select * from vanimo.client_accounts order by created_at"))).all()
         domains = (await conn.execute(text("select account_id, domain_enc from vanimo.client_account_domains"))).all()
@@ -92,6 +103,8 @@ async def _read(state: State, user: CurrentUser) -> ScopingOut:
     return ScopingOut(
         externalMode=mode or "allow_all",
         serverDrafts=policy.server_drafts if policy else True,
+        teamsPrefill=policy.teams_prefill if policy else False,
+        teamsNotifications=policy.teams_notifications if policy else True,
         accounts=[
             AccountOut(
                 id=str(a.id),
@@ -163,6 +176,28 @@ async def set_drafts_policy(
         )
         action = "admin.server_drafts_on" if body.serverDrafts else "admin.server_drafts_off"
         await audit.record(conn, user, action, request_id=request.state.request_id)
+    return await _read(state, user)
+
+
+class TeamsPolicyIn(BaseModel):
+    teamsPrefill: bool
+    teamsNotifications: bool
+
+
+@router.put("/teams", response_model=ScopingOut)
+async def set_teams_policy(
+    body: TeamsPolicyIn, _: AdminPrincipal, user: CurrentUser, state: State, request: Request
+) -> ScopingOut:
+    async with user_tx(state.engine, user, admin=True) as conn:
+        await conn.execute(
+            text(
+                "insert into vanimo.tenant_policies (tenant_id, teams_prefill, teams_notifications, updated_by) "
+                "values (:t, :p, :n, :u) on conflict (tenant_id) do update set teams_prefill = :p, "
+                "teams_notifications = :n, updated_at = now(), updated_by = :u"
+            ),
+            {"t": user.tenant_id, "p": body.teamsPrefill, "n": body.teamsNotifications, "u": user.user_id},
+        )
+        await audit.record(conn, user, "admin.teams_policy", request_id=request.state.request_id)
     return await _read(state, user)
 
 

@@ -4,6 +4,8 @@
 * GET  /api/drafting/threads  — recent conversations with received mail, headers only, each marked
                                 if your rules or your organisation's exclude it (the thread picker).
 * GET  /api/drafting/thread   — one conversation's last messages, for your own screen (gated).
+* GET  /api/drafting/chats    — your recent Teams chats, roster metadata only (M5 chat picker).
+* GET  /api/drafting/chat     — one chat's last messages, for your own screen (gated).
 * POST /api/drafts            — draft a reply or a new email in your voice. Never sends.
 * POST /api/drafts/check      — pre-send checks on the text you are about to send.
 * GET  /api/drafts            — your recent drafts (metadata only, no text).
@@ -14,7 +16,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Query, Request, Response
@@ -25,13 +27,14 @@ from vanimo import audit
 from vanimo.api.deps import CurrentPrincipal, CurrentUser, State, UserSource
 from vanimo.api.learning import self_email
 from vanimo.controls.neversend import render_removed
-from vanimo.controls.store import load_engine, load_matcher
+from vanimo.controls.store import hasher_for, load_engine, load_matcher
 from vanimo.db.session import user_tx
-from vanimo.drafting.context import MAX_THREAD_MESSAGES, DraftError, _thread_headers, refusal
+from vanimo.drafting.context import MAX_CHAT_MESSAGES, MAX_THREAD_MESSAGES, DraftError, _thread_headers, refusal
 from vanimo.drafting.generate import OFFLINE_LABEL
 from vanimo.drafting.service import (
     DraftInput,
     DraftResult,
+    _chat_meeting,
     _sample_domains,
     check_text,
     create_draft,
@@ -40,7 +43,7 @@ from vanimo.drafting.service import (
 )
 from vanimo.gates import onboarding_state
 from vanimo.redaction.parse import strip_signature_noise
-from vanimo.sources.base import Address
+from vanimo.sources.base import Address, Chat
 
 router = APIRouter(prefix="/api", tags=["drafting"])
 
@@ -198,11 +201,132 @@ async def drafting_thread(
     )
 
 
+# --- Teams chats (M5) -----------------------------------------------------------------------------
+class ChatItem(BaseModel):
+    chatId: str
+    chatType: Literal["oneOnOne", "group", "meeting"]
+    label: str  # the chat's name, or its members' names; never-send words as [removed]
+    members: int
+    lastActivityAt: datetime | None
+    excluded: bool
+    excludedBy: Literal["you", "organisation", "unverifiable"] | None
+    reasons: list[str]
+
+
+def chat_label(c: Chat, me: str) -> str:
+    if c.topic:
+        return c.topic
+    names = [a.name or a.email for a in c.members if a.email.lower() != me]
+    return ", ".join(names[:4]) + (f" +{len(names) - 4}" if len(names) > 4 else "") or "Chat"
+
+
+MAX_CHAT_LIST = 200  # chats looked at (metadata) for the picker
+
+
+@router.get("/drafting/chats", response_model=list[ChatItem])
+async def drafting_chats(
+    user: CurrentUser, principal: CurrentPrincipal, source: UserSource, state: State
+) -> list[ChatItem]:
+    """Rosters only: no message text is read here. Hidden chats aren't offered."""
+    me = await self_email(source, principal.email)
+    hasher = hasher_for(state.vault, user)
+    async with user_tx(state.engine, user) as conn:
+        ex = await load_engine(conn, state.vault, user, self_email=me, extra_org_domains=_sample_domains(source))
+        matcher = await load_matcher(conn, state.vault, user)
+        meetings = {
+            r.key_hash: (r.meeting_hash, r.series_hash)
+            for r in (
+                await conn.execute(text("select key_hash, meeting_hash, series_hash from vanimo.source_chats"))
+            ).all()
+        }
+    seen: list[Chat] = []
+    async for c in source.chats():
+        if not c.hidden:
+            seen.append(c)
+        if len(seen) >= MAX_CHAT_LIST:
+            break
+    seen.sort(key=lambda c: c.last_activity_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+    out = []
+    for c in seen[:25]:
+        meeting = meetings.get(hasher("chat", c.id))
+        if c.chat_type == "meeting" and not (meeting and meeting[0]):
+            excluded, by, reasons = True, "unverifiable", ["meeting_unknown"]
+        else:
+            decision = ex.chat(
+                c, meeting_hash=meeting[0] if meeting else None, series_hash=meeting[1] if meeting else None
+            )
+            excluded = decision.excluded
+            by = refusal(decision).extra["by"] if excluded else None
+            reasons = sorted({r.kind for r in decision.reasons})
+        out.append(
+            ChatItem(
+                chatId=c.id,
+                chatType=c.chat_type,
+                label=render_removed(matcher.mask(chat_label(c, me))[0]) or "Chat",
+                members=len(c.members),
+                lastActivityAt=c.last_activity_at,
+                excluded=excluded,
+                excludedBy=by,  # type: ignore[arg-type]
+                reasons=reasons,
+            )
+        )
+    return out
+
+
+class ChatOut(BaseModel):
+    chatId: str
+    label: str
+    messages: list[ThreadMessageOut]
+
+
+@router.get("/drafting/chat", response_model=ChatOut)
+async def drafting_chat(
+    user: CurrentUser,
+    principal: CurrentPrincipal,
+    source: UserSource,
+    state: State,
+    chatId: str = Query(min_length=1, max_length=256),
+) -> ChatOut:
+    """A chat's last few messages, for your own screen: the review must be done and the roster allowed."""
+    await require_review(state, user, source)
+    me = await self_email(source, principal.email)
+    hasher = hasher_for(state.vault, user)
+    async with user_tx(state.engine, user) as conn:
+        ex = await load_engine(conn, state.vault, user, self_email=me, extra_org_domains=_sample_domains(source))
+        matcher = await load_matcher(conn, state.vault, user)
+        meeting = await _chat_meeting(conn, hasher, chatId)
+    chat = await source.chat(chatId)
+    if chat is None:
+        raise DraftError("chat_not_found", 404)
+    if chat.chat_type == "meeting" and meeting is None:
+        raise DraftError("conversation_excluded", 403, by="unverifiable", reasons=["meeting_unknown"])
+    decision = ex.chat(chat, meeting_hash=meeting[0] if meeting else None, series_hash=meeting[1] if meeting else None)
+    if decision.excluded:
+        raise refusal(decision)
+    chat_hash = hasher("chat", chat.id)
+    msgs = sorted([m async for m in source.chat_messages(chat.id)], key=lambda m: m.created_at)
+    shown = [
+        ThreadMessageOut(
+            sender=PersonOut(email=m.sender.email, name=m.sender.name),
+            sentAt=m.created_at,
+            fromMe=m.from_me,
+            text=render_removed(matcher.mask(m.text)[0]) or "",
+        )
+        for m in msgs[-MAX_CHAT_MESSAGES:]
+        if m.from_me or not ex.people_reasons([m.sender], chat_hash=chat_hash)
+    ]
+    return ChatOut(
+        chatId=chat.id, label=render_removed(matcher.mask(chat_label(chat, me))[0]) or "Chat", messages=shown
+    )
+
+
 # --- drafts --------------------------------------------------------------------------------------
 class DraftIn(BaseModel):
     mode: Literal["reply", "new"]
-    surface: Literal["outlook", "web"] = "web"
-    conversationId: str | None = Field(None, max_length=512)
+    surface: Literal["outlook", "web", "teams"] = "web"
+    channel: Literal["email", "chat"] = "email"
+    conversationId: str | None = Field(None, max_length=512)  # the chat ID for a Teams draft
+    messageId: str | None = Field(None, max_length=512)  # Teams: the message being answered
     # The compose window's recipients (the add-in sends them). Omitted on a reply: the sender of the
     # last message (and, with replyAll, everyone else on it).
     to: list[PersonIn] | None = Field(None, max_length=50)
@@ -252,6 +376,8 @@ class DraftOut(BaseModel):
     insertAllowed: bool  # False while a "block" check stands: the user must confirm first
     oneOff: bool
     timing: TimingOut
+    channel: Literal["email", "chat"] = "email"
+    chatUsers: list[str] = Field(default_factory=list)  # Teams: who "Open chat" opens it with
 
 
 def _people(rs: list) -> list[PersonOut]:  # type: ignore[type-arg]
@@ -274,6 +400,8 @@ async def post_draft(
         quality=body.quality,
         reply_all=body.replyAll,
         one_off=body.oneOff,
+        channel=body.channel,
+        message_id=body.messageId,
     )
     result = await create_draft(state, user, source, self_email=me, req=req, request_id=request.state.request_id)
     return draft_out(result)
@@ -305,6 +433,8 @@ def draft_out(result: DraftResult) -> DraftOut:
         insertAllowed=result.insert_allowed,
         oneOff=result.one_off,
         timing=TimingOut(totalMs=result.total_ms, modelMs=result.model_ms),
+        channel=result.channel,  # type: ignore[arg-type]
+        chatUsers=result.chat_users,
     )
 
 
@@ -392,7 +522,7 @@ async def list_drafts(user: CurrentUser, source: UserSource, state: State) -> li
 
 
 class FeedbackIn(BaseModel):
-    outcome: Literal["inserted", "copied", "opened_reply", "discarded"] | None = None
+    outcome: Literal["inserted", "copied", "opened_reply", "opened_chat", "discarded"] | None = None
     rating: Literal["good", "bad"] | None = None
 
 

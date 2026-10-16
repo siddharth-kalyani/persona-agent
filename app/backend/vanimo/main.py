@@ -16,13 +16,27 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from vanimo.api import admin_scoping, auth, controls, diagnostics, drafting, edits, learning, me, queue
+from vanimo.api import (
+    admin_scoping,
+    auth,
+    commitments,
+    controls,
+    diagnostics,
+    drafting,
+    edits,
+    learning,
+    me,
+    notifications,
+    queue,
+    teams,
+)
 from vanimo.auth.entra import AuthError
 from vanimo.config import Settings, get_settings
 from vanimo.controls.sweeper import sweep_forever
 from vanimo.drafting.context import DraftError
 from vanimo.graph.client import GraphError
 from vanimo.logs import configure_logging, get_logger
+from vanimo.notify import notify_round
 from vanimo.state import AppState, build_state
 
 log = get_logger("vanimo.http")
@@ -43,7 +57,8 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.vanimo = state or build_state(settings)
         if settings.background_sweeper:
-            app.state.vanimo.spawn(sweep_forever(app.state.vanimo.engine, app.state.vanimo.vault))
+            st = app.state.vanimo
+            app.state.vanimo.spawn(sweep_forever(st.engine, st.vault, notifications=lambda: notify_round(st)))
         log.info("app.start", env=settings.env, cell=settings.cell)
         try:
             yield
@@ -149,6 +164,9 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     app.include_router(drafting.router)
     app.include_router(queue.router)
     app.include_router(edits.router)
+    app.include_router(commitments.router)
+    app.include_router(notifications.router)
+    app.include_router(teams.router)
     return app
 
 

@@ -1,6 +1,7 @@
 /** Draft (M3): reply to a conversation or write a new email in your voice, see the pre-send
  * checks, and copy the result. The same drafting service backs the Outlook add-in; this page is
- * also the persona test bench. Nothing is ever sent from here. */
+ * also the persona test bench. M5: Teams chats too (the same service as Teams' "Draft reply").
+ * Nothing is ever sent from here. */
 import {
   Badge,
   Button,
@@ -25,7 +26,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ApiError,
+  type ChatView,
   type Draft as DraftResult,
+  type DraftChat,
   type DraftCheck,
   type DraftingStatus,
   type DraftRequest,
@@ -37,6 +40,7 @@ import {
 import { useApi } from "../../api/context";
 import { DraftView, draftErrorText, hasBlock, RateButtons } from "../../drafting/DraftView";
 import { errorText } from "../Home";
+import { newChatLink } from "../TeamsPrefill";
 
 const useStyles = makeStyles({
   stack: { display: "grid", gap: tokens.spacingVerticalL },
@@ -67,7 +71,9 @@ function when(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-type Target = { kind: "reply"; thread: DraftThread } | { kind: "new" };
+type Target = { kind: "reply"; thread: DraftThread } | { kind: "new" } | { kind: "chat"; chat: DraftChat };
+
+const CHAT_TYPES: Record<DraftChat["chatType"], string> = { oneOnOne: "1:1 chat", group: "group chat", meeting: "meeting chat" };
 
 export function Draft() {
   const styles = useStyles();
@@ -92,6 +98,10 @@ export function Draft() {
   const [confirmed, setConfirmed] = useState(false);
   const [rated, setRated] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [chats, setChats] = useState<DraftChat[]>([]);
+  const [chatView, setChatView] = useState<ChatView | null>(null);
+  const [chatNew, setChatNew] = useState(false);
+  const [prefill, setPrefill] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -102,6 +112,9 @@ export function Draft() {
     } catch (e) {
       setError(errorText(e));
     }
+    // Teams chats and the organisation's prefill switch: optional extras, never block the page.
+    api.draftingChats().then(setChats, () => setChats([]));
+    api.teamsConfig().then((c) => setPrefill(c.prefill), () => setPrefill(false));
   }, [api]);
 
   useEffect(() => {
@@ -115,9 +128,14 @@ export function Draft() {
     setNotice(null);
     setOneOffOffer(false);
     setView(null);
+    setChatView(null);
+    setChatNew(false);
     setInstruction("");
     if (next.kind === "reply" && !next.thread.excluded) {
       api.draftingThread(next.thread.conversationId).then(setView, () => setView(null));
+    }
+    if (next.kind === "chat" && !next.chat.excluded) {
+      api.draftingChat(next.chat.chatId).then(setChatView, () => setChatView(null));
     }
   }
 
@@ -128,13 +146,16 @@ export function Draft() {
     setNotice(null);
     setOneOffOffer(false);
     const req: DraftRequest = {
-      mode: target.kind,
+      mode: target.kind === "chat" ? (chatNew ? "new" : "reply") : target.kind,
       surface: "web",
       instruction: instruction.trim() || null,
       quality: premium ? "premium" : "auto",
       oneOff,
     };
-    if (target.kind === "reply") {
+    if (target.kind === "chat") {
+      req.channel = "chat";
+      req.conversationId = target.chat.chatId;
+    } else if (target.kind === "reply") {
       req.conversationId = target.thread.conversationId;
       req.replyAll = replyAll;
     } else {
@@ -189,6 +210,12 @@ export function Draft() {
     }
   }
 
+  async function openInTeams() {
+    if (!draft?.chatUsers?.length) return;
+    window.open(newChatLink(draft.chatUsers.join(","), text), "_blank", "noreferrer");
+    if (draft.id) await api.draftFeedback(draft.id, { outcome: "opened_chat" }).catch(() => undefined);
+  }
+
   async function placeInOutlook() {
     if (!draft?.id) return;
     try {
@@ -233,8 +260,8 @@ export function Draft() {
       <div>
         <Title3 as="h2">Draft</Title3>
         <Text as="p">
-          Reply or write a new email in your voice. Vanimo never sends: copy the draft into Outlook, or use the Vanimo
-          button inside Outlook to insert it at your cursor.
+          Reply or write a new email or Teams message in your voice. Vanimo never sends: copy the draft into Outlook or
+          Teams, or use the Vanimo button inside Outlook (or "Draft reply" on a Teams message).
         </Text>
       </div>
       <div className={styles.row}>
@@ -291,10 +318,44 @@ export function Draft() {
               </span>
             </Button>
           ))}
+          {chats.length > 0 && <Caption1 className={styles.muted}>Teams chats</Caption1>}
+          {chats.map((c) => (
+            <Button
+              key={c.chatId}
+              className={styles.thread}
+              appearance={target?.kind === "chat" && target.chat.chatId === c.chatId ? "primary" : "subtle"}
+              onClick={() => reset({ kind: "chat", chat: c })}
+            >
+              <span className={styles.threadText}>
+                <Text weight="semibold" truncate wrap={false}>{c.label}</Text>
+                <Caption1>
+                  {CHAT_TYPES[c.chatType]} · {c.members} people
+                  {c.excluded &&
+                    (c.excludedBy === "unverifiable"
+                      ? " · not used (can't be checked)"
+                      : ` · excluded by ${c.excludedBy === "organisation" ? "your organisation" : "you"}`)}
+                </Caption1>
+              </span>
+            </Button>
+          ))}
         </div>
 
         <div className={styles.stack}>
-          {!target && <Text>Pick a conversation to reply to, or start a new email.</Text>}
+          {!target && <Text>Pick a conversation or a Teams chat to reply to, or start a new email.</Text>}
+          {target?.kind === "chat" && (
+            <Card>
+              <CardHeader header={<Text weight="semibold">{chatView?.label ?? target.chat.label}</Text>} />
+              {target.chat.excluded && <Caption1>You can't view or use this chat: it's excluded.</Caption1>}
+              {chatView?.messages.map((m, i) => (
+                <div key={i}>
+                  <Caption1 className={styles.muted}>
+                    {m.fromMe ? "You" : (m.sender.name ?? m.sender.email)} · {when(m.sentAt)}
+                  </Caption1>
+                  <pre className={styles.message}>{m.text}</pre>
+                </div>
+              ))}
+            </Card>
+          )}
           {target?.kind === "reply" && (
             <Card>
               <CardHeader header={<Text weight="semibold">{view?.subject ?? target.thread.subject ?? "(no subject)"}</Text>} />
@@ -322,7 +383,11 @@ export function Draft() {
                 </>
               )}
               <Field
-                label={target.kind === "new" ? "What should it say?" : "What should the reply say? (optional)"}
+                label={
+                  target.kind === "new" || (target.kind === "chat" && chatNew)
+                    ? "What should it say?"
+                    : "What should the reply say? (optional)"
+                }
                 hint="For example: tell her I'll send the plan by Wednesday; ask him for the UAT feedback"
               >
                 <Textarea value={instruction} maxLength={1000} onChange={(_, d) => setInstruction(d.value)} />
@@ -330,6 +395,9 @@ export function Draft() {
               <div className={styles.row}>
                 {target.kind === "reply" && (
                   <Switch label="Reply all" checked={replyAll} onChange={(_, d) => setReplyAll(d.checked)} />
+                )}
+                {target.kind === "chat" && (
+                  <Switch label="New message (not a reply)" checked={chatNew} onChange={(_, d) => setChatNew(d.checked)} />
                 )}
                 {status.generator === "bedrock" && (
                   <Switch
@@ -373,7 +441,12 @@ export function Draft() {
                   <Button appearance="primary" disabled={hasBlock(checks) && !confirmed} onClick={() => void copy()}>
                     Copy
                   </Button>
-                  <Button onClick={() => void checkAgain()}>Check my edits</Button>
+                  {draft.channel === "chat" && prefill && (
+                    <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void openInTeams()}>
+                      Open in Teams with this text
+                    </Button>
+                  )}
+                  {draft.channel !== "chat" && <Button onClick={() => void checkAgain()}>Check my edits</Button>}
                   {draft.id && target?.kind === "reply" && (
                     <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void placeInOutlook()}>
                       Put in my Drafts folder
@@ -398,7 +471,7 @@ export function Draft() {
           <CardHeader header={<Text weight="semibold">Recent drafts</Text>} description={<Caption1>What was drafted, never the text</Caption1>} />
           {recent.map((r) => (
             <Caption1 key={r.id}>
-              {when(r.createdAt)} · {r.mode === "reply" ? "reply" : "new email"} to {r.relationship} · {r.surface} ·{" "}
+              {when(r.createdAt)} · {r.mode === "reply" ? "reply" : "new message"} to {r.relationship} · {r.surface} ·{" "}
               {r.generator === "offline" ? "offline stand-in" : r.modelId} · {r.wordCount} words
               {r.outcome ? ` · ${r.outcome.replace("_", " ")}` : ""}
               {r.checks.length ? ` · checks: ${r.checks.join(", ")}` : ""}

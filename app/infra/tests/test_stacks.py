@@ -129,7 +129,7 @@ def test_cloudfront_routes_api_and_sets_security_headers(templates: tuple[Templa
     _, api = templates
     dist = next(iter(api.find_resources("AWS::CloudFront::Distribution").values()))["Properties"]["DistributionConfig"]
     paths = {b["PathPattern"]: b for b in dist["CacheBehaviors"]}
-    assert set(paths) == {"/api/*", "/addin.html", "/config.json", "/redirect.html"}
+    assert set(paths) == {"/api/*", "/addin.html", "/config.json", "/redirect.html", "/teams.html"}
     assert paths["/api/*"]["ViewerProtocolPolicy"] == "https-only"
     assert dist["DefaultCacheBehavior"]["ViewerProtocolPolicy"] == "redirect-to-https"
     api.has_resource_properties(
@@ -226,3 +226,17 @@ def test_redirect_bridge_is_frameable_by_self_only(templates: tuple[Template, Te
             )
         },
     )
+
+
+def test_teams_page_may_be_framed_by_teams_only(templates: tuple[Template, Template]) -> None:
+    _, api = templates
+    policies = json.dumps(api.find_resources("AWS::CloudFront::ResponseHeadersPolicy"))
+    assert "frame-ancestors 'self' https://teams.microsoft.com" in policies
+    # The main web app still can't be framed by anyone.
+    assert "frame-ancestors 'none'" in policies
+
+
+def test_api_knows_its_web_origin_for_teams_dialogs(templates: tuple[Template, Template]) -> None:
+    _, api = templates
+    task = json.dumps(api.find_resources("AWS::ECS::TaskDefinition"))
+    assert "VANIMO_WEB_URL" in task and "VANIMO_TEAMS_BOT_ID" in task

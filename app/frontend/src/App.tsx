@@ -5,6 +5,7 @@ import type { Me } from "./api/client";
 import { useApi } from "./api/context";
 import { useAuth } from "./auth/session";
 import { ClientScoping } from "./pages/admin/ClientScoping";
+import { Commitments } from "./pages/commitments/Commitments";
 import { ChangePassword } from "./pages/ChangePassword";
 import { Learning } from "./pages/learning/Learning";
 import { Persona } from "./pages/learning/Persona";
@@ -14,6 +15,7 @@ import { Diagnostics } from "./pages/Diagnostics";
 import { Draft } from "./pages/drafting/Draft";
 import { Queue } from "./pages/drafting/Queue";
 import { Home } from "./pages/Home";
+import { NotificationBell } from "./pages/NotificationBell";
 import { SampleWorkspace } from "./pages/sample/SampleWorkspace";
 import { SignIn } from "./pages/SignIn";
 import { TeamsPrefill } from "./pages/TeamsPrefill";
@@ -58,7 +60,7 @@ export function App() {
   const location = useLocation();
   const ready = auth.signedIn && !auth.mustChangePassword;
   const dataSource = useDataSource(ready);
-  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft", "/queue"];
+  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft", "/queue", "/commitments"];
   const tab = TAB_PATHS.find((p) => location.pathname.startsWith(p)) ?? "/";
 
   return (
@@ -73,6 +75,7 @@ export function App() {
             <Tab value="/persona">Persona</Tab>
             <Tab value="/draft">Draft</Tab>
             <Tab value="/queue">Queue</Tab>
+            <Tab value="/commitments">Commitments</Tab>
             <Tab value="/controls">My data</Tab>
             {auth.isAdmin && <Tab value="/admin/scoping">Client scoping</Tab>}
             {auth.isAdmin && <Tab value="/admin/diagnostics">Diagnostics</Tab>}
@@ -82,6 +85,7 @@ export function App() {
         <span className={styles.spacer} />
         {auth.signedIn && (
           <>
+            {ready && <NotificationBell />}
             {auth.roles.includes("Vanimo.SuperAdmin") && <Badge appearance="tint">Super-admin</Badge>}
             <Caption1>{auth.email}</Caption1>
             <Button appearance="subtle" onClick={() => void auth.signOut()}>
@@ -105,6 +109,7 @@ export function App() {
             <Route path="/persona" element={<Persona />} />
             <Route path="/draft" element={<Draft />} />
             <Route path="/queue" element={<Queue />} />
+            <Route path="/commitments" element={<CommitmentsPage />} />
             <Route path="/admin/scoping" element={auth.isAdmin ? <ClientScoping /> : <Navigate to="/" />} />
             <Route path="/admin/diagnostics" element={auth.isAdmin ? <Diagnostics /> : <Navigate to="/" />} />
             <Route path="/spikes/teams" element={auth.isAdmin ? <TeamsPrefill /> : <Navigate to="/" />} />
@@ -114,4 +119,14 @@ export function App() {
       </main>
     </div>
   );
+}
+
+/** The web page: "Open in Teams with this text" only if the organisation turned prefill on. */
+function CommitmentsPage() {
+  const api = useApi();
+  const [prefill, setPrefill] = useState(false);
+  useEffect(() => {
+    api.teamsConfig().then((c) => setPrefill(c.prefill), () => setPrefill(false));
+  }, [api]);
+  return <Commitments prefill={prefill} />;
 }

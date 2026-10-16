@@ -9,6 +9,7 @@ The build plan is `docs/03-mvp-plan-and-roadmap.md` §0 (solo track M0–M6). Th
 | `infra/` | One regional cell on AWS | AWS CDK (Python): VPC, Aurora PostgreSQL 18 (Serverless v2), ECS Fargate, internal ALB, CloudFront, S3, KMS, Secrets Manager |
 | `infra/entra/` | How to register the Entra app | — |
 | `surfaces/outlook-addin/` | Outlook add-in manifest (XML); the task pane itself is in `frontend/src/addin/` | — |
+| `surfaces/teams-app/` | Teams app manifest + package builder (M5); the dialog and tab are in `frontend/src/teams/` | — |
 | `docker-compose.yml` | Local Postgres 18 (port 5433) | Docker |
 
 ## Sample data: works without Microsoft 365
@@ -253,6 +254,96 @@ vault-encrypted). The sent text is never stored.
 - a purge that deletes the record of a draft already in your Outlook keeps its mailbox ID (encrypted) until the next
   tidy removes the draft, if it's still unsent and untouched.
 
+## M5: Commitments + Teams
+
+Works the same on the sample workspace and on Microsoft 365. New:
+- the **Commitments** tab;
+- **Teams chats** on the Draft page;
+- **Notifications** in the header;
+- the **Teams** switches on the Client scoping tab;
+- the Teams app (`surfaces/teams-app/`, entry `frontend/teams.html`).
+
+Vanimo still never sends.
+
+**Commitments ledger** (`vanimo/commitments/`, research R05 §5.3–5.4):
+1. **Where promises come from.** Only your own sent emails and Teams chat messages, from allowed sources, already
+   redacted to L1. They are found in two places:
+   - after every learning run, in what it learned (the last 60 days, work mail only);
+   - each time you open the Commitments tab, in what you sent since the last look. This reads headers and rosters
+     first; an excluded message is never read. At most 60 messages per look, oldest first; the rest wait for the
+     next one. With no learning run yet, it looks at the last week.
+2. **What counts as a promise.** A first-person future with something to deliver: "I'll revert with the final
+   runbook tomorrow", "we will add Lisa to the bridge", chat's "will share the metrics by Friday evening", "sharing
+   mine in 10 mins". Never a question, a condition, a negation, a request to someone else or someone else's promise
+   ("…, and Vikram will confirm" is cut off).
+   - Offline stand-in: rules, labelled.
+   - With Bedrock: Claude Haiku, held to the same output. Every sentence it returns must be in the message, every
+     date phrase in the sentence, and it can't add a name marker; anything else is dropped, and a malformed answer
+     falls back to the rules.
+3. **Due dates are worked out in code**, never by the model, in the cell's time zone (India: IST). Examples: "by
+   Thursday EOD" (18:00), "tomorrow evening", "this week" (Friday), "next week", "12 November", "by the 31st", "in
+   10 mins". A weekday that is today means next week's.
+4. **The list.** Grouped as overdue, due in the next day, later and no date given, with the sentence as you wrote
+   it and who it was to.
+   - "Looks done" when a later message of yours in the same thread or chat delivers it ("PFA the final cutover
+     runbook"); you confirm.
+   - Actions: **Done**, **Not a promise**, **Remind me tomorrow**, **Reopen**. Finding a promise again never
+     reopens or duplicates it.
+   - The page shows how many of the promises you decided on were real (the ≥ 80 % precision target, `docs/03` §5).
+5. **Follow-up in your voice.** **Draft a follow-up** → "It's done", "Running late" (with a new date) or "Still on
+   it". It is drafted where the promise was made: an email reply in the same conversation (copy it or put it in
+   your Drafts folder) or a message in the same Teams chat. This goes through the drafting service, so the
+   conversation is checked against your rules again first.
+6. **Stored:** the promise and its short form (L1, vault-encrypted), the due date, the status and lineage, and the
+   conversation or chat ID (encrypted). The message text isn't stored.
+   - Exclusions purge promises by lineage, and the list hides them at once.
+   - Never-send words re-mask them.
+   - "Delete what Vanimo learned" deletes them.
+
+**Teams** (research R02 §B):
+- **"Draft reply"** on any chat message (… → More actions → Vanimo) and **"Draft with Vanimo"** under the message
+  box open a Vanimo dialog. It drafts in your voice through the same drafting service, the chat way:
+  - the roster decides before any message is read;
+  - a meeting chat must be tied to its meeting (by the header pass) or it's refused;
+  - the last 8 messages up to the one you're answering are the context, and a sender who left the chat is left out;
+  - no greeting or sign-off is added, and your chat style card is used.
+- **Teams can't type into the message box**, so the dialog offers **Copy**. **Open the chat with this text** appears
+  only when your admin turns it on, after spike 1 shows the prefill works in existing chats (Microsoft documents it
+  for new chats only). Channels aren't supported yet.
+- **The bot endpoint** (`/api/teams/messages`) answers only Teams' `fetchTask` and checks every request's Bot
+  Framework token: issuer, audience, the key's channel endorsement and `serviceUrl`; tokens from our own Entra
+  tenant are accepted too.
+  - Teams puts the message's text in that request. It's never read, logged or stored.
+  - The dialog gets the chat and message IDs in an encrypted 10-minute handle, valid only for the person it was
+    made for, so no ID appears in a URL.
+- **The Vanimo tab** in Teams is the Commitments list, and it's where activity notifications link.
+- **The Draft page** lists your recent Teams chats too, the same way, for the web and the sample workspace.
+- **Teams edit loop.** A chat draft matches the first message you posted in that chat after it (72 h). Chat edits
+  teach only phrases, word swaps and exclamation marks; greeting, sign-off and length rules come from email only.
+  In the sample workspace, **Mark as sent** works for chat drafts too.
+
+**Notifications** (the channel M1 and M4 were waiting for, `vanimo/notify.py`):
+- **What you're told.** Promises due within a day or overdue (once a day), the weekly digest of learned rules to
+  confirm, and the review reminder 24 h and 48 h after sign-up.
+- **Counts only, never content:** "3 promises due soon or overdue".
+- **Where.** In the web app (Notifications in the header), and in your Teams activity feed when your organisation
+  allows it and the Teams app is installed. This uses the app-only permission `TeamsActivity.Send`, because a
+  person can't notify themselves (`infra/entra/README.md`).
+- **When.** The sweeper makes and delivers them every 5 minutes; opening the app brings yours up to date.
+
+**Try it on the sample workspace:**
+1. Run Learning, then open **Commitments**: "Share the UAT access list" (to Karan, due Friday EOD), "Send you the
+   onboarding checklist" (to Ana), and chat promises.
+2. **Draft a follow-up** → Running late → "Monday".
+3. On **Draft**, pick the "Rahul Verma" chat.
+
+### Try the Teams app
+
+Teams needs the Entra app, a deployed cell (or an HTTPS tunnel to your machine) and a bot registration; the steps are
+in `infra/entra/README.md` §6b. Until then the Teams dialog can be opened in a browser for testing:
+`http://localhost:5173/teams.html` (chat picker) and `http://localhost:5173/teams.html?tab=commitments` (the tab).
+With password sign-in it uses the sample workspace.
+
 ## Guarantees built in from M0
 
 - **Tenant and user isolation in the database.**
@@ -383,13 +474,18 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Drafts in the Drafts folder (M4 vs §3.2, §9.1) | Proactive: a webhook on new mail → "needs reply" triage model → `createReply` in the background (Step Functions); stale-draft cleanup on a schedule | Made when you open the Queue or press Prepare, and tidied when you open it. A background job has no Microsoft 365 token (we keep no refresh tokens, and webhooks need a public endpoint), so nothing happens while you're away. Triage is rules (automated sender, To vs Cc, question/request/scheduling), not a model | After deploy: change notifications + a background token strategy (or the Compose app with application permissions), then proactive drafts for reply-likely mail |
 | Edit loop (M4 vs R05 §2.3, §7.7) | Haiku edit classifier, nightly LLM verification of rule candidates against held-out mail, Teams edits, add-in send-time capture, confidentiality deletions as negative ACL evidence | Rule-based edit taxonomy and deterministic verification against your sent mail; matching runs when you open the Queue or Persona tab; email only (Teams in M5); no send-time capture; content edits are counted only (there is no memory store to correct until M6). Rules to confirm are shown on the Persona tab, not sent as a weekly digest (no
  notification channel until M5). Matching waits 72 h rather than R05's 24 h, because it only runs when you open the
- app. "No reply needed" choices are thread HMACs and stay after an exclusion (like the exclusion rule itself) | Add
- the classifier and LLM verification with Bedrock; Teams edits and the weekly digest in M5 |
+ app. "No reply needed" choices are thread HMACs and stay after an exclusion (like the exclusion rule itself).
+ **M5:** Teams edits and the weekly digest are done (the digest is a count in the web app and the Teams activity
+ feed); chat edits teach only channel-neutral rules | Add the classifier and LLM verification with Bedrock |
 | Language (D6 vs M2) | English-only drafting in the MVP; Hindi/Hinglish wait for their own quality gate | M2 *labels* each message English, Hinglish or Hindi and keeps their style slices apart, so Hinglish chats don't skew the English cards. Nothing is drafted in Hinglish | Unchanged: Hinglish drafting needs its own quality gate (v1.5) |
 | Never-send matching (M1 review) | Research 12: invisible characters removed | Zero-width spaces are still removed, not treated as spaces, so splitting a word with them ("Fal​con") can't dodge the filter. The cost: two words glued by a zero-width space ("the​falcon") don't match a *word* (they do match a codename) | Revisit with ICU word segmentation |
-| Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |
+| Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5; **done in M5**: the review reminder at 24 h and 48 h, as
+a count in the web app and the Teams activity feed). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |
+| Commitments (M5 vs R05 §5.3–5.4, R09) | Typed memory atoms across email, chat and meetings, extracted by Haiku and consolidated by Sonnet; cross-channel linking; promises others made to you; nudges | The user's own promises only, from sent email and Teams chats (meetings arrive with M6). Rules offline, Haiku on Bedrock, both checked against the text in code. Due dates resolved in code in the cell's time zone, not the user's own (no `MailboxSettings.Read` yet). "Looks done" is a word-overlap hint, never automatic. Found after learning and when you open the tab (no background token), within 60 days | Measure precision on Bedrock against the ≥ 80 % target; add others' promises to you, the user's own time zone, and meeting commitments (M6) |
+| Teams (M5 vs R02 §B, architecture §5) | Personal agent (Agents SDK) + message action + compose extension; RSC for chat context; dialog with Copy / prefill / Send as me | Message action + compose action only (the personal agent is v1.5). Copy always; open-the-chat prefill behind an admin switch until spike 1. Chats only, not channels. Context comes from Graph with the user's token after the exclusion engine decides, never from the invoke. The Teams page's CSP is report-only (like the add-in) until the hosts are confirmed | Run spike 1 and the Teams CSP check on desktop, web and mobile; then the personal agent (v1.5) |
+| Notifications (M5) | Teams bot proactive messages and email digests | Content-free counts in the web app and the Teams activity feed (Graph `sendActivityNotification`, app-only `TeamsActivity.Send`). No email digest. Delivery needs the Teams app installed; without it, notifications are in the web app only | Add the permission and install the app after deploy |
 | Background work | Step Functions / durable queues | In-process tasks, plus a sweeper every 5 minutes that resumes interrupted purge jobs and fails scans cut off by a restart (`vanimo/controls/sweeper.py`) | Move to a queue when there is more than one API task |
-| Housekeeping functions | Separate sweeper role | `vanimo_private.fail_stale_scans` / `claim_purge_jobs` are SECURITY DEFINER functions the API role can call. They act across tenants and return only IDs. `record_org_domains` accepts domains from Microsoft 365 scans, plus the sample domain in the local tenant only | Give the sweeper its own database role; add an admin view of recorded organisation domains |
+| Housekeeping functions | Separate sweeper role | `vanimo_private.fail_stale_scans` / `claim_purge_jobs` / `notification_candidates` (M5) are SECURITY DEFINER functions the API role can call. They act across tenants and return only IDs. `record_org_domains` accepts domains from Microsoft 365 scans, plus the sample domain in the local tenant only | Give the sweeper its own database role; add an admin view of recorded organisation domains |
 | Sources index | One index per data source | One index per user. After switching between the sample workspace and Microsoft 365, the old index is hidden until the new scan finishes. Reviews are remembered per source | Split the index by source if both are used side by side |
 | Sign-in | Entra only | Also email + password, local/dev only, for testing while the Entra app is pending | Removed or kept off in prod (the settings refuse it) |
 
@@ -401,7 +497,7 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 
 | # | Spike | How |
 |---|---|---|
-| 1 | Teams prefill in existing chats | *Teams prefill test* tab: tests A and B on desktop, web and mobile |
+| 1 | Teams prefill in existing chats | *Teams prefill test* tab: tests A and B on desktop, web and mobile. **M5:** also from the Teams dialog ("Draft reply" → turn on *Open Teams chats with the draft typed in* on Client scoping → *Open the chat with this text*), since TeamsJS `chat.openChat` from a dialog is undocumented. If it passes everywhere, leave the switch on |
 | 2 | Add-in insert/read | Render the manifest and add it in Outlook (*Get add-ins → My add-ins → Add a custom add-in*). Test sign-in and insert in new Outlook, classic, web and Mac:<br>`py surfaces/outlook-addin/render_manifest.py https://<cloudfront-domain> > manifest.xml` |
 | 3 | Graph delta details, `MSIP_Labels` | Diagnostics → *Run checks*: `sent_headers` and `sent_delta_headers` rows. **`uniqueBody` in delta moves to M2:** it needs a message body, and no body is read before the user's review step. The quote-stripper fallback is planned anyway |
 | 4 | Transcript access as organiser/attendee | Diagnostics → `meeting_transcripts` row |

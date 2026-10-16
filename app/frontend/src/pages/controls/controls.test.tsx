@@ -144,10 +144,12 @@ describe("Setup", () => {
 describe("ClientScoping", () => {
   it("adds a client account with domains and sensitive words", async () => {
     const api = new Api("", async () => "t");
-    vi.spyOn(api, "scoping").mockResolvedValue({ externalMode: "allow_all", accounts: [], serverDrafts: true });
+    vi.spyOn(api, "scoping").mockResolvedValue({ externalMode: "allow_all", accounts: [], serverDrafts: true, teamsPrefill: false, teamsNotifications: true });
     const add = vi.spyOn(api, "addAccount").mockResolvedValue({
       externalMode: "allow_all",
       serverDrafts: true,
+      teamsPrefill: false,
+      teamsNotifications: true,
       accounts: [{ id: "a1", name: "Bluefin Bank", mode: "excluded", domains: ["bluefinbank.example"], sensitiveWords: 1, createdAt: "" }],
     });
     wrap(api, <ClientScoping />);

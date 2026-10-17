@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     teams_bot_callers: list[str] = Field(default_factory=list)
     graph_timeout_s: float = 20.0
 
+    # Meeting memory (M6, architecture §8.4 defaults): transcripts as L1 turns for citations, then
+    # only the memory (decisions, requirements, promises...). Tier-configurable later.
+    transcript_retention_days: int = Field(30, ge=1, le=365)
+    memory_retention_days: int = Field(365, ge=30, le=3650)
+
     # Models (D7: Claude on Bedrock only). Haiku 5.5 by default (founder, 2026-10-13); Sonnet 5.5 for premium drafts.
     model_default: str = "anthropic.claude-haiku-5-5"
     model_premium: str = "anthropic.claude-sonnet-5-5"

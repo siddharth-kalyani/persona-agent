@@ -10,6 +10,7 @@ import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 from vanimo.graph import metadata
 from vanimo.graph.client import GraphClient, GraphError
@@ -26,6 +27,9 @@ from vanimo.sources.base import (
     PlacedDraft,
     Profile,
     SentHeader,
+    Transcript,
+    TranscriptRef,
+    TranscriptsUnavailable,
 )
 
 SENT_FIELDS = (
@@ -55,6 +59,9 @@ EVENT_FIELDS = (
     "type",
 )
 GRAPH_MEMBER_PAGE = 25  # chats list returns at most 25 members per chat
+VTT = "text/vtt"
+UNATTRIBUTED = "application/vnd.microsoft.graph.transcript+text"  # Accept header only, not $format
+MAX_TRANSCRIPT_BYTES = 4_000_000
 
 
 def _addr(recipient: dict[str, Any] | None) -> Address | None:
@@ -94,6 +101,7 @@ class GraphSource:
 
     def __init__(self, graph: GraphClient) -> None:
         self._g = graph
+        self._meetings: dict[str, str | None] = {}  # join link -> online meeting ID (a series shares one)
 
     def for_background(self) -> GraphSource:
         return GraphSource(self._g.for_background())
@@ -349,6 +357,57 @@ class GraphSource:
         text, _ = _body_text(e.get("body"))
         return text or None
 
+    # --- meeting transcripts (M6): delegated, for the organiser and invited attendees -----------
+    async def _meeting_id(self, join_url: str) -> str | None:
+        if join_url not in self._meetings:
+            found = await self._g.get(
+                "me/onlineMeetings", {"$filter": f"JoinWebUrl eq {_odata(join_url)}", "$select": "id"}
+            )
+            ids = [m.get("id") for m in found.get("value", []) if m.get("id")]
+            self._meetings[join_url] = ids[0] if ids else None
+        return self._meetings[join_url]
+
+    async def meeting_transcripts(self, event: Event) -> list[TranscriptRef]:
+        if not event.join_url:
+            return []
+        try:
+            meeting = await self._meeting_id(event.join_url)
+            if meeting is None:
+                return []
+            out = []
+            async for page in self._g.pages(
+                f"me/onlineMeetings/{_path_id(meeting)}/transcripts",
+                {"$select": "id,createdDateTime,endDateTime"},
+                max_pages=20,
+            ):
+                for t in page.get("value", []):
+                    created = _dt(t.get("createdDateTime"))
+                    if t.get("id") and created:
+                        out.append(TranscriptRef(t["id"], meeting, created, _dt(t.get("endDateTime"))))
+            return out
+        except GraphError as exc:
+            raise _unavailable(exc) from exc
+
+    async def transcript(self, ref: TranscriptRef) -> Transcript:
+        from vanimo.memory.vtt import parse
+
+        path = f"me/onlineMeetings/{_path_id(ref.meeting_id)}/transcripts/{_path_id(ref.id)}/content"
+        attributed = True
+        try:
+            try:
+                resp = await self._g.request("GET", path, headers={"Accept": VTT})
+            except GraphError as exc:
+                if exc.inner != "SpeakerAttributionNotAllowed":
+                    raise
+                # The organisation turned speaker attribution off: the same transcript without names.
+                attributed = False
+                resp = await self._g.request("GET", path, headers={"Accept": UNATTRIBUTED})
+        except GraphError as exc:
+            raise _unavailable(exc) from exc
+        if len(resp.content) > MAX_TRANSCRIPT_BYTES:
+            raise TranscriptsUnavailable("too_large")
+        return Transcript(ref, attributed, tuple(parse(resp.text, attributed=attributed)))
+
     # --- drafts in the mailbox (M4) ---------------------------------------------------------
     async def create_reply_draft(self, message_id: str, text: str, *, reply_all: bool) -> PlacedDraft:
         # `comment` puts the text above the quoted thread and keeps the thread intact (a body
@@ -432,6 +491,26 @@ def _safe_id(value: str, pattern: re.Pattern[str] = _GRAPH_ID) -> str:
     if not pattern.match(value):
         raise ValueError("invalid Graph id")
     return value
+
+
+_MEETING_ID = re.compile(r"^[A-Za-z0-9+/=_\-]{1,2048}$")
+
+
+def _path_id(value: str) -> str:
+    """Online meeting and transcript IDs are base64 (may hold '/' or '+'): validated, then escaped."""
+    return quote(_safe_id(value, _MEETING_ID), safe="")
+
+
+def _unavailable(exc: GraphError) -> TranscriptsUnavailable:
+    if exc.inner == "GraphAccessToTranscriptsDisabled":
+        return TranscriptsUnavailable("disabled")
+    if exc.status == 404:
+        return TranscriptsUnavailable("not_found")
+    if exc.status in (401, 403):
+        return TranscriptsUnavailable("permission")
+    if exc.status == 410:
+        return TranscriptsUnavailable("expired")
+    return TranscriptsUnavailable(f"graph_{exc.status}")
 
 
 def _odata(value: str) -> str:

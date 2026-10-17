@@ -132,6 +132,8 @@ export interface Scoping {
   /** Teams (M5): open a chat with the draft typed in (after the prefill spike); else Copy only. */
   teamsPrefill: boolean;
   teamsNotifications: boolean;
+  /** Meeting memory (M6): read Teams transcripts of internal meetings (each still goes through people's exclusions). */
+  meetingMemory: boolean;
 }
 
 export type Outcome = "ok" | "warn" | "fail" | "skipped";
@@ -428,7 +430,8 @@ export interface ChatView {
 
 export interface Commitment {
   id: string;
-  channel: "email" | "chat";
+  /** "meeting": said in a Teams meeting (M6); there's no conversation to follow up in. */
+  channel: "email" | "chat" | "meeting";
   what: string;
   sentence: string;
   duePhrase: string | null;
@@ -488,6 +491,110 @@ export interface TeamsDialogTarget {
 }
 
 // --- Drafts queue, Outlook Drafts folder, edit loop (M4) ----------------------------------------
+// --- Meeting memory (M6) ----------------------------------------------------------------------------
+export type NoteKind = "decision" | "action_item" | "commitment" | "requirement" | "open_question" | "risk" | "idea";
+export type SpeakerSide = "me" | "internal" | "external" | "unknown";
+
+export interface MeetingSummary {
+  id: string;
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  /** People from outside the organisation were invited. */
+  external: boolean;
+  organizedByMe: boolean;
+  /** "unattributed": the organisation turned Teams speaker attribution off (no names). */
+  attribution: "named" | "unattributed";
+  notes: Partial<Record<NoteKind, number>>;
+  /** The transcript is kept until then (30 days), for citations. */
+  transcriptUntil: string | null;
+  extractor: "offline" | "bedrock";
+}
+
+export interface MeetingList {
+  items: MeetingSummary[];
+  on: boolean;
+  label: string;
+  hidden: number;
+}
+
+export interface MeetingNote {
+  id: string;
+  kind: NoteKind;
+  text: string;
+  quote: string;
+  speaker: string;
+  speakerId: string | null;
+  speakerSide: SpeakerSide;
+  owner: string | null;
+  saidAt: string;
+  dueAt: string | null;
+  duePhrase: string | null;
+  trust: "high" | "medium" | "low";
+  status: "active" | "dismissed";
+  turn: number;
+}
+
+export interface MeetingTurn {
+  turn: number;
+  at: string;
+  speaker: string;
+  speakerId: string | null;
+  speakerSide: SpeakerSide;
+  text: string;
+}
+
+export interface MeetingDetail extends MeetingSummary {
+  notesList: MeetingNote[];
+  transcript: MeetingTurn[];
+  people: { id: string; name: string; side: SpeakerSide }[];
+}
+
+export interface MeetingScan {
+  stored: number;
+  atoms: number;
+  promises: number;
+  excluded: number;
+  waiting: number;
+  pending: boolean;
+  skipped: boolean;
+  off: boolean;
+  /** Why transcripts can't be read: "disabled" (Teams admin), "permission" (consent). */
+  unavailable: string | null;
+  leftOut: number;
+}
+
+export interface MeetingCitation {
+  n: number;
+  meetingId: string;
+  title: string;
+  meetingStart: string;
+  kind: NoteKind | "said";
+  noteId: string | null;
+  at: string;
+  endAt: string;
+  speaker: string;
+  quote: string;
+  turn: number;
+}
+
+export interface MeetingAnswer {
+  answer: string;
+  citations: MeetingCitation[];
+  abstained: boolean;
+  /** Two meetings match: pick one of `candidates` and ask again. */
+  clarify: boolean;
+  candidates: { id: string; title: string; startsAt: string }[];
+  when: string;
+  label: string;
+}
+
+export interface MeetingHealth {
+  on: boolean;
+  checks: { key: string; state: "ok" | "warn" | "fail" | "info"; code: string; counts: Record<string, number> }[];
+  checkedAt: string;
+}
+
 export interface DraftingSettings {
   outlookDrafts: boolean;
   staleDays: number;
@@ -690,6 +797,20 @@ export class Api {
     this.request<void>("PUT", `/api/commitments/${encodeURIComponent(id)}`, { action, days });
   followUp = (id: string, kind: FollowUpKind, newDate: string | null = null, note: string | null = null) =>
     this.request<Draft>("POST", `/api/commitments/${encodeURIComponent(id)}/follow-up`, { kind, newDate, note });
+
+  meetings = () => this.request<MeetingList>("GET", "/api/meetings");
+  scanMeetings = () => this.request<MeetingScan>("POST", "/api/meetings/scan");
+  meeting = (id: string) => this.request<MeetingDetail>("GET", `/api/meetings/${encodeURIComponent(id)}`);
+  askMeetings = (question: string, meetingId: string | null = null) =>
+    this.request<MeetingAnswer>("POST", "/api/meetings/ask", { question, meetingId });
+  decideNote = (id: string, action: "dismiss" | "restore") =>
+    this.request<void>("PUT", `/api/meetings/notes/${encodeURIComponent(id)}`, { action });
+  correctSpeaker = (meetingId: string, fromId: string, toId: string | null) =>
+    this.request<void>("PUT", `/api/meetings/${encodeURIComponent(meetingId)}/speakers`, { fromId, toId });
+  forgetMeeting = (id: string) => this.request<void>("DELETE", `/api/meetings/${encodeURIComponent(id)}`);
+  meetingHealth = () => this.request<MeetingHealth>("GET", "/api/admin/meetings/health");
+  setMeetingsPolicy = (meetingMemory: boolean) =>
+    this.request<Scoping>("PUT", "/api/admin/scoping/meetings", { meetingMemory });
 
   notifications = () => this.request<{ items: AppNotification[]; unread: number }>("GET", "/api/notifications");
   markNotificationsRead = (id: string | null = null) => this.request<void>("POST", "/api/notifications/read", { id });

@@ -4,16 +4,19 @@ Logical exclusion is immediate: the engine reads rules live, so a new rule appli
 next fetch, retrieval or draft. These jobs do the physical work and leave a receipt:
 
 * exclusion added   — delete everything derived from the excluded sources: L1 items and drafts
-                      and promises (M5) whose lineage (thread/chat, participants, their domains)
+                      and promises (M5) and remembered meetings (M6) whose lineage (thread/chat or
+                      meeting, participants, their domains)
                       the engine now excludes (with their edit events and rule evidence; rules left without
                       evidence go too), tokens no remaining item uses, and style cards (rebuilt
                       from what's left).
 * never-send added  — re-mask every display field already stored: the Sources index, L1 text,
-                      contexts and subjects (and their vectors), drafts, token values, studio
-                      phrases; learned rules holding the word are deleted; style cards are
+                      contexts and subjects (and their vectors), drafts, promises, meeting titles,
+                      transcript turns and notes (M6), token values, studio phrases; learned
+                      rules holding the word are deleted; style cards are
                       rebuilt so no phrase keeps the word.
 * learning deleted  — the user's "delete what you learned": every L1 item, token, style card,
-                      evaluation, draft, edit event, learned rule and promise is removed (studio settings
+                      evaluation, draft, edit event, learned rule, promise and remembered meeting is
+                      removed, and the meetings already read are never read again (studio settings
                       and drafting settings are the user's own and are kept).
 * removals          — rules and words are revoked going forward; history is not restored.
 
@@ -85,6 +88,33 @@ COMMITMENT_FIELDS = [
     ("what_enc", "commitment_what"),
     ("due_phrase_enc", "commitment_due"),
 ]
+# Meeting memory (M6): every encrypted text field, by table.
+MEMORY_FIELDS = {
+    "episodes": [("title_enc", "episode_title")],
+    "episode_segments": [("text_enc", "segment_text")],
+    "memory_atoms": [("text_enc", "atom_text"), ("quote_enc", "atom_quote"), ("due_phrase_enc", "atom_due")],
+}
+
+
+async def _scrub_memory(conn: AsyncConnection, vault: Vault, ref: UserRef, matcher: Any) -> int:
+    t, u = ref.tenant_id, ref.user_id
+    changed = 0
+    for table, fields in MEMORY_FIELDS.items():
+        cols = ", ".join(c for c, _ in fields)
+        for row in (await conn.execute(text(f"select id, {cols} from vanimo.{table}"))).all():  # noqa: S608
+            updates: dict[str, Any] = {}
+            for col, purpose in fields:
+                masked, hits = matcher.mask(vault.decrypt_user(t, u, getattr(row, col), purpose), opaque=L1_MARKS)
+                if hits:
+                    updates[col] = vault.encrypt_user(t, u, masked, purpose)
+            if updates:
+                sets = ", ".join(f"{c} = :{c}" for c in updates)
+                await conn.execute(
+                    text(f"update vanimo.{table} set {sets} where id = :id"),  # noqa: S608
+                    {**updates, "id": row.id},
+                )
+                changed += 1
+    return changed
 
 
 async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuild_sources: list[str]) -> dict[str, int]:
@@ -160,6 +190,7 @@ async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuil
                     },
                 )
                 changed_commitments += 1
+        changed_memory = await _scrub_memory(conn, vault, ref, matcher)
         rules_deleted = await rules.scrub(conn, vault, ref, matcher)
         enc = (await conn.execute(text("select settings_enc from vanimo.persona_settings"))).scalar_one_or_none()
         if enc:
@@ -175,6 +206,7 @@ async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuil
         "tokens_rescrubbed": changed_tokens,
         "drafts_rescrubbed": changed_drafts,
         "commitments_rescrubbed": changed_commitments,
+        "meeting_fields_rescrubbed": changed_memory,
         "rules_deleted": rules_deleted,
     }
 
@@ -225,7 +257,19 @@ async def purge_excluded_learning(
         doomed_promises = [c.id for c in promises if _excluded(c, ex_engine, sample_engine)]
         if doomed_promises:
             await conn.execute(text("delete from vanimo.commitments where id = any(:ids)"), {"ids": doomed_promises})
-        tokens_deleted = await gc_tokens(conn, vault, ref) if doomed or doomed_promises else 0
+        episodes = (
+            await conn.execute(
+                text(
+                    "select id, source_kind, 'meeting' as channel, meeting_hash as thread_hash, meeting_hash, "
+                    "series_hash, people from vanimo.episodes"
+                )
+            )
+        ).all()
+        doomed_episodes = [e.id for e in episodes if _excluded(e, ex_engine, sample_engine)]
+        if doomed_episodes:  # their transcript turns and notes go with them (foreign keys)
+            await conn.execute(text("delete from vanimo.episodes where id = any(:ids)"), {"ids": doomed_episodes})
+        purged = doomed or doomed_promises or doomed_episodes
+        tokens_deleted = await gc_tokens(conn, vault, ref) if purged else 0
         drafts = (
             await conn.execute(
                 text(
@@ -247,6 +291,7 @@ async def purge_excluded_learning(
         "tokens_deleted": tokens_deleted,
         "drafts_deleted": len(doomed_drafts),
         "commitments_deleted": len(doomed_promises),
+        "meetings_deleted": len(doomed_episodes),
         "rules_deleted": rules_before - rules_after,
     }
 
@@ -287,8 +332,21 @@ async def gc_tokens(conn: AsyncConnection, vault: Vault, ref: UserRef) -> int:
     for row in (await conn.execute(text("select text_enc, what_enc from vanimo.commitments"))).all():
         for col, purpose in COMMITMENT_FIELDS[:2]:
             used |= set(TOKEN.findall(vault.decrypt_user(t, u, getattr(row, col), purpose) or ""))
+    for table, fields in MEMORY_FIELDS.items():
+        cols = ", ".join(c for c, _ in fields)
+        for row in (await conn.execute(text(f"select {cols} from vanimo.{table}"))).all():  # noqa: S608
+            for col, purpose in fields:
+                used |= set(TOKEN.findall(vault.decrypt_user(t, u, getattr(row, col), purpose) or ""))
+    # Speakers, owners and the people of a meeting (for speaker corrections) are tokens too.
+    for row in (await conn.execute(text("select roster from vanimo.episodes"))).all():
+        used |= {p["t"] for p in row.roster}
+    for sql in ("select speaker from vanimo.episode_segments", "select speaker, owner from vanimo.memory_atoms"):
+        for row in (await conn.execute(text(sql))).all():
+            used |= {x for x in row if x}
+    stems = {x.split(".")[0].removesuffix("⟧") for x in used if x.startswith("⟦PERSON_")}
     stored = (await conn.execute(text("select token from vanimo.l1_tokens"))).scalars().all()
-    unused = [tok for tok in stored if tok not in used]
+    # A name's other forms stay with it (a note's owner is shown from whichever form is stored).
+    unused = [tok for tok in stored if tok not in used and tok.split(".")[0].removesuffix("⟧") not in stems]
     if unused:
         await conn.execute(text("delete from vanimo.l1_tokens where token = any(:t)"), {"t": unused})
     return len(unused)
@@ -319,9 +377,15 @@ async def delete_learning(engine: AsyncEngine, ref: UserRef) -> dict[str, int]:
             "style_rules",
             "commitments",
             "commitment_scans",
+            "episodes",
         ):
             result = await conn.execute(text(f"delete from vanimo.{table}"))  # noqa: S608
             out[f"{table}_deleted"] = result.rowcount
+        # Meetings already read are never read again (newer meetings are, if meeting memory is on).
+        result = await conn.execute(
+            text("update vanimo.meeting_ingests set state = 'deleted', detail = 'learning_deleted', checked_at = now()")
+        )
+        out["meetings_forgotten"] = result.rowcount
     return out
 
 

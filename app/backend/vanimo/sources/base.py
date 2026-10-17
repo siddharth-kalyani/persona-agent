@@ -6,8 +6,9 @@ Two implementations behind one interface:
   * SampleSource — a synthetic workspace, so every feature can be built and demoed while
                    Entra/Graph access is pending (founder decision, 2026-10-13).
 
-Metadata methods (headers, rosters, calendar fields) are safe before the review step. The
-content methods (`message`, `chat_messages`, `event_agenda`) read message text: callers must
+Metadata methods (headers, rosters, calendar fields, a meeting's transcript list) are safe before
+the review step. The content methods (`message`, `chat_messages`, `event_agenda`, `transcript`)
+read message or meeting text: callers must
 pass the onboarding gate first (`vanimo.gates.require_review_done`) and fetch only items the
 exclusion engine allowed from their metadata (`thread_headers`, rosters): two-phase fetch,
 architecture §6.5 X2.
@@ -190,6 +191,43 @@ class DraftItemState:
 
 
 @dataclass(frozen=True)
+class TranscriptRef:
+    """A Teams meeting transcript's metadata (M6). A recurring series shares one online meeting, so
+    its list holds every occurrence's transcripts: the caller picks an occurrence's by time."""
+
+    id: str
+    meeting_id: str  # the online meeting (Graph ID)
+    created_at: datetime  # when transcription started
+    ended_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class Cue:
+    start_ms: int  # from the start of transcription (negative: it started mid-conversation)
+    end_ms: int
+    speaker: str | None  # the display name Teams attributed it to; None when unattributed
+    text: str
+
+
+@dataclass(frozen=True)
+class Transcript:
+    """One transcript's text (L0 — in memory only, never stored as is)."""
+
+    ref: TranscriptRef
+    attributed: bool  # False: the organisation turned speaker attribution off (no names)
+    cues: tuple[Cue, ...]
+
+
+class TranscriptsUnavailable(Exception):
+    """Transcripts can't be read. `reason` is content-free: disabled (the Teams admin turned Graph
+    access to transcripts off), permission (no consent for the scope), expired, not_found, too_large."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
 class ChatMessage:
     id: str
     chat_id: str
@@ -238,6 +276,16 @@ class WorkspaceSource(Protocol):
         ...
 
     async def event_agenda(self, event_id: str) -> str | None: ...
+
+    # --- meeting transcripts (M6; OnlineMeetings.Read + OnlineMeetingTranscript.Read.All) ------
+    async def meeting_transcripts(self, event: Event) -> list[TranscriptRef]:
+        """The transcripts of the event's online meeting (metadata only); [] if there are none. Raises
+        TranscriptsUnavailable when transcripts can't be read at all."""
+        ...
+
+    async def transcript(self, ref: TranscriptRef) -> Transcript:
+        """A transcript's text: speaker-attributed if the organisation allows it, else unattributed."""
+        ...
 
     # --- drafts in the user's mailbox (M4; Mail.ReadWrite; never sends) ----------------------
     async def create_reply_draft(self, message_id: str, text: str, *, reply_all: bool) -> PlacedDraft:

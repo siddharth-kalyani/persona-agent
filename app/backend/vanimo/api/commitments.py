@@ -6,6 +6,7 @@
 * PUT  /api/commitments/{id}          — done, not a promise, snooze, or reopen.
 * POST /api/commitments/{id}/follow-up — a follow-up in your voice (an email reply in the same
                                          conversation, or a message in the same Teams chat). Never sent.
+                                         Promises made in a meeting (M6) have no conversation: 409.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ PRECISION_DAYS = 30
 
 class CommitmentOut(BaseModel):
     id: str
-    channel: Literal["email", "chat"]
+    channel: Literal["email", "chat", "meeting"]
     what: str
     sentence: str
     duePhrase: str | None

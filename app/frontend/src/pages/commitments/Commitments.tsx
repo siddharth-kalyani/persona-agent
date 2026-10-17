@@ -1,6 +1,7 @@
-/** Commitments (M5): the promises you made in your sent email and Teams chats, with follow-ups drafted
- * in your voice. Shown in the web app and as the Vanimo tab in Teams. Vanimo never sends: you copy or
- * open the follow-up and send it yourself. */
+/** Commitments (M5): the promises you made in your sent email and Teams chats (and, M6, in Teams
+ * meetings), with follow-ups drafted in your voice. Shown in the web app and as the Vanimo tab in Teams.
+ * Vanimo never sends: you copy or open the follow-up and send it yourself. A promise made in a meeting
+ * has no conversation to follow up in. */
 import {
   Badge,
   Button,
@@ -44,6 +45,8 @@ const AUDIENCE: Record<string, string> = {
   external: "a client or partner",
   personal: "a personal contact",
 };
+
+const CHANNEL: Record<Commitment["channel"], string> = { email: "Email", chat: "Teams", meeting: "Meeting" };
 
 const FOLLOW_UP: Record<FollowUpKind, string> = {
   done: "It's done: send it",
@@ -181,14 +184,15 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
       <div className={styles.item}>
         <div className={styles.row}>
           <Text weight="semibold">{c.what}</Text>
-          <Badge appearance="tint" color="informative">{c.channel === "chat" ? "Teams" : "Email"}</Badge>
+          <Badge appearance="tint" color="informative">{CHANNEL[c.channel]}</Badge>
           {c.looksDoneAt && c.status === "open" && (
             <Badge appearance="tint" color="success">Looks done</Badge>
           )}
         </div>
         <p className={styles.quote}>“{c.sentence}”</p>
         <Caption1 className={styles.muted}>
-          To {AUDIENCE[c.relationship] ?? c.relationship} · {day(c.madeAt)}
+          {c.channel === "meeting" ? "In a meeting with " : "To "}
+          {AUDIENCE[c.relationship] ?? c.relationship} · {day(c.madeAt)}
           {c.dueAt ? ` · due ${day(c.dueAt)}` : ""}
           {c.duePhrase ? ` (“${c.duePhrase}”)` : ""}
           {c.snoozedUntil && new Date(c.snoozedUntil) > new Date() ? ` · snoozed until ${day(c.snoozedUntil)}` : ""}
@@ -197,6 +201,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
         {c.status === "open" ? (
           <div className={styles.row}>
             <Button size="small" onClick={() => void decide(c, "done")}>Done</Button>
+            {c.channel !== "meeting" && (
             <Menu>
               <MenuTrigger disableButtonEnhancement>
                 <Button size="small" appearance="primary" disabled={busy}>Draft a follow-up</Button>
@@ -211,6 +216,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
                 </MenuList>
               </MenuPopover>
             </Menu>
+            )}
             <Button size="small" appearance="subtle" onClick={() => void decide(c, "snooze")}>Remind me tomorrow</Button>
             <Button size="small" appearance="subtle" onClick={() => void decide(c, "dismiss")}>Not a promise</Button>
           </div>
@@ -272,8 +278,8 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
         <div>
           <Title3 as="h2">Commitments</Title3>
           <Text as="p">
-            What you promised people in your emails and Teams chats, found in what Vanimo is allowed to learn from. Mark them
-            done, or let Vanimo draft the follow-up in your voice. Vanimo never sends.
+            What you promised people in your emails, Teams chats and meetings, found in what Vanimo is allowed to learn
+            from. Mark them done, or let Vanimo draft the follow-up in your voice. Vanimo never sends.
           </Text>
         </div>
       )}

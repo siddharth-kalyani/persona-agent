@@ -60,7 +60,7 @@ The API rejects any token without one of these roles, even if Entra let the pers
 | `Chat.Read` | Chat list and members, then allowed chats | M1/M2 |
 | `Calendars.Read` | Meetings for exclusions and meeting memory | M1/M6 |
 | `OnlineMeetings.Read` | Look up a meeting from its join link | M0 test/M6 |
-| `OnlineMeetingTranscript.Read.All` | Meeting transcripts | M0 test/M6 |
+| `OnlineMeetingTranscript.Read.All` | Meeting transcripts (delegated: the organiser and invited attendees can read them) | M0 test/M6 |
 
 > `OnlineMeetings.Read` is not in the access list in `docs/03` §0. It's needed to find a meeting's ID from the calendar event, before its transcripts can be listed.
 
@@ -72,12 +72,29 @@ The API rejects any token without one of these roles, even if Entra let the pers
 
 > `TeamsActivity.Send` is not in the access list in `docs/03` §0. Without it Vanimo still works: notifications show in the web app only.
 
+## 6a. Teams meeting transcripts (M6)
+
+Vanimo reads transcripts **as each signed-in person** (delegated `OnlineMeetingTranscript.Read.All`), which works for
+the organiser and for anyone in the meeting's calendar invite. So **no Teams application access policy is needed**
+(that's only for application permissions). A Teams admin still has to:
+
+1. **Allow Graph access to transcripts:** Teams admin center → Meetings → Meeting settings → *Transcript API access*
+   (or `Set-CsTeamsMeetingConfiguration`). Off by default since the end of July 2026; while it's off, every
+   transcript call answers `403 GraphAccessToTranscriptsDisabled` and Vanimo remembers no meetings.
+2. **Allow speaker attribution** (the setting next to it). Without it Vanimo reads the unattributed format: notes have
+   no names, "what did the client ask for?" can't tell the client from your colleagues, and your promises in meetings
+   can't be found.
+3. **Allow transcription** in the meeting policy for the people using Vanimo (people still start it, or organisers
+   turn on automatic transcription for their meetings).
+
+Then check it: Client scoping → **Meeting memory** → *Check transcript access*.
+
 ## 6b. Teams app and bot (M5)
 
 1. **Bot.** Teams message actions ("Draft reply") need a bot registration. In the Teams Developer Portal: **Tools → Bot management → New bot** (single tenant, no Azure subscription needed). Set its **endpoint** to `https://<cloudfront-domain>/api/teams/messages`. Note the bot ID. Vanimo answers only Teams' `composeExtension/fetchTask` requests on it and checks every request's Bot Framework token; no client secret is needed because it never posts as the bot.
 2. **Package.** `py app/surfaces/teams-app/render_manifest.py https://<cloudfront-domain> <bot-id> <this app's client ID> vanimo-teams.zip` builds the Teams app (manifest + icons). The manifest's `webApplicationInfo.id` is this Entra app, which is what lets it send activity notifications.
 3. **Settings.** Deploy with `-c teams_app_id=6eb7a34e-98f7-47fd-a00a-58b5f900f9be -c teams_bot_id=<bot-id>` (or `VANIMO_TEAMS_APP_ID` / `VANIMO_TEAMS_BOT_ID` locally).
-4. **Install.** A Teams admin uploads the zip (Teams admin center → Manage apps → Upload) or allows custom app upload; people add it from Apps. Activity notifications only reach people who have the app installed.
+4. **Install.** The package has two personal tabs, Commitments and (M6) Meetings. A Teams admin uploads the zip (Teams admin center → Manage apps → Upload) or allows custom app upload; people add it from Apps. Activity notifications only reach people who have the app installed.
 5. **Sign-in inside Teams** uses nested app authentication: the `brk-multihub://<cloudfront-domain>` redirect URI in step 2 covers Teams too.
 
 ## 7. Client secret (Certificates & secrets)

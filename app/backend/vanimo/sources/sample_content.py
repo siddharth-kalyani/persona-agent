@@ -393,3 +393,72 @@ AGENDAS: dict[str, str] = {
     "Doctor appointment": "",
     "Operation Monsoon pricing review": "Pricing options, margin scenarios, decision.",
 }
+
+# Meeting transcripts (M6), as Teams would attribute them. Keys: a series' most recent past
+# occurrence ("acme:latest") and the one before ("acme:previous"), or a single meeting's subject.
+# `attributed=False` is a meeting where the organisation turned speaker attribution off.
+# "John Miller (Guest)" is how Teams shows a federated attendee. Tom Becker (the vendor, someone you
+# know) and Jordan Lee (nobody you know) weren't invited.
+TRANSCRIPTS: dict[str, tuple[bool, list[tuple[str, str]]]] = {
+    "acme:latest": (
+        True,
+        [
+            (ME, "Thanks everyone. Quick agenda today: status, UAT and the cutover runbook."),
+            ("John Miller (Guest)", "Before we start, the go-live has to be on a weekend."),
+            ("John Miller (Guest)", "We can't take the store systems down on a weekday."),
+            ("Lisa Chen", "Also, we need the rollback to be tested end to end before the cutover."),
+            (ME, "Understood. I'll share the updated cutover runbook by Thursday EOD."),
+            ("Lisa Chen", "And UAT sign-off needs two business owners, not one."),
+            ("Meera Iyer", "Agreed, let's go with a weekend go-live then, on the 8th of November."),
+            ("John Miller (Guest)", "What's the plan if the payment gateway certification slips?"),
+            (ME, "That's a real risk. We will raise it with CloudNest this week."),
+            ("Tom Becker", "From the CloudNest side, the new certificates are ready."),
+            ("Jordan Lee", "Sorry, joining late from the store operations team."),
+            ("Lisa Chen", "Rahul, can you send the UAT defect list to me by tomorrow?"),
+            (ME, "One idea: what if we run a dress rehearsal on the Saturday before?"),
+            ("John Miller (Guest)", "Good idea. Decision then: dress rehearsal on the 1st of November."),
+        ],
+    ),
+    "acme:previous": (
+        True,
+        [
+            ("Lisa Chen", "The new reports must load in under three seconds for store managers."),
+            ("John Miller (Guest)", "For the contract annex, the signatory's PAN is ABCPE1234F."),
+            (ME, "I'll check the performance numbers and get back to you by Monday."),
+            ("Meera Iyer", "We decided to keep the old reporting server until December."),
+            ("Lisa Chen", "My concern is that the data migration window looks tight."),
+        ],
+    ),
+    "1on1:latest": (
+        True,
+        [
+            ("Meera Iyer", "How is the Bluefin hiring going?"),
+            (ME, "Two candidates are in the final round. I'll send you the shortlist tomorrow morning."),
+            ("Meera Iyer", "Good. Also, please prepare the Q4 resource plan before Thursday."),
+            ("Meera Iyer", "We agreed that Ana takes over the Orion workstream from next month."),
+            (ME, "Sure, will do."),
+        ],
+    ),
+    "Orion Health discovery workshop": (
+        True,
+        [
+            (ME, "Thanks for making time, Emily. Let's start with scope."),
+            ("Emily Park", "All patient data has to stay in India, that's a hard requirement for us."),
+            ("Emily Park", "We also need audit logs for every access to health records."),
+            ("Priya Nair", "Our systems inventory so far is about 40 applications."),
+            ("Emily Park", "Is there an option to start with the claims system first?"),
+            (ME, "Maybe we could pilot with claims and then expand to the rest."),
+            (ME, "We'll share the discovery report by next Friday."),
+        ],
+    ),
+    "Kestrel all hands": (
+        False,
+        [
+            ("David Brooks", "Welcome everyone to the all hands."),
+            ("David Brooks", "Q3 revenue grew 14 percent, thanks to all of you."),
+            ("David Brooks", "For Q4, our priority is client retention and delivery quality."),
+            ("David Brooks", "We decided to open a new delivery centre in Pune next year."),
+            ("David Brooks", "Please complete the security training by the end of the month."),
+        ],
+    ),
+}

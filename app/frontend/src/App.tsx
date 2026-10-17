@@ -8,6 +8,7 @@ import { ClientScoping } from "./pages/admin/ClientScoping";
 import { Commitments } from "./pages/commitments/Commitments";
 import { ChangePassword } from "./pages/ChangePassword";
 import { Learning } from "./pages/learning/Learning";
+import { Meetings } from "./pages/meetings/Meetings";
 import { Persona } from "./pages/learning/Persona";
 import { MyData } from "./pages/controls/MyData";
 import { Setup } from "./pages/controls/Setup";
@@ -60,7 +61,7 @@ export function App() {
   const location = useLocation();
   const ready = auth.signedIn && !auth.mustChangePassword;
   const dataSource = useDataSource(ready);
-  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft", "/queue", "/commitments"];
+  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft", "/queue", "/commitments", "/meetings"];
   const tab = TAB_PATHS.find((p) => location.pathname.startsWith(p)) ?? "/";
 
   return (
@@ -76,6 +77,7 @@ export function App() {
             <Tab value="/draft">Draft</Tab>
             <Tab value="/queue">Queue</Tab>
             <Tab value="/commitments">Commitments</Tab>
+            <Tab value="/meetings">Meetings</Tab>
             <Tab value="/controls">My data</Tab>
             {auth.isAdmin && <Tab value="/admin/scoping">Client scoping</Tab>}
             {auth.isAdmin && <Tab value="/admin/diagnostics">Diagnostics</Tab>}
@@ -110,6 +112,7 @@ export function App() {
             <Route path="/draft" element={<Draft />} />
             <Route path="/queue" element={<Queue />} />
             <Route path="/commitments" element={<CommitmentsPage />} />
+            <Route path="/meetings" element={<Meetings />} />
             <Route path="/admin/scoping" element={auth.isAdmin ? <ClientScoping /> : <Navigate to="/" />} />
             <Route path="/admin/diagnostics" element={auth.isAdmin ? <Diagnostics /> : <Navigate to="/" />} />
             <Route path="/spikes/teams" element={auth.isAdmin ? <TeamsPrefill /> : <Navigate to="/" />} />

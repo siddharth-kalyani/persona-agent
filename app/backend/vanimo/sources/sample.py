@@ -32,8 +32,10 @@ from vanimo.sources.base import (
     PlacedDraft,
     Profile,
     SentHeader,
+    Transcript,
+    TranscriptRef,
 )
-from vanimo.sources.sample_content import AGENDAS, CHAT_SCRIPTS, ME, THREAD_SCRIPTS
+from vanimo.sources.sample_content import AGENDAS, CHAT_SCRIPTS, ME, THREAD_SCRIPTS, TRANSCRIPTS
 
 ORG_DOMAIN = "kestrel.example"
 SAMPLE_SEED = 20261013
@@ -285,6 +287,35 @@ def _chat_messages(self_addr: Address, now: datetime, chat: Chat) -> list[ChatMe
     return out
 
 
+def _transcript_key(events: list[Event], event: Event, now: datetime) -> str | None:
+    """Which sample transcript an event has: a series' latest or previous past occurrence, or a
+    single meeting by subject. Only meetings that are over have one (as in Teams)."""
+    if event.end > now - timedelta(minutes=5) or not event.is_online:
+        return None
+    if event.series_id:
+        past = sorted((e for e in events if e.series_id == event.series_id and e.end <= now), key=lambda e: e.start)
+        rank = len(past) - 1 - next((i for i, e in enumerate(past) if e.id == event.id), -1)
+        name = {"smp-series-acme": "acme", "smp-series-1on1": "1on1"}.get(event.series_id, "")
+        key = f"{name}:" + {0: "latest", 1: "previous"}.get(rank, "")
+    else:
+        key = event.subject or ""
+    return key if key in TRANSCRIPTS else None
+
+
+def _vtt(lines: list[tuple[str, str]], me: Address, *, attributed: bool) -> str:
+    """The script as Teams returns it: WebVTT with voice tags, or the unattributed format."""
+    out = ["WEBVTT", ""] if attributed else []
+    for i, (who, text) in enumerate(lines):
+        start, end = 4 + i * 26, 4 + i * 26 + 21
+        stamp = f"00:{start // 60:02d}:{start % 60:02d}.000 --> 00:{end // 60:02d}:{end % 60:02d}.000"
+        name = me.name if who == ME else who
+        if attributed:
+            out += [f"smp-cue/{i}-0", stamp, f"<v {name}>{text}</v>", ""]
+        else:
+            out += [stamp, "", text, ""]
+    return "\n".join(out)
+
+
 def _self_address(email: str | None) -> Address:
     """The signed-in person as they appear in the sample workspace (on the fictional domain)."""
     local = (email or "you").split("@", 1)[0].lower()
@@ -380,3 +411,22 @@ class SampleSource:
     async def event_agenda(self, event_id: str) -> str | None:
         event = next((e for e in _events(self.me, self._now) if e.id == event_id), None)
         return AGENDAS.get(event.subject or "") if event else None
+
+    # --- meeting transcripts (M6) -----------------------------------------------------------
+    async def meeting_transcripts(self, event: Event) -> list[TranscriptRef]:
+        events = _events(self.me, self._now)
+        known = next((e for e in events if e.id == event.id), None)
+        if known is None or _transcript_key(events, known, self._now) is None:
+            return []
+        return [
+            TranscriptRef(f"smp-tr-{known.id}", f"smp-om-{known.id}", known.start + timedelta(minutes=1), known.end)
+        ]
+
+    async def transcript(self, ref: TranscriptRef) -> Transcript:
+        from vanimo.memory.vtt import parse
+
+        events = _events(self.me, self._now)
+        event = next(e for e in events if f"smp-tr-{e.id}" == ref.id)
+        attributed, lines = TRANSCRIPTS[_transcript_key(events, event, self._now) or ""]
+        cues = parse(_vtt(lines, self.me, attributed=attributed), attributed=attributed)
+        return Transcript(ref, attributed, tuple(cues))

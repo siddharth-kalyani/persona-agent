@@ -1,7 +1,7 @@
 """Thin async Microsoft Graph client with throttling-aware retries.
 
-Errors expose only the HTTP status and Graph's error *code* (never the message, which
-can echo request data). Nothing here logs URLs, query strings or response bodies.
+Errors expose only the HTTP status and Graph's error *code* and inner-error code (never the
+message, which can echo request data). Nothing here logs URLs, query strings or response bodies.
 """
 
 from __future__ import annotations
@@ -21,10 +21,13 @@ RETRY_STATUSES = frozenset({429, 502, 503, 504})
 
 
 class GraphError(Exception):
-    def __init__(self, status: int, code: str) -> None:
+    def __init__(self, status: int, code: str, inner: str = "") -> None:
         super().__init__(f"graph {status} {code}")
         self.status = status
         self.code = code
+        # innerError.code: what some APIs branch on (transcripts: GraphAccessToTranscriptsDisabled,
+        # SpeakerAttributionNotAllowed under a plain "Forbidden").
+        self.inner = inner
 
 
 class GraphClient:
@@ -80,9 +83,9 @@ class GraphClient:
             await asyncio.sleep(retry_after)
         if resp.is_success:
             return resp
-        code = _error_code(resp)
+        code, inner = _error_codes(resp)
         log.info("graph.error", graph_status=resp.status_code, graph_code=code)
-        raise GraphError(resp.status_code, code)
+        raise GraphError(resp.status_code, code, inner)
 
     def for_background(self) -> GraphClient:
         """Same token, patient retries: for long passes that run outside a request."""
@@ -123,10 +126,18 @@ def _retry_after(resp: httpx.Response, attempt: int, cap: float) -> float:
     return min(cap, (2 ** (attempt - 1)) + random.uniform(0, 0.5))  # noqa: S311 - jitter, not crypto
 
 
-def _error_code(resp: httpx.Response) -> str:
-    try:
-        code = resp.json().get("error", {}).get("code", "")
-    except ValueError:
-        code = ""
-    code = str(code)
+def _safe_code(code: Any) -> str:
+    code = str(code or "")
     return code if code.replace("_", "").replace(".", "").isalnum() and len(code) <= 80 else "unknown"
+
+
+def _error_codes(resp: httpx.Response) -> tuple[str, str]:
+    try:
+        error = resp.json().get("error", {}) or {}
+    except (ValueError, AttributeError):
+        return "unknown", ""
+    if not isinstance(error, dict):
+        return "unknown", ""
+    inner = error.get("innerError") or error.get("innererror") or {}
+    inner_code = inner.get("code") if isinstance(inner, dict) else None
+    return _safe_code(error.get("code")), _safe_code(inner_code) if inner_code else ""

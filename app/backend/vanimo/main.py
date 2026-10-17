@@ -26,6 +26,7 @@ from vanimo.api import (
     edits,
     learning,
     me,
+    meetings,
     notifications,
     queue,
     teams,
@@ -167,6 +168,8 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     app.include_router(commitments.router)
     app.include_router(notifications.router)
     app.include_router(teams.router)
+    app.include_router(meetings.router)
+    app.include_router(meetings.admin_router)
     return app
 
 

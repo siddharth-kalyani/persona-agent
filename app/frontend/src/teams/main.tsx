@@ -10,11 +10,12 @@ import { bridgeUri } from "../auth/msal";
 import { apiScope, loadConfig, loadSignInOptions, type AppConfig, type SignInOptions } from "../config";
 import { draftErrorText } from "../drafting/DraftView";
 import { Commitments } from "../pages/commitments/Commitments";
+import { Meetings } from "../pages/meetings/Meetings";
 import { browserHost, TeamsDraft, type TeamsHost } from "./TeamsDraft";
 
 /**
  * Teams entry (M5): the "Draft reply" / "Draft with Vanimo" dialog (`?h=<handle>`) and the personal
- * tab (`?tab=commitments`). Sign-in:
+ * tabs (`?tab=commitments`, and M6's `?tab=meetings`). Sign-in:
  *  - Microsoft: nested app authentication through Teams (TeamsJS is initialised first, then MSAL's
  *    nestable client); a button opens the popup fallback when Teams needs you to sign in;
  *  - local/dev only, while the Entra app is pending: a Vanimo password account (sample workspace).
@@ -61,6 +62,15 @@ function Surface({ api, inTeams }: { api: Api; inTeams: boolean }) {
       <ApiTestProvider api={api}>
         <div className={styles.pane}>
           <Commitments embedded prefill={prefill} />
+        </div>
+      </ApiTestProvider>
+    );
+  }
+  if (TAB === "meetings") {
+    return (
+      <ApiTestProvider api={api}>
+        <div className={styles.pane}>
+          <Meetings embedded />
         </div>
       </ApiTestProvider>
     );

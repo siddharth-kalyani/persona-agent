@@ -9,7 +9,7 @@ The build plan is `docs/03-mvp-plan-and-roadmap.md` §0 (solo track M0–M6). Th
 | `infra/` | One regional cell on AWS | AWS CDK (Python): VPC, Aurora PostgreSQL 18 (Serverless v2), ECS Fargate, internal ALB, CloudFront, S3, KMS, Secrets Manager |
 | `infra/entra/` | How to register the Entra app | — |
 | `surfaces/outlook-addin/` | Outlook add-in manifest (XML); the task pane itself is in `frontend/src/addin/` | — |
-| `surfaces/teams-app/` | Teams app manifest + package builder (M5); the dialog and tab are in `frontend/src/teams/` | — |
+| `surfaces/teams-app/` | Teams app manifest + package builder (M5); the dialog and tabs (Commitments, M6's Meetings) are in `frontend/src/teams/` | — |
 | `docker-compose.yml` | Local Postgres 18 (port 5433) | Docker |
 
 ## Sample data: works without Microsoft 365
@@ -360,8 +360,148 @@ Vanimo still never sends.
 
 Teams needs the Entra app, a deployed cell (or an HTTPS tunnel to your machine) and a bot registration; the steps are
 in `infra/entra/README.md` §6b. Until then the Teams dialog can be opened in a browser for testing:
-`http://localhost:5173/teams.html` (chat picker) and `http://localhost:5173/teams.html?tab=commitments` (the tab).
+`http://localhost:5173/teams.html` (chat picker), `http://localhost:5173/teams.html?tab=commitments` and
+`http://localhost:5173/teams.html?tab=meetings` (the tabs).
 With password sign-in it uses the sample workspace.
+
+## M6: Meeting memory
+
+Works the same on the sample workspace and on Microsoft 365. New:
+- the **Meetings** tab (also a **Meetings** tab in the Teams app);
+- promises you made in meetings, in **Commitments**;
+- the **Meeting memory** card on the Client scoping tab (a switch and transcript health checks).
+
+Only internal Teams meetings with transcription on: Microsoft's own transcripts (everyone in the meeting sees the
+transcription banner), read through Graph. Vanimo never records anything, and never receives audio.
+
+**Reading transcripts** (`vanimo/memory/ingest.py`, architecture §6.2, research R02 §D.1). Graph facts checked against
+Microsoft Learn on 2026-10-16:
+- **As each person, not as an app.** The organiser *and invited attendees* can read a meeting's transcripts with the
+  delegated `OnlineMeetingTranscript.Read.All`, so **no Teams application access policy is needed** (that's only for
+  application permissions). The path is calendar → the meeting's join link → `me/onlineMeetings?$filter=JoinWebUrl
+  eq '…'` → `…/transcripts` → `…/transcripts/{id}/content`.
+- **The Teams admin gate.** Graph access to transcripts and speaker attribution are two tenant settings, both off by
+  default since the end of July 2026 (Teams admin center → Meetings → Meeting settings, or
+  `Set-CsTeamsMeetingConfiguration`). With access off, every call answers `403` with the inner code
+  `GraphAccessToTranscriptsDisabled`: Vanimo records it, stops asking for 6 hours and says so on the Meetings tab.
+  With attribution off, the `text/vtt` content answers `SpeakerAttributionNotAllowed`: Vanimo asks again for the
+  unattributed format (`Accept: application/vnd.microsoft.graph.transcript+text`) and stores the meeting without
+  names.
+- **When.** There is still no background Graph token, so meetings are read when you open the Meetings tab (like M4's
+  matching and M5's scan): meetings of the last 30 days that ended at least 5 minutes ago, newest first, at most 4
+  per look (the rest on the next). An ended meeting with no transcript yet is looked at again every 15 minutes
+  for 2 days. Each meeting is read once.
+- **Which meetings.** Teams meetings in your calendar, organised inside your organisation (Graph holds no transcript
+  of another company's meeting), not marked private, and allowed by your rules and the organisation's: the
+  occurrence, its series, every invitee and their domains, client scoping. **An excluded meeting's transcripts are
+  never listed or fetched.**
+- **Series.** All occurrences of a recurring meeting share one online meeting and one transcript list, so an
+  occurrence takes only the transcripts that started in its own time (from 30 minutes before it to 3 hours after,
+  and before the next occurrence). Excluding one occurrence never exposes another.
+
+**Who said it** (speaker attribution is the trust signal, R05 §5.3):
+- Teams attributes speech to display names. Vanimo matches them to the invite ("John Miller (Guest)" is John
+  Miller); a name two invitees share matches nobody.
+- **Someone not on the invite:** if they're someone you know (your Sources index) and you haven't excluded them,
+  their words are kept. If you excluded them, **the whole meeting is left out**, as a person rule covers every
+  meeting they're in. If nobody can tell who they are (or two people you know share the name), their words are
+  left out, because nobody can check them against your rules. The Meetings tab says how many parts were left out.
+- A wrong name can be fixed: **Wrong speaker?** moves a speaker's words and notes to another person in the
+  meeting, or to "I don't know who". Promises follow: words moved to you add your promises to Commitments, and
+  words moved away remove the open ones.
+
+**Stored** (Mode A, architecture §8.4):
+- Each turn redacted to L1 in memory first, with the same gazetteer as the learner, plus everyone invited:
+  - names become person tokens, and regulated IDs become slots ("the signatory's PAN is [PAN]");
+  - never-send words become placeholders;
+  - a turn that can't be made safe is left out.
+- **The transcript, as L1 speaker turns, for 30 days** (`transcript_retention_days`), for citations. Then only the
+  notes stay.
+- **Notes (memory atoms), for 12 months** (`memory_retention_days`). Each note has:
+  - a kind: decision, requirement, action item, promise, open question, risk or idea;
+  - the sentence as said;
+  - who said it, and their side (you, a colleague, someone outside);
+  - who it's for (action items);
+  - when it was said, and when it was stored (bi-temporal);
+  - the turn it came from;
+  - a due date (resolved in code);
+  - confidence, and trust ("high" with speaker names, "medium" without).
+- The meeting's title (L1), time, lineage (occurrence and series hashes, invitees as person and domain hashes) and
+  the governance fields of R05 §5.1: capture source, consent state (the Teams banner), retention class, audio
+  retained (always no).
+- A content-free record of what became of each meeting (stored, no transcript yet, unavailable, left out, deleted),
+  so it's read once. The sweeper deletes expired turns and notes (`vanimo_private.expire_meeting_memory()`).
+- Your rules reach all of it:
+  - an exclusion added later hides the meeting at once, and the purge deletes it with its turns, notes and
+    promises (receipt: `meetings_deleted`);
+  - a never-send word added later is re-masked in titles, turns and notes;
+  - "Delete what Vanimo learned" deletes every meeting and marks the ones already read as never to be read again.
+  - **Forget this meeting** does the same for one.
+
+**Notes** (`vanimo/memory/atoms.py`):
+- Offline stand-in (labelled): cue phrases, at most one note per sentence, precision first.
+  - "We decided…", "let's go with…", "Decision then:" are decisions.
+  - "We need…", "must", "has to" (not questions, not "I need a minute") are requirements.
+  - "Rahul, can you send…", "please prepare…" are action items. In a two-person meeting, "please…" is for the
+    other one.
+  - The commitments finder's first-person promises are promises.
+  - Questions about plans and options are open questions; "risk", "concern", "tight" are risks; "what if",
+    "we could" are ideas.
+- **With Bedrock:** Claude Haiku as a quarantined, tool-less reader (architecture §9.4).
+  - It reads windows of 40 turns.
+  - Every quote must be in the turn it names, a short form may use only that turn's name markers, and an owner
+    must be a person in the meeting; anything else is dropped.
+  - Who promised is who said it, never the model's say; due dates are worked out in code.
+  - A malformed answer falls back to the rules for that window.
+- **Your own promises** in a meeting go to the Commitments ledger as "Meeting". There's no conversation to follow up
+  in, so there's no follow-up draft. They need speaker attribution.
+
+**Ask** (`vanimo/memory/ask.py`, `vanimo/memory/when.py`, research R05 §5.4):
+1. **The question is read in code.**
+   - When: "yesterday", "Tuesday's", "last Wednesday", "this morning", "last week", "14 Oct", "3 days ago", "at 4",
+     "4 pm", "16:30". A bare 1–7 is the afternoon. All in the cell's time zone.
+   - Which kinds: "requirements", "decided", "action items", "promised"…
+   - Whose: "the client" means people outside the organisation; a name means someone in your meetings; "I promised"
+     means you.
+   - Which meeting: words of its title.
+2. **"The 4 pm meeting"** is the one starting nearest 16:00 (within 45 minutes) that day. If two match, it asks
+   which, with buttons; with no day, it takes the most recent and offers the others.
+3. **Notes first, then what was said.** Your notes are filtered and scored. Only if no note fits does it search
+   the transcript turns (while they're kept).
+   - A topic word that isn't in the meeting's title must be in the note, so "what did we decide about Mars?"
+     finds nothing rather than every decision.
+4. **The answer has numbered citations:** meeting, time span ("Acme weekly sync, Tue 13 Oct · 10:01:30–10:01:51"),
+   speaker and the sentence. **Show in meeting** opens the transcript at that turn.
+   - Offline: the notes themselves, grouped by meeting.
+   - With Bedrock: Claude answers from the numbered notes only, and the question goes as L1 too. The answer must
+     cite at least one note, every citation must exist, it may hold only name markers from the notes and no links;
+     otherwise the extractive answer is shown.
+   - **No evidence, no answer:** "I couldn't find that in your meeting notes", with the closest meetings to ask
+     about instead.
+5. Everything is re-checked against your rules as they are now before it's shown. Questions aren't stored, and the
+   audit log records that you asked, not what. At most 10 questions a minute.
+
+**Admin** (Client scoping → Meeting memory):
+- **Remember Teams meetings** (on by default). Off: no meeting is read, and remembered ones aren't shown or
+  searched.
+- **Check transcript access:**
+  - live, with your own sign-in: transcript *metadata* of your recent internal meetings, never content;
+  - speaker attribution, from what reading transcripts ran into across the organisation in the last 14 days
+    (counts only, `vanimo_private.meeting_ingest_health()`);
+  - the application access policy (not needed);
+  - what to change in Teams if something is off.
+
+**Try it on the sample workspace:** finish the review, then open **Meetings**.
+1. Five meetings are remembered:
+   - the last two **Acme weekly syncs** (client requirements, a weekend go-live, your runbook promise, an
+     uninvited guest left out, a PAN masked);
+   - the **1:1 with Meera**;
+   - the **Orion discovery workshop**;
+   - **Kestrel all hands**, with speaker attribution off.
+2. Not the Falcon steering committee (organised by the client), nor the private doctor's appointment.
+3. Ask: "What did the client ask for in the Acme weekly sync?", "What did I promise in meetings?", "What did Lisa
+   say about the rollback?", "What did Meera decide?", or a meeting by its day and time ("…in the 4 pm meeting on
+   Thursday?").
 
 ## Guarantees built in from M0
 
@@ -500,11 +640,12 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Never-send matching (M1 review) | Research 12: invisible characters removed | Zero-width spaces are still removed, not treated as spaces, so splitting a word with them ("Fal​con") can't dodge the filter. The cost: two words glued by a zero-width space ("the​falcon") don't match a *word* (they do match a codename) | Revisit with ICU word segmentation |
 | Data controls (M1 vs §6.5 / research 12) | One table of rules for admins and users; rule states active → purging → purged / held; admins can also exclude specific chats; Aho–Corasick + ICU word segmentation; internal people merged by Entra object ID; review reminders at 24 h and 48 h | Organisation rules live in their own tables (client accounts with domains and approved/excluded mode) and go through the same engine. Rules are active or revoked; purging happens in receipts. No admin chat exclusion (admins can't see users' chats). The matcher uses plain string search with Unicode-category word boundaries (letters, marks and digits are word characters, so Devanagari matras stay attached). People are keyed by email address. No reminders yet (no notification channel until M5; **done in M5**: the review reminder at 24 h and 48 h, as
 a count in the web app and the Teams activity feed). Words inside email addresses are masked on screen, but the address itself is kept encrypted, because it identifies the person | Before external customers: Aho–Corasick for large lists, OID merge, admin chat rules. Reminders come with Teams in M5 |
-| Commitments (M5 vs R05 §5.3–5.4, R09) | Typed memory atoms across email, chat and meetings, extracted by Haiku and consolidated by Sonnet; cross-channel linking; promises others made to you; nudges | The user's own promises only, from sent email and Teams chats (meetings arrive with M6). Rules offline, Haiku on Bedrock, both checked against the text in code. Due dates resolved in code in the cell's time zone, not the user's own (no `MailboxSettings.Read` yet). "Looks done" is a word-overlap hint, never automatic. Found after learning and when you open the tab (no background token), within 60 days | Measure precision on Bedrock against the ≥ 80 % target; add others' promises to you, the user's own time zone, and meeting commitments (M6) |
+| Commitments (M5 vs R05 §5.3–5.4, R09) | Typed memory atoms across email, chat and meetings, extracted by Haiku and consolidated by Sonnet; cross-channel linking; promises others made to you; nudges | The user's own promises only, from sent email and Teams chats (~~meetings arrive with M6~~ **M6:** and Teams meetings, with speaker attribution; no follow-up draft for those). Rules offline, Haiku on Bedrock, both checked against the text in code. Due dates resolved in code in the cell's time zone, not the user's own (no `MailboxSettings.Read` yet). "Looks done" is a word-overlap hint, never automatic. Found after learning and when you open the tab (no background token), within 60 days | Measure precision on Bedrock against the ≥ 80 % target; add others' promises to you, the user's own time zone, and meeting commitments (M6) |
 | Teams (M5 vs R02 §B, architecture §5) | Personal agent (Agents SDK) + message action + compose extension; RSC for chat context; dialog with Copy / prefill / Send as me | Message action + compose action only (the personal agent is v1.5). Copy always; open-the-chat prefill behind an admin switch until spike 1. Chats only, not channels. Context comes from Graph with the user's token after the exclusion engine decides, never from the invoke. The Teams page's CSP is report-only (like the add-in) until the hosts are confirmed | Run spike 1 and the Teams CSP check on desktop, web and mobile; then the personal agent (v1.5) |
+| Meeting memory (M6 vs R05 §5, architecture §6.2, §9.3–9.4, R02 §D) | Transcript subscriptions created at enrolment (they must exist before transcription starts), change notifications, auto-transcribe for enrolled organisers; episodes from calendar + silence + speaker/topic shifts; Haiku per-chunk extraction then Sonnet per-episode consolidation and cross-episode linking; hybrid retrieval (S3 Vectors + full text); a Haiku query parser; answers by Sonnet/Haiku on AgentCore with audio snippets; recall Q&A in a Teams personal agent | Pulled when the user opens the Meetings tab (no background token or webhooks yet), so a meeting is remembered the next time they look, not minutes after it ends. One episode per calendar occurrence with a transcript (no unscheduled sessions: no recorder until Phase 2). Rule-based notes offline, Haiku on Bedrock with every quote checked; no consolidation step or cross-meeting linking (a repeated action item is two notes). Retrieval is SQL + keyword scoring over decrypted notes, no vectors. The question is parsed in code, not by a model. Answers in the web app and the Teams tab (the personal agent is v1.5); no audio (Teams audio is never fetched). Only the user's own promises go to the ledger. Speech by people not on the invite whom the user doesn't know is left out. Meetings of other companies and channel meetings aren't covered (Graph has no transcripts of the first; the second weren't tested) | Spike 4 on real meetings (attendee access, attribution off, latency); then subscriptions + a background token, Bedrock embeddings, the consolidation step, and measure note precision/recall and citation precision (R05 §5.6 targets) on dogfood questions |
 | Notifications (M5) | Teams bot proactive messages and email digests | Content-free counts in the web app and the Teams activity feed (Graph `sendActivityNotification`, app-only `TeamsActivity.Send`). No email digest. Delivery needs the Teams app installed; without it, notifications are in the web app only | Add the permission and install the app after deploy |
 | Background work | Step Functions / durable queues | In-process tasks, plus a sweeper every 5 minutes that resumes interrupted purge jobs and fails scans cut off by a restart (`vanimo/controls/sweeper.py`) | Move to a queue when there is more than one API task |
-| Housekeeping functions | Separate sweeper role | `vanimo_private.fail_stale_scans` / `claim_purge_jobs` / `notification_candidates` (M5) are SECURITY DEFINER functions the API role can call. They act across tenants and return only IDs. `record_org_domains` accepts domains from Microsoft 365 scans, plus the sample domain in the local tenant only | Give the sweeper its own database role; add an admin view of recorded organisation domains |
+| Housekeeping functions | Separate sweeper role | `vanimo_private.fail_stale_scans` / `claim_purge_jobs` / `notification_candidates` (M5) / `expire_meeting_memory` (M6) are SECURITY DEFINER functions the API role can call. They act across tenants and return only IDs. `record_org_domains` accepts domains from Microsoft 365 scans, plus the sample domain in the local tenant only | Give the sweeper its own database role; add an admin view of recorded organisation domains |
 | Sources index | One index per data source | One index per user. After switching between the sample workspace and Microsoft 365, the old index is hidden until the new scan finishes. Reviews are remembered per source | Split the index by source if both are used side by side |
 | Sign-in | Entra only | Also email + password, local/dev only, for testing while the Entra app is pending | Removed or kept off in prod (the settings refuse it) |
 
@@ -519,7 +660,7 @@ a count in the web app and the Teams activity feed). Words inside email addresse
 | 1 | Teams prefill in existing chats | *Teams prefill test* tab: tests A and B on desktop, web and mobile. **M5:** also from the Teams dialog ("Draft reply" → turn on *Open Teams chats with the draft typed in* on Client scoping → *Open the chat with this text*), since TeamsJS `chat.openChat` from a dialog is undocumented. If it passes everywhere, leave the switch on |
 | 2 | Add-in insert/read | Render the manifest and add it in Outlook (*Get add-ins → My add-ins → Add a custom add-in*). Test sign-in and insert in new Outlook, classic, web and Mac:<br>`py surfaces/outlook-addin/render_manifest.py https://<cloudfront-domain> > manifest.xml` |
 | 3 | Graph delta details, `MSIP_Labels` | Diagnostics → *Run checks*: `sent_headers` and `sent_delta_headers` rows. **`uniqueBody` in delta moves to M2:** it needs a message body, and no body is read before the user's review step. The quote-stripper fallback is planned anyway |
-| 4 | Transcript access as organiser/attendee | Diagnostics → `meeting_transcripts` row |
+| 4 | Transcript access as organiser/attendee | Diagnostics → `meeting_transcripts` row. **M6:** Client scoping → *Check transcript access*, then open **Meetings** after a real internal meeting with transcription on, as the organiser and as an attendee. Turn speaker attribution off in a test tenant and check the meeting is stored without names. Note how long after the meeting its transcript appears (no Microsoft SLA) |
 | 5 | Drafts on Outlook mobile | Diagnostics → *Create test draft*, check the phone, then *Delete*. **M4:** also check that a Queue draft (Graph `createReply` with `comment`) keeps its line breaks and shows inside the conversation on iOS/Android, and that an edited-then-sent draft keeps its immutable ID (the Queue shows "You sent it") |
 | 7 | Latency from Mumbai | Diagnostics → *Measure latency* (Haiku 5.5, Sonnet 5.5) |
 | 11 | Data-control Graph checks | Diagnostics:<ul><li>*Run checks*: chat roster, `chatType` and `topic` filters, `conversationId` on forwards, calendar</li><li>*Time the header pass*: how long the M1 metadata review takes to build</li></ul>Header-only subscriptions wait for M1, because they need a public webhook |

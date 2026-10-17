@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from vanimo.commitments.extract import Extractor, Found, looks_done
+from vanimo.controls.neversend import Matcher
 from vanimo.controls.store import load_matcher, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.learning.backfill import controls_version
@@ -43,7 +44,7 @@ BEAT_EVERY = 20
 class Unit:
     """One of the user's own messages, already allowed and redacted (L1)."""
 
-    channel: str  # email | chat
+    channel: str  # email | chat | meeting
     item_hash: str
     thread_hash: str  # the conversation (email) or chat
     people: list[tuple[str, list[str]]]
@@ -145,65 +146,7 @@ async def save(
         if await controls_version(conn) != version:
             return None
         matcher = await load_matcher(conn, vault, ref)
-        tokens: dict[str, tuple[str, str]] = {}
-        for c in candidates:
-            f, unit = c.found, c.unit
-
-            def m(value: str | None) -> str | None:
-                # Never-send words as they are now, also in what a model wrote (the output gate's rule).
-                return matcher.mask(value, opaque=L1_MARKS)[0] if value else value
-
-            row = await conn.execute(
-                text(
-                    "insert into vanimo.commitments (tenant_id, owner_user_id, source_kind, channel, item_hash, "
-                    "ordinal, promise_hash, thread_hash, meeting_hash, series_hash, people, relationship, made_at, "
-                    "text_enc, what_enc, due_at, due_phrase_enc, ref_enc, extractor) values (:t, :u, :k, :ch, :ih, "
-                    ":n, :ph, :th, :mh, :sh, cast(:people as jsonb), :rel, :at, :txt, :what, :due, :phrase, :ref, "
-                    ":ex) on conflict (owner_user_id, promise_hash) do nothing returning id"
-                ),
-                {
-                    "t": t,
-                    "u": u,
-                    "k": source_kind,
-                    "ch": unit.channel,
-                    "ih": unit.item_hash,
-                    "n": min(c.ordinal, 20),
-                    "ph": vault.key_hash(t, "promise", f"{unit.item_hash}:{_norm(f.sentence)}"),
-                    "th": unit.thread_hash,
-                    "mh": unit.meeting_hash,
-                    "sh": unit.series_hash,
-                    "people": json.dumps([{"p": p, "d": d} for p, d in unit.people]),
-                    "rel": unit.relationship,
-                    "at": unit.sent_at,
-                    "txt": vault.encrypt_user(t, u, m(f.sentence), "commitment_text"),
-                    "what": vault.encrypt_user(t, u, m(f.what), "commitment_what"),
-                    "due": f.due_at,
-                    "phrase": vault.encrypt_user(t, u, m(f.due_phrase), "commitment_due"),
-                    "ref": vault.encrypt_user(t, u, unit.ref, "commitment_ref"),
-                    "ex": extractor,
-                },
-            )
-            if row.first():
-                out.stored += 1
-                tokens |= _tokens_in(c)
-        if tokens:
-            # The owner's display values for the names in a promise (masked like learned tokens).
-            await conn.execute(
-                text(
-                    "insert into vanimo.l1_tokens (tenant_id, owner_user_id, token, kind, value_enc) "
-                    "values (:t, :u, :tok, :kind, :val) on conflict (owner_user_id, token) do nothing"
-                ),
-                [
-                    {
-                        "t": t,
-                        "u": u,
-                        "tok": tok,
-                        "kind": k,
-                        "val": vault.encrypt_user(t, u, matcher.mask(v)[0], "l1_token"),
-                    }
-                    for tok, (k, v) in tokens.items()
-                ],
-            )
+        out.stored = await insert(conn, vault, ref, source_kind, candidates, matcher, extractor=extractor)
         out.hints = await _hints(conn, vault, ref, later)
         if scanned_until is not None:
             await conn.execute(
@@ -216,6 +159,88 @@ async def save(
                 {"u": u, "t": t, "k": source_kind, "s": scanned_until},
             )
     return out
+
+
+async def insert(
+    conn: AsyncConnection,
+    vault: Vault,
+    ref: UserRef,
+    source_kind: str,
+    candidates: Sequence[Candidate],
+    matcher: Matcher,
+    *,
+    extractor: str,
+) -> int:
+    """Inserts promises (and the display values of the names in them) in the caller's transaction,
+    which holds the controls lock and checked the version. Returns how many were new."""
+    t, u = ref.tenant_id, ref.user_id
+    stored = 0
+    tokens: dict[str, tuple[str, str]] = {}
+    for c in candidates:
+        f, unit = c.found, c.unit
+
+        def m(value: str | None) -> str | None:
+            # Never-send words as they are now, also in what a model wrote (the output gate's rule).
+            return matcher.mask(value, opaque=L1_MARKS)[0] if value else value
+
+        row = await conn.execute(
+            text(
+                "insert into vanimo.commitments (tenant_id, owner_user_id, source_kind, channel, item_hash, "
+                "ordinal, promise_hash, thread_hash, meeting_hash, series_hash, people, relationship, made_at, "
+                "text_enc, what_enc, due_at, due_phrase_enc, ref_enc, extractor) values (:t, :u, :k, :ch, :ih, "
+                ":n, :ph, :th, :mh, :sh, cast(:people as jsonb), :rel, :at, :txt, :what, :due, :phrase, :ref, "
+                ":ex) on conflict (owner_user_id, promise_hash) do nothing returning id"
+            ),
+            {
+                "t": t,
+                "u": u,
+                "k": source_kind,
+                "ch": unit.channel,
+                "ih": unit.item_hash,
+                "n": min(c.ordinal, 20),
+                "ph": promise_hash(vault, ref, unit.item_hash, f.sentence),
+                "th": unit.thread_hash,
+                "mh": unit.meeting_hash,
+                "sh": unit.series_hash,
+                "people": json.dumps([{"p": p, "d": d} for p, d in unit.people]),
+                "rel": unit.relationship,
+                "at": unit.sent_at,
+                "txt": vault.encrypt_user(t, u, m(f.sentence), "commitment_text"),
+                "what": vault.encrypt_user(t, u, m(f.what), "commitment_what"),
+                "due": f.due_at,
+                "phrase": vault.encrypt_user(t, u, m(f.due_phrase), "commitment_due"),
+                "ref": vault.encrypt_user(t, u, unit.ref, "commitment_ref"),
+                "ex": extractor,
+            },
+        )
+        if row.first():
+            stored += 1
+            tokens |= _tokens_in(c)
+    await save_tokens(conn, vault, ref, tokens, matcher)
+    return stored
+
+
+def promise_hash(vault: Vault, ref: UserRef, item_hash: str, sentence: str) -> str:
+    return vault.key_hash(ref.tenant_id, "promise", f"{item_hash}:{_norm(sentence)}")
+
+
+async def save_tokens(
+    conn: AsyncConnection, vault: Vault, ref: UserRef, tokens: dict[str, tuple[str, str]], matcher: Matcher
+) -> None:
+    """The owner's display values for tokens in stored text (masked like learned tokens)."""
+    if not tokens:
+        return
+    t, u = ref.tenant_id, ref.user_id
+    await conn.execute(
+        text(
+            "insert into vanimo.l1_tokens (tenant_id, owner_user_id, token, kind, value_enc) "
+            "values (:t, :u, :tok, :kind, :val) on conflict (owner_user_id, token) do nothing"
+        ),
+        [
+            {"t": t, "u": u, "tok": tok, "kind": k, "val": vault.encrypt_user(t, u, matcher.mask(v)[0], "l1_token")}
+            for tok, (k, v) in tokens.items()
+        ],
+    )
 
 
 async def _hints(conn: AsyncConnection, vault: Vault, ref: UserRef, later: Sequence[Unit]) -> int:

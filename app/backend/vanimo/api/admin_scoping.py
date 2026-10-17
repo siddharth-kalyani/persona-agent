@@ -77,6 +77,10 @@ class ScopingOut(BaseModel):
     # in existing chats; otherwise people copy the draft), and Teams activity notifications.
     teamsPrefill: bool = False
     teamsNotifications: bool = True
+    # Meeting memory (M6): read Teams transcripts of internal meetings into people's memory (each
+    # meeting still goes through their exclusions). Nothing is read until the Teams admin allows
+    # Graph access to transcripts. Off: no new meetings are read and remembered ones aren't shown.
+    meetingMemory: bool = True
 
 
 async def _read(state: State, user: CurrentUser) -> ScopingOut:
@@ -85,7 +89,7 @@ async def _read(state: State, user: CurrentUser) -> ScopingOut:
         policy = (
             await conn.execute(
                 text(
-                    "select external_mode, server_drafts, teams_prefill, teams_notifications "
+                    "select external_mode, server_drafts, teams_prefill, teams_notifications, meeting_memory "
                     "from vanimo.tenant_policies"
                 )
             )
@@ -105,6 +109,7 @@ async def _read(state: State, user: CurrentUser) -> ScopingOut:
         serverDrafts=policy.server_drafts if policy else True,
         teamsPrefill=policy.teams_prefill if policy else False,
         teamsNotifications=policy.teams_notifications if policy else True,
+        meetingMemory=policy.meeting_memory if policy else True,
         accounts=[
             AccountOut(
                 id=str(a.id),
@@ -198,6 +203,26 @@ async def set_teams_policy(
             {"t": user.tenant_id, "p": body.teamsPrefill, "n": body.teamsNotifications, "u": user.user_id},
         )
         await audit.record(conn, user, "admin.teams_policy", request_id=request.state.request_id)
+    return await _read(state, user)
+
+
+class MeetingsPolicyIn(BaseModel):
+    meetingMemory: bool
+
+
+@router.put("/meetings", response_model=ScopingOut)
+async def set_meetings_policy(
+    body: MeetingsPolicyIn, _: AdminPrincipal, user: CurrentUser, state: State, request: Request
+) -> ScopingOut:
+    async with user_tx(state.engine, user, admin=True) as conn:
+        await conn.execute(
+            text(
+                "insert into vanimo.tenant_policies (tenant_id, meeting_memory, updated_by) values (:t, :m, :u) "
+                "on conflict (tenant_id) do update set meeting_memory = :m, updated_at = now(), updated_by = :u"
+            ),
+            {"t": user.tenant_id, "m": body.meetingMemory, "u": user.user_id},
+        )
+        await audit.record(conn, user, "admin.meetings_policy", request_id=request.state.request_id)
     return await _read(state, user)
 
 

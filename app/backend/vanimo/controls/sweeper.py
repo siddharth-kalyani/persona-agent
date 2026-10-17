@@ -2,8 +2,9 @@
 
 Every few minutes: scans and learning runs still "running" after 2 hours are marked failed (so the UI offers a
 retry instead of spinning), and purge/scrub jobs left pending or running are run again (they are
-idempotent). Uses SECURITY DEFINER functions from migration 0005, which return IDs only. Then (M5)
-the notifications round: `vanimo.notify.run_once`.
+idempotent). Uses SECURITY DEFINER functions from migration 0005, which return IDs only. Meeting
+memory retention (M6): transcript turns after 30 days, notes after 12 months. Then (M5) the
+notifications round: `vanimo.notify.run_once`.
 """
 
 from __future__ import annotations
@@ -37,6 +38,9 @@ async def sweep_once(engine: AsyncEngine, vault: Vault) -> tuple[int, int]:
         jobs = (
             await conn.execute(text("select * from vanimo_private.claim_purge_jobs(:m)"), {"m": STALE_JOB_MINUTES})
         ).all()
+        expired = (await conn.execute(text("select * from vanimo_private.expire_meeting_memory()"))).one()
+    if expired.segments or expired.atoms or expired.episodes:
+        log.info("sweeper.expired", count=expired.segments + expired.atoms + expired.episodes)
     for job in jobs:
         await run_job(engine, vault, UserRef(job.tenant_id, job.user_id), str(job.job_id), job.reason)
     if failed or jobs:

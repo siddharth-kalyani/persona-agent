@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.30/MicrosoftTeams.schema.json",
   "manifestVersion": "1.30",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "id": "6eb7a34e-98f7-47fd-a00a-58b5f900f9be",
   "developer": {
     "name": "Vanimo (internal)",
@@ -12,7 +12,7 @@
   "name": { "short": "Vanimo", "full": "Vanimo: drafts in your voice" },
   "description": {
     "short": "Draft Teams replies in your own voice. Vanimo never sends.",
-    "full": "Vanimo drafts replies and new messages in your own voice from what it learned of how you write, with checks before you send, and keeps track of what you promised. It never sends anything: you copy or open the draft, read it, and send it yourself."
+    "full": "Vanimo drafts replies and new messages in your own voice from what it learned of how you write, with checks before you send, keeps track of what you promised, and remembers what your Teams meetings decided and asked for, with answers that say where they come from. It never sends anything: you copy or open the draft, read it, and send it yourself."
   },
   "icons": { "color": "color.png", "outline": "outline.png" },
   "accentColor": "#2F5BA8",
@@ -22,6 +22,13 @@
       "name": "Commitments",
       "contentUrl": "{{HOST}}/teams.html?tab=commitments",
       "websiteUrl": "{{HOST}}/commitments",
+      "scopes": ["personal"]
+    },
+    {
+      "entityId": "meetings",
+      "name": "Meetings",
+      "contentUrl": "{{HOST}}/teams.html?tab=meetings",
+      "websiteUrl": "{{HOST}}/meetings",
       "scopes": ["personal"]
     }
   ],

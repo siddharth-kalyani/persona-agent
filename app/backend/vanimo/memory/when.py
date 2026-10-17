@@ -41,7 +41,12 @@ _MON = {**_MONTHS, **{m[:3]: n for m, n in _MONTHS.items()}, "sept": 9}
 _PARTS = {"morning": (time(8), time(12)), "afternoon": (time(12), time(17)), "evening": (time(17), time(21))}
 _WD_RE = "|".join(sorted(_WD, key=len, reverse=True))
 _MON_RE = "|".join(sorted(_MON, key=len, reverse=True))
-_DAY_OF = re.compile(rf"\b(?:(?P<last>last|this|on|past)\s+)?(?P<wd>{_WD_RE})(?:['’]s)?\b", re.I)  # noqa: RUF001
+_FULL_WD = "|".join(_WEEKDAYS)
+_SHORT_WD = "|".join(sorted((d.capitalize() for d in _WD if d not in _WEEKDAYS), key=len, reverse=True))
+# Full names in any case; short ones ("Sat", "Wed") only capitalised, so "we sat down" isn't Saturday.
+_DAY_OF = re.compile(
+    rf"\b(?:(?P<last>[Ll]ast|[Tt]his|[Oo]n|[Pp]ast)\s+)?(?P<wd>(?i:{_FULL_WD})|{_SHORT_WD})(?:['’]s)?\b"  # noqa: RUF001
+)
 _DATE_DM = re.compile(rf"\b(?P<d>\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?(?P<m>{_MON_RE})\b", re.I)
 _DATE_MD = re.compile(rf"\b(?P<m>{_MON_RE})\s+(?P<d>\d{{1,2}})(?:st|nd|rd|th)?\b", re.I)
 _AGO = re.compile(r"\b(?P<n>\d{1,2}|a|one|two|three)\s+(?P<u>days?|weeks?)\s+ago\b", re.I)
@@ -140,7 +145,7 @@ def resolve(question: str, now: datetime, tz: ZoneInfo, *, lookback: timedelta) 
             label = day.strftime("%d %b")
         except ValueError:
             day = None
-    elif m := _DAY_OF.search(q):
+    elif m := _DAY_OF.search(question):
         wd = _WD[m.group("wd").lower()]
         back = (today.weekday() - wd) % 7
         if m.group("last") and m.group("last").lower() == "last" and back == 0:

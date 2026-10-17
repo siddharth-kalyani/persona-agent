@@ -38,9 +38,13 @@ async def sweep_once(engine: AsyncEngine, vault: Vault) -> tuple[int, int]:
         jobs = (
             await conn.execute(text("select * from vanimo_private.claim_purge_jobs(:m)"), {"m": STALE_JOB_MINUTES})
         ).all()
-        expired = (await conn.execute(text("select * from vanimo_private.expire_meeting_memory()"))).one()
-    if expired.segments or expired.atoms or expired.episodes:
-        log.info("sweeper.expired", count=expired.segments + expired.atoms + expired.episodes)
+    try:
+        async with engine.begin() as conn:
+            expired = (await conn.execute(text("select * from vanimo_private.expire_meeting_memory()"))).one()
+        if expired.segments or expired.atoms or expired.episodes:
+            log.info("sweeper.expired", count=expired.segments + expired.atoms + expired.episodes)
+    except Exception as exc:  # retention retries next round; purges and scans never wait on it
+        log.warning("sweeper.expire_failed", error_type=type(exc).__name__)
     for job in jobs:
         await run_job(engine, vault, UserRef(job.tenant_id, job.user_id), str(job.job_id), job.reason)
     if failed or jobs:

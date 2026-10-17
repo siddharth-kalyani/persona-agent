@@ -390,7 +390,7 @@ Microsoft Learn on 2026-10-16:
 - **When.** There is still no background Graph token, so meetings are read when you open the Meetings tab (like M4's
   matching and M5's scan): meetings of the last 30 days that ended at least 5 minutes ago, newest first, at most 4
   per look (the rest on the next). An ended meeting with no transcript yet is looked at again every 15 minutes
-  for 2 days. Each meeting is read once.
+  for 2 days. Each meeting is read once; one whose transcript is too large, expired or gone isn't downloaded again.
 - **Which meetings.** Teams meetings in your calendar, organised inside your organisation (Graph holds no transcript
   of another company's meeting), not marked private, and allowed by your rules and the organisation's: the
   occurrence, its series, every invitee and their domains, client scoping. **An excluded meeting's transcripts are
@@ -405,7 +405,8 @@ Microsoft Learn on 2026-10-16:
 - **Someone not on the invite:** if they're someone you know (your Sources index) and you haven't excluded them,
   their words are kept. If you excluded them, **the whole meeting is left out**, as a person rule covers every
   meeting they're in. If nobody can tell who they are (or two people you know share the name), their words are
-  left out, because nobody can check them against your rules. The Meetings tab says how many parts were left out.
+  left out, because nobody can check them against your rules. The Meetings tab says how many parts were left out. Their name
+  is still redacted wherever someone else mentions them.
 - A wrong name can be fixed: **Wrong speaker?** moves a speaker's words and notes to another person in the
   meeting, or to "I don't know who". Promises follow: words moved to you add your promises to Commitments, and
   words moved away remove the open ones.
@@ -459,10 +460,11 @@ Microsoft Learn on 2026-10-16:
 **Ask** (`vanimo/memory/ask.py`, `vanimo/memory/when.py`, research R05 §5.4):
 1. **The question is read in code.**
    - When: "yesterday", "Tuesday's", "last Wednesday", "this morning", "last week", "14 Oct", "3 days ago", "at 4",
-     "4 pm", "16:30". A bare 1–7 is the afternoon. All in the cell's time zone.
+     "4 pm", "16:30". A bare 1–7 is the afternoon. Short weekdays count only capitalised ("Sat", not "we sat").
+     All in the cell's time zone.
    - Which kinds: "requirements", "decided", "action items", "promised"…
    - Whose: "the client" means people outside the organisation; a name means someone in your meetings; "I promised"
-     means you.
+     means you. A first name alone counts only capitalised ("Will", not "what will we do").
    - Which meeting: words of its title.
 2. **"The 4 pm meeting"** is the one starting nearest 16:00 (within 45 minutes) that day. If two match, it asks
    which, with buttons; with no day, it takes the most recent and offers the others.

@@ -195,6 +195,7 @@ def build(
     attributed = all(t.attributed for t in transcripts)
     people = {a.email.lower(): a for a in roster.by_name.values() if a and a.email.lower() != me}
     raw: list[tuple[int, int, Address | None, str]] = []
+    unknown: dict[str, str] = {}  # names of people whose words are left out, still redacted where mentioned
     for tr in sorted(transcripts, key=lambda t: t.ref.created_at):
         shift = int((tr.ref.created_at - first).total_seconds() * 1000)
         for cue in vtt.turns(list(tr.cues)):
@@ -208,6 +209,9 @@ def build(
                     who = namesakes[0] if len(namesakes) == 1 else None
                 if who is None:
                     result.add("unknown_speaker")
+                    name = " ".join(_PAREN.sub(" ", cue.speaker).split())
+                    if name:
+                        unknown.setdefault(_fold(name), name)
                     continue
                 if who.email.lower() != me:
                     people.setdefault(who.email.lower(), who)
@@ -215,7 +219,9 @@ def build(
                 result.add("unknown_speaker")
                 continue
             raw.append((cue.start_ms + shift, cue.end_ms + shift, who, cue.text))
-    redactor: Redactor = redactor_for([*people.values()])
+    # People nobody could identify have no address: their names join the gazetteer without one, so
+    # "thanks, Jordan" becomes a token like any known name (never a person you can be matched to).
+    redactor: Redactor = redactor_for([*people.values(), *(Address("", n) for n in unknown.values())])
     tokens: dict[str, tuple[str, str]] = {}
     sides: dict[str, str] = {}
     for a in [roster.me, *people.values()]:
@@ -569,7 +575,9 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
                 continue
             transcripts = [await source.transcript(r) for r in sorted(refs, key=lambda r: r.created_at)]
         except TranscriptsUnavailable as exc:
-            await record(state, user, source.kind, mh, "unavailable", exc.reason, e.end)
+            # Too large, expired or gone won't change: recorded as done, never downloaded again.
+            terminal = exc.reason in ("too_large", "expired", "not_found")
+            await record(state, user, source.kind, mh, "empty" if terminal else "unavailable", exc.reason, e.end)
             if exc.reason in ("disabled", "permission"):
                 out.unavailable = exc.reason  # the same for every meeting: stop asking
                 break

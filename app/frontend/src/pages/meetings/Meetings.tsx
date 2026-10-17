@@ -239,6 +239,7 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
 
       {detail && (
         <MeetingView
+          key={`${detail.id}:${detail.transcript.map((t) => t.speakerId).join(",")}`}
           detail={detail}
           focusTurn={focusTurn}
           onDecide={(n) => void decide(n)}

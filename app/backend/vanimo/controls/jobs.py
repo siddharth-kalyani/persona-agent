@@ -343,9 +343,13 @@ async def gc_tokens(conn: AsyncConnection, vault: Vault, ref: UserRef) -> int:
     for sql in ("select speaker from vanimo.episode_segments", "select speaker, owner from vanimo.memory_atoms"):
         for row in (await conn.execute(text(sql))).all():
             used |= {x for x in row if x}
-    stems = {x.split(".")[0].removesuffix("⟧") for x in used if x.startswith("⟦PERSON_")}
+    # A meeting note's owner is shown from whichever form of their name is stored, so those keep
+    # every form; anyone else keeps only the forms still used (as before M6).
+    owners = (
+        await conn.execute(text("select distinct owner from vanimo.memory_atoms where owner is not null"))
+    ).scalars()
+    stems = {x.split(".")[0].removesuffix("⟧") for x in owners}
     stored = (await conn.execute(text("select token from vanimo.l1_tokens"))).scalars().all()
-    # A name's other forms stay with it (a note's owner is shown from whichever form is stored).
     unused = [tok for tok in stored if tok not in used and tok.split(".")[0].removesuffix("⟧") not in stems]
     if unused:
         await conn.execute(text("delete from vanimo.l1_tokens where token = any(:t)"), {"t": unused})

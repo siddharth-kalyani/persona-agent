@@ -154,7 +154,9 @@ def parse_question(question: str, now: datetime, tz: ZoneInfo, names: dict[str, 
     name_words: set[str] = set()
     for stem, name in names.items():
         parts = [p for p in re.split(r"\s+", name.lower()) if len(p) >= 3]
-        if parts and (name.lower() in q or any(re.search(rf"\b{re.escape(p)}\b", q) for p in parts[:1])):
+        # The full name in any case; a first name alone only capitalised ("Will", not "what will we do").
+        first = parts[0].capitalize() if parts else ""
+        if parts and (name.lower() in q or re.search(rf"\b{re.escape(first)}\b", question)):
             people.add(stem)
             name_words |= set(parts)
     kind_words = {x for ws in KIND_WORDS.values() for w in ws for x in w.split()}

@@ -147,7 +147,10 @@ class Redactor:
     ) -> None:
         self.matcher = matcher
         self.hasher = hasher
-        self._names = self._name_patterns(gazetteer)
+        # F12: names are replaced only if the user chose it (Learning page). Off: no gazetteer names, no
+        # backstop NAME findings, no name residue check; tokens still serve greetings and sign-offs.
+        self.redact_names = getattr(matcher, "redact_names", True)
+        self._names = self._name_patterns(gazetteer) if self.redact_names else []
         if pii is None:  # the process's backstop (vanimo.backstops): never skipped by omission
             from vanimo.backstops import current
 
@@ -304,7 +307,8 @@ class Redactor:
         overlapping each other (the longest finding at a position wins)."""
         marks = [(m.start(), m.end()) for m in L1_MARKS.finditer(body)]
         pieces: list[tuple[int, int, str, str]] = []  # (start, end, replacement, count kind)
-        for f in sorted((f for f in findings if wanted(f)), key=lambda f: (f.start, f.start - f.end)):
+        keep = [f for f in findings if wanted(f) and (self.redact_names or f.type != "NAME")]
+        for f in sorted(keep, key=lambda f: (f.start, f.start - f.end)):
             if not 0 <= f.start < f.end <= len(body):
                 continue
             what, label = ACTIONS[f.type]

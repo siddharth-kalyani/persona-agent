@@ -275,7 +275,7 @@ async def test_guardrail_outage_fails_closed_and_clean_text_passes() -> None:
     # Other policies count by name; metrics riding along in an assessment don't.
     other = {"assessments": [{"topicPolicy": {"topics": [{"name": "x"}]}, "invocationMetrics": {"latency": 1}}]}
     assert kinds_of(other) == {"policy:topicPolicy": 1}
-    assert kinds_of({"assessments": [{"invocationMetrics": {"latency": 1}}]}) == {"unspecified": 1}
+    assert kinds_of({"assessments": [{"invocationMetrics": {"latency": 1}}]}) == {}
 
 
 async def test_offline_guardrail_blocks_raw_identifiers_not_marks() -> None:
@@ -527,9 +527,9 @@ async def test_aws_snapshot_holds_l1_only_and_purges_delete_it(
         lines = [json.loads(x) for x in body.splitlines()]
         assert done.stored and done.items == len(lines) > 0
         assert {x["t"] for x in lines} >= {"l1_items", "style_cards"}
-        assert all(set(x) == {"t", "f", "id", "text"} for x in lines)
-        # Row IDs as 32 hex digits: a dashed UUID's 4-4-4 digit groups would look like an Aadhaar number.
-        assert all(len(x["id"]) == 32 and "-" not in x["id"] for x in lines)
+        # No row ID or other number of ours in the object: nothing Vanimo writes can look like an Aadhaar
+        # number. The manifest (in the database) names each line's row.
+        assert all(set(x) == {"t", "f", "text"} for x in lines)
         names = [v for v in token_values if v and len(v) > 3 and "@" not in v]
         assert names and not any(n in body for n in names)  # token values never leave the vault
         # Unchanged: not uploaded again (Macie re-reads only new or changed objects).
@@ -695,3 +695,68 @@ def test_macie_job_is_daily_scoped_and_uses_our_identifiers() -> None:
     assert macie_job.test_identifiers(FakeMacie(matches=False), ids) == sorted(macie_job.SAMPLES, key=list(ids).index)
     assert macie_job.existing_job(FakeMacie(existing=True), "n") == {"jobId": "job-1", "jobStatus": "RUNNING"}
     assert "pan(false positive)" in macie_job.test_identifiers(FakeMacie(false_positive=True), ids)
+
+
+# --- F12: replacing names is each user's choice -------------------------------------------------------
+async def test_names_stay_unless_the_user_chose_to_replace_them() -> None:
+    def find(t: str) -> list[Finding]:
+        return [at(t, "Arjun Mehta", "NAME")] if "Arjun Mehta" in t else []
+
+    text = "Meera, ask Arjun Mehta for the PAN ABCPE1234F, thanks Siddharth"
+    g = Gazetteer(me=Person("Siddharth Kalyani", "siddharth.kalyani@intuitive.ai"))
+    g.add("Meera Iyer", "meera.iyer@kestrel.example")
+    kept = await Redactor(Matcher([], redact_names=False), g, _hasher, pii=Fixed(find)).redact(text)
+    assert "Meera" in kept.text and "Arjun Mehta" in kept.text and "Siddharth" in kept.text
+    assert "[PAN]" in kept.text and "ABCPE1234F" not in kept.text  # identifiers are masked either way
+    replaced = await Redactor(Matcher([], redact_names=True), g, _hasher, pii=Fixed(find)).redact(text)
+    assert "Meera" not in replaced.text and "Arjun" not in replaced.text and "⟦ME⟧" in replaced.text
+
+
+async def test_guardrail_blocks_names_only_for_users_who_replace_them() -> None:
+    from vanimo.backstops.guardrail import BLOCK_NAMES
+
+    reported = {
+        "action": "NONE",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "NAME", "match": "Arjun", "action": "NONE", "detected": True}]
+                }
+            }
+        ],
+    }
+    fake = FakeBedrock(reported)
+    g = BedrockGuardrail("g", "1", "ap-south-1", client=fake)
+    token = BLOCK_NAMES.set(False)
+    try:
+        await g.check("INPUT", ["Hi Arjun"])  # names kept by choice: a name is no finding
+    finally:
+        BLOCK_NAMES.reset(token)
+    with pytest.raises(GuardrailBlocked) as caught:
+        await g.check("INPUT", ["Hi Arjun"])  # default (and users who replace names): blocked
+    assert caught.value.kinds == {"NAME": 1} and fake.calls[0]["outputScope"] == "FULL"
+
+
+async def test_name_choice_is_off_by_default_and_set_on_the_learning_page(
+    client: httpx.AsyncClient, database: dict[str, str], settings: Settings, app_state: AppState
+) -> None:
+    h = await _user(client, database, settings, redact_names=False)
+    assert (await client.get("/api/learning", headers=h)).json()["redactNames"] is False
+    assert (await client.post("/api/controls/scan", headers=h)).status_code == 202
+    assert (await client.post("/api/controls/review", json={"outcome": "finished"}, headers=h)).status_code == 200
+    run = await client.post("/api/learning/run", headers=h)
+    assert run.json()["run"]["counts"]["names_redacted"] == 0
+    with _owner(database) as conn:
+        rows = conn.execute(
+            "select i.tenant_id, i.owner_user_id, i.text_enc from vanimo.l1_items i where i.run_id = %s",
+            (run.json()["run"]["id"],),
+        ).fetchall()
+    texts = [app_state.vault.decrypt_user(t, u, x, "l1_text") or "" for t, u, x in rows]
+    assert texts and not any("⟦PERSON_" in x for x in texts)  # names left as written
+    assert not any("⟦ME" in x for x in texts)
+    # Turning it on: what's stored was learned the other way, so the page asks for a new run.
+    on = (await client.put("/api/learning/names", json={"redactNames": True}, headers=h)).json()
+    assert on["redactNames"] is True and on["namesOutOfDate"] is True
+    again = await client.post("/api/learning/run", headers=h)
+    assert again.json()["run"]["counts"]["names_redacted"] == 1
+    assert (await client.get("/api/learning", headers=h)).json()["namesOutOfDate"] is False

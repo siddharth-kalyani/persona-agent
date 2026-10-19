@@ -255,9 +255,12 @@ def test_guardrail_blocks_pii_and_indian_identifiers(backstops: Template, templa
     policy = g["SensitiveInformationPolicyConfig"]
     assert {e["Type"] for e in policy["PiiEntitiesConfig"]} == set(GUARDRAIL_PII_TYPES)
     assert {"NAME", "ADDRESS", "EMAIL", "PHONE"} <= set(GUARDRAIL_PII_TYPES)
-    assert all(e["Action"] == "BLOCK" for e in policy["PiiEntitiesConfig"] + policy["RegexesConfig"])
+    actions = {e["Type"]: e["Action"] for e in policy["PiiEntitiesConfig"]}
+    assert actions.pop("NAME") == "NONE"  # reported only: the app blocks per user's name choice (F12)
+    assert all(a == "BLOCK" for a in actions.values())
+    assert all(r["Action"] == "BLOCK" for r in policy["RegexesConfig"])
     assert {r["Name"] for r in policy["RegexesConfig"]} == set(GUARDRAIL_REGEXES)
-    assert "india_aadhaar" not in GUARDRAIL_REGEXES  # a bare 12-digit order number would block drafts
+    assert "india_aadhaar" in GUARDRAIL_REGEXES  # Aadhaar detected everywhere (founder, 2026-10-19)
     for r in policy["RegexesConfig"]:
         assert len(r["Pattern"]) <= 500 and "(?=" not in r["Pattern"] and "(?<" not in r["Pattern"]
         # Macie rejects capturing groups: every group must be (?:...).
@@ -317,7 +320,7 @@ def test_macie_session_and_custom_identifiers(backstops: Template) -> None:
         f"vanimo-in-dev-{n}" for n in ("aadhaar", "pan", "gstin", "ifsc", "upi", "voter-id")
     }
     aadhaar = next(i for i in idents if i["Name"].endswith("aadhaar"))
-    assert "aadhaar" in aadhaar["Keywords"]  # no checksum in a regex: next to a keyword only
+    assert "Keywords" not in aadhaar  # bare 12-digit Aadhaar numbers too, no keyword needed
     voter = next(i for i in idents if i["Name"].endswith("voter-id"))
     assert voter["Keywords"] == ["voter", "epic", "electoral"] and voter["MaximumMatchDistance"] == 50
 
@@ -350,4 +353,4 @@ def test_guardrail_policy_digest_follows_every_setting() -> None:
     block, detect = guardrail_policy("block"), guardrail_policy("detect")
     assert guardrail_config_digest(block) != guardrail_config_digest(detect)
     assert {e["type"] for e in detect["pii"] if e["action"] == "NONE"} >= {"NAME", "ADDRESS"}
-    assert all(e["action"] == "BLOCK" for e in block["pii"])
+    assert {e["type"] for e in block["pii"] if e["action"] != "BLOCK"} == {"NAME"}

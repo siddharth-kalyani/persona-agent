@@ -186,6 +186,10 @@ export interface LearningStatus {
   run: LearningRun | null;
   stored: { email: number; chat: number; total: number };
   styleCards: number;
+  /** F12: replace people's names with placeholders before learning and before the AI sees anything. */
+  redactNames?: boolean;
+  /** What's stored was learned with the other choice: learn again to apply it. */
+  namesOutOfDate?: boolean;
 }
 
 export interface StoredItem {
@@ -765,6 +769,8 @@ export class Api {
 
   learning = () => this.request<LearningStatus>("GET", "/api/learning");
   startLearning = () => this.request<LearningStatus>("POST", "/api/learning/run");
+  setNameRedaction = (redactNames: boolean) =>
+    this.request<LearningStatus>("PUT", "/api/learning/names", { redactNames });
   deleteLearning = () =>
     this.request<{ jobId: string; status: string; counts: Record<string, unknown> }>("DELETE", "/api/learning");
   storedItems = (params: { ids?: string[]; channel?: "email" | "chat"; limit?: number; offset?: number } = {}) => {

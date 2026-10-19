@@ -35,11 +35,11 @@ SAMPLES = {
 }
 
 
-# A clean L1 snapshot line as `vanimo.backstops.snapshots` writes it: tokens, slots, an invoice number,
-# and a row ID of 32 hex digits that happen to be all digits. No identifier may match it.
+# A clean L1 snapshot line as `vanimo.backstops.snapshots` writes it: tokens, slots, an invoice number.
+# No identifier may match it.
 CLEAN_LINE = (
-    '{"t": "l1_items", "f": "text", "id": "23412341234612349812345678901234", "text": "Hi ⟦PERSON_3fa2c1d0⟧, '
-    'the [PAN] and [Aadhaar number] are with ⟦EMAIL_9b1c2d3e⟧. Invoice INV-2026-0042, PO 4500012345, Q4."}'
+    '{"t": "l1_items", "f": "text", "text": "Hi ⟦PERSON_3fa2c1d0⟧, the [PAN] and [Aadhaar number] are with '
+    '⟦EMAIL_9b1c2d3e⟧. Invoice INV-2026-0042, PO 4500012345, Q4."}'
 )
 
 

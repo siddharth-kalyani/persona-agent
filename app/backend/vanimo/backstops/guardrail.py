@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from collections.abc import Sequence
+from contextvars import ContextVar
 from typing import Any, Literal, Protocol
 
 from vanimo.logs import get_logger
@@ -31,6 +32,10 @@ from vanimo.redaction.marks import L1_MARKS
 log = get_logger("vanimo.backstops")
 
 Source = Literal["INPUT", "OUTPUT"]
+# F12: does a name the guardrail finds block this call? Only for users who chose to replace names (set
+# where their choice is loaded, `vanimo.controls.store.load_redact_names`). Unset: block (fail-closed).
+# The guardrail reports NAME without acting on it (its policy), and the decision is made here.
+BLOCK_NAMES: ContextVar[bool] = ContextVar("vanimo_block_names", default=True)
 # One ApplyGuardrail request takes up to 1,000 text units of 1,000 characters; stay well under.
 MAX_REQUEST_CHARS = 400_000
 NEUTRAL = "someone"
@@ -84,13 +89,16 @@ def _batches(texts: Sequence[str]) -> list[list[str]]:
     return [b for b in out if b]
 
 
-def kinds_of(response: dict[str, Any]) -> dict[str, int]:
-    """Entity types and regex names the guardrail acted on. Never reads `match`."""
+def kinds_of(response: dict[str, Any], *, names: bool = False) -> dict[str, int]:
+    """Entity types and regex names the guardrail acted on, plus names it only reported when `names`.
+    Never reads `match`."""
     found: Counter[str] = Counter()
     for a in response.get("assessments") or []:
         policy = a.get("sensitiveInformationPolicy") or {}
         for e in policy.get("piiEntities") or []:
-            if e.get("action") in ("BLOCKED", "ANONYMIZED"):
+            acted = e.get("action") in ("BLOCKED", "ANONYMIZED")
+            reported_name = names and e.get("type") == "NAME" and e.get("detected", True)
+            if acted or reported_name:
                 found[str(e.get("type", "UNKNOWN"))[:60]] += 1
         for r in policy.get("regexes") or []:
             if r.get("action") in ("BLOCKED", "ANONYMIZED"):
@@ -100,7 +108,7 @@ def kinds_of(response: dict[str, Any]) -> dict[str, int]:
         for other in OTHER_POLICIES:
             if a.get(other):
                 found[f"policy:{other}"] += 1
-    return dict(found) or {"unspecified": 1}
+    return dict(found)
 
 
 class BedrockGuardrail:
@@ -131,16 +139,19 @@ class BedrockGuardrail:
                     guardrailVersion=self._version,
                     source=source,
                     content=[{"text": {"text": t}} for t in batch],
-                    outputScope="INTERVENTIONS",
+                    # FULL: names the policy only reports come back too (F12 decides on them below).
+                    outputScope="FULL",
                 )
                 action = resp["action"]
             except Exception as exc:
                 log.warning("backstops.guardrail_failed", error_type=type(exc).__name__)
                 raise GuardrailUnavailable("guardrail_unavailable") from None
             if action == "GUARDRAIL_INTERVENED":
-                raise GuardrailBlocked(source, kinds_of(resp))
+                raise GuardrailBlocked(source, kinds_of(resp, names=BLOCK_NAMES.get()) or {"unspecified": 1})
             if action != "NONE":
                 raise GuardrailUnavailable("guardrail_unexpected_action")
+            if BLOCK_NAMES.get() and (names := kinds_of(resp, names=True).get("NAME")):
+                raise GuardrailBlocked(source, {"NAME": names})
 
 
 class OfflineGuardrail:

@@ -8,8 +8,8 @@ snapshot of each user's L1 text is written to a dedicated bucket for the schedul
   rewrites it). A purge job deletes it at once. An unchanged snapshot isn't uploaded again, so Macie
   (which re-reads only new or changed objects) doesn't report the same thing every day. The bucket's
   lifecycle rule removes any object not refreshed within 3 days;
-* each line is `{"t": table, "f": field, "id": row id as 32 hex digits, "text": L1}` — the row ID
-  without dashes, because a dashed UUID has 4-4-4 digit groups that look like an Aadhaar number. Only
+* each line is `{"t": table, "f": field, "text": L1}`: no row ID or any other number of ours, so
+  nothing Vanimo writes can look like an Aadhaar number (the manifest below names each line's row). Only
   L1 text: never the token → value map (`l1_tokens`), names from the Sources index, or never-send terms;
 * the export keeps a manifest (table + row ID per line) and the object's ETag, so a finding's line
   numbers name the exact rows (an admin can remove them without seeing them);
@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import uuid
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
@@ -104,9 +103,11 @@ class Exported:
     uploaded: bool = False
 
 
-async def build(conn: AsyncConnection, vault: Vault, ref: UserRef) -> list[dict[str, str]]:
+async def build(conn: AsyncConnection, vault: Vault, ref: UserRef) -> tuple[list[dict[str, str]], list[str]]:
+    """(snapshot lines, the row ID of each line)."""
     t, u = ref.tenant_id, ref.user_id
     lines: list[dict[str, str]] = []
+    ids: list[str] = []
     size = 0
     for table, fields in SNAPSHOT_FIELDS.items():
         cols = ", ".join(c for c, _ in fields)
@@ -115,14 +116,15 @@ async def build(conn: AsyncConnection, vault: Vault, ref: UserRef) -> list[dict[
             for col, purpose in fields:
                 value = vault.decrypt_user(t, u, getattr(row, col), purpose)
                 if value:
-                    # 32 hex digits: a dashed UUID's digit groups would look like an Aadhaar number to Macie.
-                    rid = uuid.UUID(str(row.id)).hex
-                    lines.append({"t": table, "f": col.removesuffix("_enc"), "id": rid, "text": value})
+                    # The row ID goes to the manifest, never into the object: our own numbers (a UUID's digit
+                    # groups) must not look like an Aadhaar number to Macie.
+                    lines.append({"t": table, "f": col.removesuffix("_enc"), "text": value})
+                    ids.append(str(row.id))
                     size += len(value) * 4 + 100  # worst case UTF-8 plus the line's own fields
                     if size > MAX_SNAPSHOT_BYTES:
                         # Refuse rather than write part of it: Macie would never see the rest.
                         raise ValueError("snapshot too large")
-    return lines
+    return lines, ids
 
 
 def offline_scan(lines: list[dict[str, str]]) -> tuple[dict[str, int], list[int]]:
@@ -190,7 +192,7 @@ async def export_user(engine: AsyncEngine, vault: Vault, backstops: Backstops, r
     async with user_tx(engine, ref) as conn:
         await lock_user_controls(conn, ref)
         prev = (await conn.execute(text("select changes, content_hash, stored, etag from vanimo.l1_snapshots"))).one()
-        lines = await build(conn, vault, ref)
+        lines, ids = await build(conn, vault, ref)
         body = "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines).encode()
         digest = hashlib.sha256(body).hexdigest()
         stored, uploaded, etag = False, False, None
@@ -220,7 +222,7 @@ async def export_user(engine: AsyncEngine, vault: Vault, backstops: Backstops, r
                 "s": stored,
                 "h": digest if lines else None,
                 "e": etag,
-                "m": json.dumps([[x["t"], str(uuid.UUID(x["id"]))] for x in lines]),
+                "m": json.dumps([[x["t"], rid] for x, rid in zip(lines, ids, strict=True)]),
                 "f": findings,
             },
         )

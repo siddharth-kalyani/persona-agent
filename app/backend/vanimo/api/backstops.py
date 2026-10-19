@@ -33,9 +33,9 @@ PROBE_TEXT = (
     "SSN 123-45-6789."
 )
 # One made-up Indian identifier per guardrail regex, each checked alone: the built-in PII types would
-# block the combined text anyway and hide a regex that doesn't work. (No Aadhaar: the guardrail leaves
-# bare 12-digit numbers to the checksum detector and Comprehend at S5.)
+# block the combined text anyway and hide a regex that doesn't work.
 INDIA_PROBES = {
+    "aadhaar": "Reference 2341 2341 2346 noted.",
     "pan": "Reference ABCPE1234F noted.",
     "gstin": "Reference 27AAPFU0939F1ZV noted.",
     "ifsc": "Reference HDFC0001234 noted.",

@@ -2,7 +2,8 @@
 
 * Bedrock Guardrail: sensitive-information filter on every model input and output. Built-in PII types
   for names, addresses, contact details and US/UK/CA identifiers; regexes for the Indian identifiers
-  Guardrails has no types for. Every finding BLOCKs (the app records it); `-c guardrail_noisy=detect`
+  Guardrails has no types for. Every finding BLOCKs (the app records it), except names, which it only
+  reports: names are each user's choice (F12) and the app decides; `-c guardrail_noisy=detect`
   switches the context-dependent types to detect-only while false positives are measured. The
   published version lives in the app stack (`guardrail_version`), so a policy change never has to
   replace a value another stack imports.
@@ -48,7 +49,10 @@ GUARDRAIL_PII_TYPES = (
     "VEHICLE_IDENTIFICATION_NUMBER",
 )  # fmt: skip
 # Types judged from context by a model (most prone to false positives in ordinary business text).
-NOISY_TYPES = ("NAME", "ADDRESS", "PASSWORD", "DRIVER_ID", "LICENSE_PLATE", "US_PASSPORT_NUMBER")
+NOISY_TYPES = ("ADDRESS", "PASSWORD", "DRIVER_ID", "LICENSE_PLATE", "US_PASSPORT_NUMBER")
+# Names are each user's choice (F12): the guardrail only reports them, and the app blocks on a reported
+# name for users who chose to replace names (`vanimo.backstops.guardrail.BLOCK_NAMES`).
+APP_DECIDES = ("NAME",)
 
 # Indian identifiers. No lookaround (Guardrails doesn't support it), no capturing groups (Macie doesn't),
 # ≤ 500 characters each.
@@ -60,11 +64,11 @@ INDIA_PATTERNS = {
     "india_ifsc": (r"\b[A-Za-z]{4}0[A-Za-z0-9]{6}\b", "IFSC bank branch code"),
     "india_upi": (rf"\b[A-Za-z0-9._-]{{2,64}}@(?:{UPI_HANDLES})\b", "UPI payment address"),
 }
-# A bare 12-digit number (an order or tracking number) looks like an Aadhaar number, and a regex can't
-# check the Verhoeff checksum: the guardrail leaves Aadhaar to S5 (our checksum detector + Comprehend's
-# IN_AADHAAR), and Macie looks for it next to a keyword only. Format-specific patterns block everywhere.
-GUARDRAIL_REGEXES = tuple(n for n in INDIA_PATTERNS if n != "india_aadhaar")
-MACIE_KEYWORDS = {"india_aadhaar": ["aadhaar", "aadhar", "uidai", "uid"]}
+# Aadhaar is detected everywhere, bare 12-digit numbers included (founder, 2026-10-19). A regex can't
+# check the Verhoeff checksum, so an order number that looks like one is blocked too; Vanimo writes no
+# numbers of its own into what is checked (snapshot lines carry no row IDs; tokens are 8 hex characters).
+GUARDRAIL_REGEXES = tuple(INDIA_PATTERNS)
+MACIE_KEYWORDS: dict[str, list[str]] = {}
 # Voter IDs (3 letters + 7 digits) look like invoice numbers: Macie checks them next to a keyword only,
 # and the guardrail leaves them to Comprehend's IN_VOTER_NUMBER at S5.
 VOTER_ID = (r"\b[A-Za-z]{3}[0-9]{7}\b", ["voter", "epic", "electoral"])
@@ -77,7 +81,7 @@ def guardrail_policy(noisy: str = "block") -> dict:
     published version, so any change to it (types, actions, regexes, messages) publishes a new one."""
 
     def action(t: str) -> str:
-        return "NONE" if noisy == "detect" and t in NOISY_TYPES else "BLOCK"
+        return "NONE" if t in APP_DECIDES or (noisy == "detect" and t in NOISY_TYPES) else "BLOCK"
 
     return {
         "pii": [{"type": t, "action": action(t)} for t in GUARDRAIL_PII_TYPES],

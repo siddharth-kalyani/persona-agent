@@ -72,9 +72,25 @@ describe("Learning", () => {
     expect(start).toHaveBeenCalled();
     expect(await screen.findByText(/Our GSTIN is \[GSTIN\]/)).toBeInTheDocument();
     expect(screen.getByText(/⟦ME.full⟧/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("switch"));
+    await userEvent.click(screen.getByRole("switch", { name: "Exactly as stored" }));
     expect(screen.getByText(/Siddharth Kalyani/)).toBeInTheDocument();
     expect(learning).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets you choose to replace names (off by default) and asks to learn again", async () => {
+    const api = new Api("", async () => "t");
+    vi.spyOn(api, "learning").mockResolvedValue({ ...STATUS, redactNames: false });
+    const set = vi
+      .spyOn(api, "setNameRedaction")
+      .mockResolvedValue({ ...STATUS, redactNames: true, namesOutOfDate: true, stored: { email: 3, chat: 0, total: 3 } });
+    wrap(api, <Learning />);
+    const toggle = await screen.findByRole("switch", { name: "Replace people's names with placeholders" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/Names are kept as written/)).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(set).toHaveBeenCalledWith(true);
+    expect(await screen.findByText(/Learn again so it follows your choice/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Replace people's names with placeholders" })).toBeChecked();
   });
 
   it("deletes what was learned after confirming and shows the receipt", async () => {

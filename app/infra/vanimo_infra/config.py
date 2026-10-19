@@ -24,6 +24,12 @@ class DeployConfig:
     # Teams (M5): the Teams app's manifest ID and its bot's ID (Developer Portal bot registration).
     teams_app_id: str = ""
     teams_bot_id: str = ""
+    # F11: "create" enables Macie in the account with this stack; "existing" if it is already on (an
+    # organisation-managed Macie, for example). Custom identifiers are created either way.
+    macie_session: str = "create"
+    # "block" (default): every guardrail PII type blocks. "detect": the context-judged types (names,
+    # addresses...) only report, while their false-positive rate is measured on the synthetic corpus.
+    guardrail_noisy: str = "block"
 
     @property
     def prefix(self) -> str:
@@ -54,4 +60,6 @@ def from_context(node, root: str) -> DeployConfig:  # node: constructs.Node
         cloudfront_prefix_list_id=get("cloudfront_prefix_list_id"),
         teams_app_id=get("teams_app_id", "") or "",
         teams_bot_id=get("teams_bot_id", "") or "",
+        macie_session=get("macie_session", "create") or "create",
+        guardrail_noisy=get("guardrail_noisy", "block") or "block",
     )

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Me } from "./api/client";
 import { useApi } from "./api/context";
 import { useAuth } from "./auth/session";
+import { Backstops } from "./pages/admin/Backstops";
 import { ClientScoping } from "./pages/admin/ClientScoping";
 import { Commitments } from "./pages/commitments/Commitments";
 import { ChangePassword } from "./pages/ChangePassword";
@@ -61,7 +62,7 @@ export function App() {
   const location = useLocation();
   const ready = auth.signedIn && !auth.mustChangePassword;
   const dataSource = useDataSource(ready);
-  const TAB_PATHS = ["/admin/scoping", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft", "/queue", "/commitments", "/meetings"];
+  const TAB_PATHS = ["/admin/scoping", "/admin/backstops", "/admin/diagnostics", "/spikes/teams", "/controls", "/setup", "/sample", "/learning", "/persona", "/draft", "/queue", "/commitments", "/meetings"];
   const tab = TAB_PATHS.find((p) => location.pathname.startsWith(p)) ?? "/";
 
   return (
@@ -80,6 +81,7 @@ export function App() {
             <Tab value="/meetings">Meetings</Tab>
             <Tab value="/controls">My data</Tab>
             {auth.isAdmin && <Tab value="/admin/scoping">Client scoping</Tab>}
+            {auth.isAdmin && <Tab value="/admin/backstops">Redaction checks</Tab>}
             {auth.isAdmin && <Tab value="/admin/diagnostics">Diagnostics</Tab>}
             {auth.isAdmin && <Tab value="/spikes/teams">Teams prefill test</Tab>}
           </TabList>
@@ -114,6 +116,7 @@ export function App() {
             <Route path="/commitments" element={<CommitmentsPage />} />
             <Route path="/meetings" element={<Meetings />} />
             <Route path="/admin/scoping" element={auth.isAdmin ? <ClientScoping /> : <Navigate to="/" />} />
+            <Route path="/admin/backstops" element={auth.isAdmin ? <Backstops /> : <Navigate to="/" />} />
             <Route path="/admin/diagnostics" element={auth.isAdmin ? <Diagnostics /> : <Navigate to="/" />} />
             <Route path="/spikes/teams" element={auth.isAdmin ? <TeamsPrefill /> : <Navigate to="/" />} />
             <Route path="*" element={<Navigate to="/" />} />

@@ -444,4 +444,19 @@ async def run_job(engine: AsyncEngine, vault: Vault, ref: UserRef, job_id: str, 
             ),
             {"s": status, "c": json.dumps(counts), "id": job_id},
         )
+    if status == "done":
+        await forget_snapshot(engine, ref)
     log.info("jobs.done", outcome=status)
+
+
+async def forget_snapshot(engine: AsyncEngine, ref: UserRef) -> None:
+    """The user's L1 snapshot for Macie (F11) is deleted with what the job removed; the next export
+    rewrites it from what is left. If S3 can't be reached, the snapshot stays marked as stored and the
+    next sweep (or the bucket's few-day expiry) replaces it."""
+    from vanimo.backstops import current
+    from vanimo.backstops.snapshots import forget
+
+    try:
+        await forget(engine, current(), ref)
+    except Exception as exc:
+        log.warning("jobs.snapshot_forget_failed", error_type=type(exc).__name__)

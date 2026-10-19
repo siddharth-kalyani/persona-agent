@@ -31,7 +31,7 @@ def _hasher(kind: str, value: str) -> str:
     return hashlib.sha256(f"{kind}:{value}".encode()).hexdigest()
 
 
-def test_unknown_speakers_are_left_out_but_their_names_are_redacted() -> None:
+async def test_unknown_speakers_are_left_out_but_their_names_are_redacted() -> None:
     me = Address("me@kestrel.example", "Sid K")
     lisa = Address("lisa.chen@acme.example", "Lisa Chen")
     start = datetime(2026, 10, 13, 4, 30, tzinfo=UTC)
@@ -46,7 +46,7 @@ def test_unknown_speakers_are_left_out_but_their_names_are_redacted() -> None:
     roster.add(me)
     roster.add(lisa)
     result = ingest.IngestResult()
-    built = ingest.build(
+    built = await ingest.build(
         event, [Transcript(ref, True, cues)], roster=roster, known={}, directory=directory,
         redactor_for=lambda people: build_redactor(Matcher([]), _hasher, directory, [lisa, *people]),
         ex_engine=ExclusionEngine(_hasher), org_domains=frozenset({"kestrel.example"}), result=result,

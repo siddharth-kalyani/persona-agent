@@ -26,7 +26,15 @@ from vanimo.controls.engine import Decision, ExclusionEngine
 from vanimo.controls.neversend import Matcher
 from vanimo.learning import labels
 from vanimo.redaction.parse import strip_quotes, strip_signature_noise
-from vanimo.redaction.pipeline import Gazetteer, Hasher, Person, Redacted, RedactionBlocked, Redactor
+from vanimo.redaction.pipeline import (
+    BackstopUnavailable,
+    Gazetteer,
+    Hasher,
+    Person,
+    Redacted,
+    RedactionBlocked,
+    Redactor,
+)
 from vanimo.sources.base import Address, MessageHeader, WorkspaceSource
 
 MAX_THREAD_MESSAGES = 4  # the most recent messages of the thread given to the drafter
@@ -322,12 +330,14 @@ async def gather(
     counts: dict[str, int] = {}
     suspicious = False
 
-    def red(text: str | None, what: str, *, hidden: bool = False) -> Redacted | None:
+    async def red(text: str | None, what: str, *, hidden: bool = False) -> Redacted | None:
         nonlocal suspicious
         if not text or not text.strip():
             return None
         try:
-            r = redactor.redact(text[:MAX_MESSAGE_CHARS], hidden_seen=hidden)
+            r = await redactor.redact(text[:MAX_MESSAGE_CHARS], hidden_seen=hidden)
+        except BackstopUnavailable:
+            raise DraftError("redaction_unavailable", 503) from None
         except RedactionBlocked as e:
             raise DraftError(f"{what}_blocked", 422, reason=e.reason) from None
         tokens.update({t: v for t, (_, v) in r.tokens.items()})
@@ -370,7 +380,7 @@ async def gather(
         if m is None:
             continue
         own, _quoted = strip_quotes(m.body) if not m.quoted else (m.body, m.quoted)
-        r = red(strip_signature_noise(own), "thread", hidden=m.hidden)
+        r = await red(strip_signature_noise(own), "thread", hidden=m.hidden)
         thread_subject = m.subject or thread_subject
         if r is None:
             continue
@@ -378,8 +388,8 @@ async def gather(
     if mode == "reply" and not thread:
         raise DraftError("thread_empty", 404)
 
-    subj = red(subject or thread_subject, "subject")
-    instr = red(instruction, "instruction")
+    subj = await red(subject or thread_subject, "subject")
+    instr = await red(instruction, "instruction")
     audience_people = [*to_list, *cc_list]
     audience = Audience(
         relationship=labels.relationship(
@@ -464,12 +474,14 @@ async def gather_chat(
     counts: dict[str, int] = {}
     suspicious = False
 
-    def red(text: str | None, what: str) -> Redacted | None:
+    async def red(text: str | None, what: str) -> Redacted | None:
         nonlocal suspicious
         if not text or not text.strip():
             return None
         try:
-            r = redactor.redact(text[:MAX_MESSAGE_CHARS])
+            r = await redactor.redact(text[:MAX_MESSAGE_CHARS])
+        except BackstopUnavailable:
+            raise DraftError("redaction_unavailable", 503) from None
         except RedactionBlocked as e:
             raise DraftError(f"{what}_blocked", 422, reason=e.reason) from None
         tokens.update({t: v for t, (_, v) in r.tokens.items()})
@@ -504,7 +516,7 @@ async def gather_chat(
         if not m.from_me and ex_engine.people_reasons([m.sender], chat_hash=chat_hash):
             dropped += 1  # someone not on the roster (left the chat): can't be checked, left out
             continue
-        r = red(strip_signature_noise(m.text), "thread")
+        r = await red(strip_signature_noise(m.text), "thread")
         if r is None:
             continue
         sender = "⟦ME.full⟧" if m.from_me else recipient(m.sender).token if m.sender.email else "someone"
@@ -514,8 +526,8 @@ async def gather_chat(
     if mode == "reply" and not any(not m.from_me for m in thread):
         raise DraftError("thread_empty", 404)
 
-    instr = red(instruction, "instruction")
-    topic = red(chat.topic, "subject") if chat.topic else None
+    instr = await red(instruction, "instruction")
+    topic = await red(chat.topic, "subject") if chat.topic else None
     audience = Audience(
         relationship=labels.relationship(
             others, manager=directory.manager, reports=directory.reports, org_domains=directory.org_domains

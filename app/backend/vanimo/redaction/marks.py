@@ -14,6 +14,9 @@ NEVER_SEND = re.compile(r"⟦NS_[0-9a-f]{8}⟧")
 SLOT_KINDS = (
     "secret", "password", "GSTIN", "PAN", "IFSC", "Aadhaar number", "Aadhaar VID", "UPI ID", "voter ID",
     "passport number", "card number", "SSN", "EIN", "routing number", "bank account",
+    # Found only by the S5 backstop (Amazon Comprehend, F11): our own detectors don't produce these.
+    "address", "card details", "PIN", "SWIFT code", "driver ID", "username", "NREGA job card",
+    "national ID", "vehicle ID", "network address",
 )  # fmt: skip
 SLOT = re.compile(r"\[(?:" + "|".join(re.escape(k) for k in SLOT_KINDS) + r")\]")
 # Everything in L1 that later passes must leave alone (never-send rescrub, name matching).

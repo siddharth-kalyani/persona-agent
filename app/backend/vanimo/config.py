@@ -112,6 +112,24 @@ class Settings(BaseSettings):
     drafts_per_minute: int = 10
     drafts_per_day: int = 300
 
+    # Redaction backstops (F11, architecture §7.2 S5/S13 and §7.4). Each one is "aws" (the real service)
+    # or "offline" (a clearly labelled local stand-in until the AWS account exists, founder 2026-10-13);
+    # a dev or prod deployment must use the real services. All three fail closed.
+    # S5: Amazon Comprehend DetectPiiEntities on every item after our own detectors ("all"), or only on
+    # items they flagged as carrying regulated identifiers or hidden content ("flagged", production rule).
+    pii_detector: Literal["offline", "comprehend"] = "offline"
+    comprehend_scope: Literal["all", "flagged"] = "all"
+    # Bedrock Guardrails ApplyGuardrail on every model input and output (blocks on a finding).
+    guardrail: Literal["offline", "bedrock"] = "offline"
+    guardrail_id: str = ""
+    guardrail_version: str = ""
+    # S13: L1 snapshots for Amazon Macie. "aws": one object per user in the bucket, scanned by a daily
+    # Macie job; findings are read back and pause the tenant. "offline": the same snapshot, scanned in
+    # process by our own detectors (nothing leaves the database).
+    macie: Literal["offline", "aws"] = "offline"
+    l1_snapshot_bucket: str = ""
+    snapshot_every_hours: int = Field(24, ge=1, le=168)
+
     # Key for opaque references to identifiers (audit targets, later exclusion rules) so
     # raw IDs and addresses are never stored. Per-tenant KMS-derived keys replace this in M1.
     ref_hmac_key: SecretStr = SecretStr("local-dev-only-ref-key-change-me")
@@ -166,11 +184,16 @@ class Settings(BaseSettings):
         for model in (self.model_default, self.model_premium):
             if model not in allowed:
                 raise ValueError(f"model {model!r} is not on the {self.cell} cell allow-list")
+        if self.guardrail == "bedrock" and not (self.guardrail_id and self.guardrail_version):
+            raise ValueError("VANIMO_GUARDRAIL=bedrock needs VANIMO_GUARDRAIL_ID and VANIMO_GUARDRAIL_VERSION")
+        if self.macie == "aws" and not self.l1_snapshot_bucket:
+            raise ValueError("VANIMO_MACIE=aws needs VANIMO_L1_SNAPSHOT_BUCKET")
         if self.enable_password_auth and self.env == "prod":
             raise ValueError("password sign-in is for local/dev only; disable VANIMO_ENABLE_PASSWORD_AUTH in prod")
         if self.env in ("dev", "prod"):
             missing: list[str] = []
-            # A dev cell may run on password sign-in alone until the Entra app exists; prod never.
+            # A dev cell may run on password sign-in alone until the Entra app exists; prod never. Either
+            # way it needs the backstops stack (F11): the redaction checks below are never optional.
             if self.env == "prod" or not self.enable_password_auth:
                 missing += [
                     name
@@ -188,6 +211,16 @@ class Settings(BaseSettings):
                 missing.append("VANIMO_VAULT_MASTER_KEY")
             if self.env == "prod" and self.drafter != "bedrock":
                 missing.append("VANIMO_DRAFTER=bedrock (the offline drafter is a local/dev stand-in)")
+            # Redaction backstops: a deployed cell uses the real AWS services, never the stand-ins (F11).
+            if self.pii_detector != "comprehend":
+                missing.append("VANIMO_PII_DETECTOR=comprehend")
+            if self.guardrail != "bedrock" or not (self.guardrail_id and self.guardrail_version.isdigit()):
+                # A numbered version: DRAFT can be edited in the console without anyone noticing.
+                missing.append(
+                    "VANIMO_GUARDRAIL=bedrock with VANIMO_GUARDRAIL_ID and a numbered VANIMO_GUARDRAIL_VERSION"
+                )
+            if self.macie != "aws" or not self.l1_snapshot_bucket:
+                missing.append("VANIMO_MACIE=aws with VANIMO_L1_SNAPSHOT_BUCKET")
             if missing:
                 raise ValueError(f"missing required settings: {', '.join(missing)}")
         return self

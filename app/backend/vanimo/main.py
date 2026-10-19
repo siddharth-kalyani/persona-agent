@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from vanimo.api import (
     admin_scoping,
     auth,
+    backstops,
     commitments,
     controls,
     diagnostics,
@@ -32,12 +33,15 @@ from vanimo.api import (
     teams,
 )
 from vanimo.auth.entra import AuthError
+from vanimo.backstops import install as install_backstops
+from vanimo.backstops.guardrail import GuardrailBlocked, GuardrailUnavailable
 from vanimo.config import Settings, get_settings
-from vanimo.controls.sweeper import sweep_forever
+from vanimo.controls.sweeper import backstops_once, sweep_forever
 from vanimo.drafting.context import DraftError
 from vanimo.graph.client import GraphError
 from vanimo.logs import configure_logging, get_logger
 from vanimo.notify import notify_round
+from vanimo.redaction.pipeline import BackstopUnavailable
 from vanimo.state import AppState, build_state
 
 log = get_logger("vanimo.http")
@@ -57,13 +61,23 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.vanimo = state or build_state(settings)
+        st = app.state.vanimo
+        # Every redactor and model call in this process uses these (F11): Comprehend, Guardrails, Macie.
+        previous = install_backstops(st.backstops)
         if settings.background_sweeper:
-            st = app.state.vanimo
-            app.state.vanimo.spawn(sweep_forever(st.engine, st.vault, notifications=lambda: notify_round(st)))
+            app.state.vanimo.spawn(
+                sweep_forever(
+                    st.engine,
+                    st.vault,
+                    notifications=lambda: notify_round(st),
+                    backstops=lambda: backstops_once(st.engine, st.vault, st.backstops),
+                )
+            )
         log.info("app.start", env=settings.env, cell=settings.cell)
         try:
             yield
         finally:
+            install_backstops(previous)
             await app.state.vanimo.aclose()
 
     app = FastAPI(
@@ -124,6 +138,20 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     async def _draft_error(_: Request, exc: DraftError) -> JSONResponse:
         return JSONResponse({"error": exc.code, **exc.extra}, status_code=exc.status)
 
+    # Redaction backstops (F11): an outage or a finding stops the request; nothing goes on unchecked.
+    @app.exception_handler(BackstopUnavailable)
+    async def _backstop_unavailable(_: Request, exc: BackstopUnavailable) -> JSONResponse:
+        return JSONResponse({"error": "redaction_unavailable"}, status_code=503, headers={"Retry-After": "30"})
+
+    @app.exception_handler(GuardrailUnavailable)
+    async def _guardrail_unavailable(_: Request, exc: GuardrailUnavailable) -> JSONResponse:
+        return JSONResponse({"error": "model_check_unavailable"}, status_code=503, headers={"Retry-After": "30"})
+
+    @app.exception_handler(GuardrailBlocked)
+    async def _guardrail_blocked(_: Request, exc: GuardrailBlocked) -> JSONResponse:
+        stage = "input" if exc.source == "INPUT" else "output"
+        return JSONResponse({"error": "model_check_blocked", "stage": stage}, status_code=422)
+
     @app.exception_handler(GraphError)
     async def _graph_error(_: Request, exc: GraphError) -> JSONResponse:
         status = 403 if exc.status in (401, 403) else 502
@@ -170,6 +198,7 @@ def create_app(settings: Settings | None = None, state: AppState | None = None) 
     app.include_router(teams.router)
     app.include_router(meetings.router)
     app.include_router(meetings.admin_router)
+    app.include_router(backstops.router)
     return app
 
 

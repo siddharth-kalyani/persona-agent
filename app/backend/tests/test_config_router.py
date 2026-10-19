@@ -46,5 +46,12 @@ def test_deployed_envs_require_entra_and_keys() -> None:
         entra_client_secret_arn="arn:aws:secretsmanager:x",
         ref_hmac_key="k" * 32,
         vault_master_key="v" * 32,
+        # F11: the real redaction backstops, never their offline stand-ins.
+        pii_detector="comprehend",
+        guardrail="bedrock",
+        guardrail_id="gr-1",
+        guardrail_version="1",
+        macie="aws",
+        l1_snapshot_bucket="vanimo-in-prod-l1-snapshots",
     )
     assert ok.entra_issuer.endswith("/t/v2.0")

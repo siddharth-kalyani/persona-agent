@@ -34,6 +34,14 @@ export function errorText(err: unknown): string {
     if (err.code === "db_unavailable") return "Vanimo is waking up. Try again in a few seconds.";
     if (err.code === "unauthorized_client") return "This app isn't allowed to call Vanimo.";
     if (err.code === "graph_error") return `Microsoft 365 returned an error (${String(err.body.graphCode ?? err.status)}).`;
+    if (err.code === "pipeline_paused")
+      return "Vanimo is paused for your organisation while an admin checks a sensitive-data finding. Nothing new is read or drafted until then.";
+    if (err.code === "redaction_unavailable")
+      return "Vanimo's sensitive-data check is unreachable right now, so nothing was read. Try again in a minute.";
+    if (err.code === "model_check_unavailable")
+      return "Vanimo's AI safety check is unreachable right now, so no AI was used. Try again in a minute.";
+    if (err.code === "model_check_blocked")
+      return "Vanimo's safety check found personal details that should have been hidden, so it stopped. Your admin has been told.";
     return `Something went wrong (${err.code}).`;
   }
   return "Something went wrong. Try again.";
@@ -73,6 +81,14 @@ export function Home() {
           <MessageBarBody>
             You're seeing the sample workspace — a fictional company, Kestrel Analytics. Your own Microsoft 365 data
             appears when you sign in with Microsoft.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {me.pipelinePaused && (
+        <MessageBar intent="warning" className={styles.wide}>
+          <MessageBarBody>
+            Vanimo is paused for your organisation: a sensitive-data check found something to review. Nothing new is
+            read, learned or drafted until an admin resumes it. Your settings and data controls still work.
           </MessageBarBody>
         </MessageBar>
       )}

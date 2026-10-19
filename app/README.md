@@ -505,6 +505,78 @@ Microsoft Learn on 2026-10-16:
    say about the rollback?", "What did Meera decide?", or a meeting by its day and time ("…in the 4 pm meeting on
    Thursday?").
 
+## F11: Redaction backstops (Comprehend, Guardrails, Macie)
+
+Founder decision F11 (2026-10-19, `docs/05`; amended the same day to add Macie): three AWS services check what
+Vanimo's own redaction produced, as if the synthetic data were real client data. Each one **fails closed**, and each
+has a clearly labelled **offline stand-in** for local work until the AWS account exists. A `dev` or `prod`
+deployment refuses the stand-ins (settings validation).
+
+| Check | Where | Real service | Offline stand-in |
+|---|---|---|---|
+| **S5 PII backstop** | Inside redaction, after our own detectors and before the verify pass (`vanimo/redaction/pipeline.py`, `vanimo/backstops/pii.py`) | Amazon Comprehend `DetectPiiEntities` (English; includes Aadhaar, PAN, voter ID, NREGA) | Local rules: names after a title or "my name is", street addresses, flat/plot numbers |
+| **Model backstop** | Every model call, on the whole input before it and the whole output after it (`vanimo/llm/router.py`, `vanimo/backstops/guardrail.py`) | Bedrock Guardrails `ApplyGuardrail`: built-in PII types + regexes for PAN, GSTIN, IFSC and UPI, all BLOCK (`-c guardrail_noisy=detect` makes names, addresses and other context-judged types report only, while false positives are measured) | Vanimo's own Tier R / Tier P detectors |
+| **At-rest backstop (S13)** | Daily L1 snapshot per user (`vanimo/backstops/snapshots.py`, `macie.py`) | S3 bucket + scheduled Macie job; findings polled every 15 minutes | The same snapshot scanned in process; nothing leaves the database |
+
+**What each one sees and does:**
+- **Comprehend** gets only text our own stages already masked (never-send words, regulated identifiers, emails,
+  phone numbers and known names are gone). Names it finds become person tokens (the same name, the same token),
+  addresses and identifiers become typed slots (`[address]`, `[Aadhaar number]`, ...), dates, ages and links stay.
+  Thresholds: 0.7 for names and addresses, 0.8 for usernames, passwords and PINs, 0.5 otherwise (to re-tune once
+  AWS is connected). Results are cached for 15 minutes by a keyed hash (offsets and types only).
+  `VANIMO_COMPREHEND_SCOPE=flagged` switches to the production rule (only items with identifiers or hidden content).
+  **Unreachable:** the item is blocked; a learning run fails with `pii_backstop_unavailable`, a promise scan or a
+  meeting read stops before anything is marked done, a draft returns `503 redaction_unavailable`. Retry later:
+  nothing is skipped.
+- **Guardrails** gets L1 with Vanimo's marks replaced by a neutral word. A finding raises `GuardrailBlocked`: no
+  draft (`422 model_check_blocked`), or the offline extraction for promises, meeting notes and answers. Each block is
+  recorded content-free (types and counts) for the acting user. Responses carry the raw matched text, so they are
+  never logged or stored. Streams release no chunk until the whole answer passed. Content that isn't text is refused.
+  An outage (`503 model_check_unavailable`) stops a promise scan or meeting read before anything is saved, so it is
+  retried; a scan or sync stopped by an outage doesn't use up its once-a-minute slot. Bare 12-digit numbers are left
+  to S5 (an order number would otherwise block every draft in its thread; a regex can't check Aadhaar's checksum).
+- **Macie** scans `l1/<tenant>/<user>.jsonl`: one line per stored L1 field (`{"t","f","id","text"}`, the row ID as
+  32 hex digits: a dashed UUID looks like an Aadhaar number), never the token values, Sources names or never-send
+  words. Written by the sweeper every `VANIMO_SNAPSHOT_EVERY_HOURS` (24), under the same per-user lock as purge jobs,
+  and sooner when L1 changes: database triggers count every deletion or text change (purge, forget a meeting,
+  retention, a re-run) and the next sweep (≤ 5 minutes) rewrites the object. A finished purge job deletes it at once.
+  An unchanged snapshot isn't uploaded again, so Macie doesn't report the same thing daily. Only Macie's role can
+  read the objects (bucket policy); no versions; objects expire after 3 days. Each export keeps a manifest (table +
+  row ID per line) and the ETag, so a finding's line numbers name the exact rows.
+  **A finding pauses the organisation's pipeline:** nothing new is read, learned, extracted or drafted for anyone
+  (`423 pipeline_paused`); settings, data controls, deletion and your own meeting notes (answered without the model)
+  still work. Home shows a banner. The admin removes the flagged rows (**Remove flagged items**; drafts excepted —
+  their owner deletes what Vanimo learned) without seeing them, then resumes.
+
+**Admin → Redaction checks** (`/api/admin/backstops`): which service runs (or its stand-in), the pause, what was
+caught (types, counts, severity, internal user ID — never values), **Check the services** (made-up PII only),
+**Export snapshots now** (the offline stand-in scans at once) and **Resume after review** (audited).
+
+**Settings:** `VANIMO_PII_DETECTOR` (`offline` | `comprehend`), `VANIMO_COMPREHEND_SCOPE` (`all` | `flagged`),
+`VANIMO_GUARDRAIL` (`offline` | `bedrock`) with `VANIMO_GUARDRAIL_ID` and `VANIMO_GUARDRAIL_VERSION`, `VANIMO_MACIE`
+(`offline` | `aws`) with `VANIMO_L1_SNAPSHOT_BUCKET`, `VANIMO_SNAPSHOT_EVERY_HOURS`.
+
+**Try it locally (offline stand-ins):** sign in as an admin, open **Redaction checks**, press **Check the services**
+(all three answer), then **Export snapshots now**. To see a pause, plant a raw identifier in a stored L1 item (as
+`tests/test_backstops.py` does) and export again; resume from the same page.
+
+**Known limitations (state them before any real data):**
+- Comprehend is the only AWS service that sees text before it is fully L1: free text and names outside the
+  directory. English only (no Hindi/Hinglish), names and addresses acted on from score 0.7. It is an AWS "AI
+  service": the account needs the AWS Organizations **AI-services opt-out policy** (otherwise AWS may keep content to
+  improve the service; Bedrock is not affected). Users should be told their text is checked by it (DPDP notice).
+- Macie is detective, not preventive: residue sits in the database (and is used for drafting) until the next scan,
+  up to about a day. Its findings and discovery results (kept 90 days) hold object keys (tenant and user IDs), types
+  and line numbers, never values; "reveal samples" must stay off (it would show values).
+- One leftover item in a stored example can block every draft for its user at the guardrail; the guardrail reports
+  only types. The snapshot scan finds the same item and names its row.
+- Admins see which internal user's content tripped which types (employee transparency).
+- The app may list the metadata of every Macie finding in the account and region (no resource-level permissions).
+- Comprehend chunks (texts over 90 KB) don't overlap; an entity split at a chunk edge can be missed.
+- To verify on the real services: Comprehend offsets with emoji before a name, `` in Guardrails regexes (the probe
+  checks each Indian regex alone), whether an organisation-managed Macie lets a member account create jobs, and
+  whether its suppression rules archive our findings.
+
 ## Guarantees built in from M0
 
 - **Tenant and user isolation in the database.**
@@ -599,6 +671,19 @@ CI runs the same steps (`.github/workflows/ci.yml`) against Postgres 18 and 17.
    cdk deploy --all -c cell=in -c entra_tenant_id=<tid> -c entra_client_id=<client-id>
    ```
 
+   This includes the **backstops stack** (F11): Bedrock guardrail and version, the L1 snapshot bucket, Macie (add
+   `-c macie_session=existing` if Macie is already enabled in the account) with its custom identifiers, and the
+   app's IAM policy. Then create the daily Macie job once (the stack prints the command as `MacieJobCommand`):
+
+   ```
+   cd app/backend
+   uv run python -m vanimo.ops.macie_job --bucket <SnapshotBucket> --prefix vanimo-in-dev
+   ```
+
+   It tests each custom identifier in Macie's own engine first and stops if one doesn't match its synthetic sample.
+   Before real data: the AI-services opt-out policy (above). After deploy: Admin → Redaction checks → **Check the
+   services** must show three green results.
+
 5. **Set the Entra client secret** in Secrets Manager (`infra/entra/README.md` step 7). Then run `aws ecs update-service --force-new-deployment` on the API service.
 6. **Create roles and run migrations.** Use the outputs `ClusterName`, `MigrateTaskDef`, `TaskSubnets` and `TaskSecurityGroup`:
 
@@ -627,7 +712,7 @@ These are deliberate for 2–3 internal users and are listed again in the pre-ex
 | Stores | S3 Vectors, DynamoDB, Valkey | Aurora only | Added when M2/M4 need them |
 | Vault | Separate vault account; KMS per-tenant CMK with per-user data keys, so deleting a user's key crypto-shreds their data (§7.2 S8, §8.2) | AES-256-GCM keys derived (HKDF) from one master key in Secrets Manager | Move to KMS data keys before external customers |
 | Purge | Step Functions job across all stores (§6.5 X7) | In-process job. ~~M1 has no derived content yet~~ (superseded in M2): purges the L1 items, tokens, vectors and style cards by lineage, re-masks the Sources index, L1 text and studio phrases, and writes receipts | Move to Step Functions with the queue |
-| Redaction (M2 vs §7.2) | NER ensemble (Presidio/spaCy, GLiNER, IndicNER), contextual Tier C/S classifier, Guardrails, Macie backstops, vault service in a separate account | Deterministic detectors + checksum validators + the M365 header/directory gazetteer. Names that never appear in a header or the directory stay in L1. No Tier C/S classification (client sensitive words are stored but not yet applied). Token map in Aurora, vault-encrypted | Add NER + the contextual classifier (needs AWS, D7) before external customers |
+| Redaction (M2 vs §7.2) | NER ensemble (Presidio/spaCy, GLiNER, IndicNER), contextual Tier C/S classifier, Guardrails, Macie backstops, vault service in a separate account | Deterministic detectors + checksum validators + the M365 header/directory gazetteer. ~~Names that never appear in a header or the directory stay in L1.~~ *(F11, 2026-10-19: Comprehend at S5 now catches names that never appear in a header or the directory; Guardrails checks every model input and output; Macie scans daily L1 snapshots — see "F11" above. Still to do: the NER ensemble for Hindi/Hinglish, which Comprehend doesn't cover.)* No Tier C/S classification (client sensitive words are stored but not yet applied). Token map in Aurora, vault-encrypted | Add NER + the contextual classifier (needs AWS, D7) before external customers |
 | Embeddings and drafting (M2) | Bedrock embeddings + S3 Vectors; Claude Haiku 5.5 drafter | Local hashing-trick vectors (`vanimo/learning/embed.py`) in Aurora; an offline drafter (`vanimo/llm/offline.py`), clearly labelled, used only for the evaluation baseline. (M3: live drafting uses Claude through `vanimo/drafting/generate.py` when `VANIMO_DRAFTER=bedrock`, always in a deployed cell; locally a separate offline stand-in) | Swap in Bedrock embeddings behind the same functions once the AWS account exists |
 | Drafting (M3 vs §9.1–9.2, §9.4) | One streaming call, p95 first token ≤ 2.5 s; persona prefix padded to ≥ 4,096 tokens for caching; post-generation leakage judge; LLM revise on failed style checks | The output gate needs the whole text before anyone sees it, so the draft is returned whole: measure p95 *total* time instead. The persona block is marked for caching but not padded. No leakage judge yet (needs a model): cross-audience leakage is limited by sending other audiences' messages only as shapes. Revise runs once, only on failed checks. Pre-send checks are rules, not a model. No separate "audience card"
  (history with this person beyond the examples), and greeting and sign-off use your most common form rather than a

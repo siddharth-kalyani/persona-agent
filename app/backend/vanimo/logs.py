@@ -49,6 +49,8 @@ ALLOWED_KEYS = frozenset(
         "revision",
         "generator",
         "tier",
+        "source",
+        "stage",
     }
 )
 

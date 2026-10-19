@@ -34,6 +34,8 @@ export interface Me {
   email?: string | null;
   dataSource: "graph" | "sample";
   microsoft365Connected: boolean;
+  /** F11: a Macie finding paused the organisation's pipeline until an admin resumes it. */
+  pipelinePaused?: boolean;
 }
 
 // --- Data controls (M1) -----------------------------------------------------------------------
@@ -595,6 +597,49 @@ export interface MeetingHealth {
   checkedAt: string;
 }
 
+// --- Redaction backstops (F11) ------------------------------------------------------------------
+export type BackstopKey = "comprehend" | "guardrail" | "macie";
+
+export interface BackstopEvent {
+  id: number;
+  at: string;
+  source: BackstopKey;
+  stage: "redaction" | "model_input" | "model_output" | "snapshot";
+  outcome: "blocked" | "finding" | "unavailable";
+  /** Entity types and counts: never the values. */
+  kinds: Record<string, number>;
+  severity: "low" | "medium" | "high" | null;
+  /** Internal user ID (no name or address). */
+  user: string | null;
+  ref: string;
+  /** Rows a snapshot finding names: removable by an admin without seeing them. */
+  flaggedItems: number;
+  purgedAt: string | null;
+}
+
+export interface BackstopStatus {
+  backstops: { key: BackstopKey; mode: "aws" | "offline"; label: string }[];
+  comprehendScope: "all" | "flagged";
+  snapshotEveryHours: number;
+  paused: { since: string; reason: string; ref: string | null } | null;
+  mySnapshot: { exportedAt: string; items: number; stored: boolean; offlineFindings: number | null } | null;
+  events: BackstopEvent[];
+}
+
+export interface BackstopProbe {
+  key: BackstopKey | "guardrail_india";
+  state: "ok" | "warn" | "fail";
+  code: string;
+  ms: number;
+}
+
+export interface SnapshotExport {
+  exported: number;
+  failed: number;
+  findings: number;
+  newFindings: number;
+}
+
 export interface DraftingSettings {
   outlookDrafts: boolean;
   staleDays: number;
@@ -809,6 +854,13 @@ export class Api {
     this.request<void>("PUT", `/api/meetings/${encodeURIComponent(meetingId)}/speakers`, { fromId, toId });
   forgetMeeting = (id: string) => this.request<void>("DELETE", `/api/meetings/${encodeURIComponent(id)}`);
   meetingHealth = () => this.request<MeetingHealth>("GET", "/api/admin/meetings/health");
+
+  backstops = () => this.request<BackstopStatus>("GET", "/api/admin/backstops");
+  probeBackstops = () => this.request<BackstopProbe[]>("POST", "/api/admin/backstops/probe");
+  exportSnapshots = () => this.request<SnapshotExport>("POST", "/api/admin/backstops/snapshots");
+  resumePipeline = () => this.request<{ resumed: boolean }>("POST", "/api/admin/backstops/resume");
+  purgeFlagged = (eventId: number) =>
+    this.request<{ removed: number }>("POST", `/api/admin/backstops/events/${eventId}/purge`);
   setMeetingsPolicy = (meetingMemory: boolean) =>
     this.request<Scoping>("PUT", "/api/admin/scoping/meetings", { meetingMemory });
 

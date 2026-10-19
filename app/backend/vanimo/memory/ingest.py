@@ -34,6 +34,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from vanimo.backstops.guardrail import GuardrailUnavailable
 from vanimo.commitments import store as ledger
 from vanimo.commitments.extract import Found
 from vanimo.controls.store import hasher_for, load_engine, load_matcher, lock_user_controls
@@ -46,7 +47,7 @@ from vanimo.logs import get_logger
 from vanimo.memory import vtt
 from vanimo.memory.atoms import OfflineAtomExtractor, Turn
 from vanimo.redaction.marks import L1_MARKS, TOKEN
-from vanimo.redaction.pipeline import Person, RedactionBlocked, Redactor
+from vanimo.redaction.pipeline import BackstopUnavailable, Person, RedactionBlocked, Redactor
 from vanimo.sources.base import Address, Event, Transcript, TranscriptRef, TranscriptsUnavailable, WorkspaceSource
 from vanimo.state import AppState
 
@@ -93,6 +94,10 @@ class IngestResult:
 class Throttle:
     def __init__(self) -> None:
         self._last: dict[str, float] = {}
+
+    def release(self, key: str) -> None:
+        """A scan stopped by an outage (F11 backstops) doesn't count: the retry may run at once."""
+        self._last.pop(key, None)
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
@@ -175,7 +180,7 @@ def _speaker_token(redactor: Redactor, a: Address, *, me: bool) -> tuple[str, st
     return redactor.person_base(Person(name, a.email.lower()), me=me) + ".full⟧", name
 
 
-def build(
+async def build(
     event: Event,
     transcripts: list[Transcript],
     *,
@@ -232,7 +237,9 @@ def build(
     turns: list[Turn] = []
     for start, end, who, words in raw[:MAX_TURNS]:
         try:
-            red = redactor.redact(words)
+            red = await redactor.redact(words)
+        except BackstopUnavailable:
+            raise  # the meeting isn't stored half-read; it is read again next time
         except RedactionBlocked as e:
             result.add(f"blocked_{e.reason}")
             continue
@@ -247,8 +254,10 @@ def build(
         tokens |= red.tokens
         turns.append(Turn(len(turns), start, end, speaker, side, red.text))  # type: ignore[arg-type]
     try:
-        title_red = redactor.redact(event.subject or "")
+        title_red = await redactor.redact(event.subject or "")
         title, tokens = title_red.text or "(no subject)", tokens | title_red.tokens
+    except BackstopUnavailable:
+        raise
     except RedactionBlocked:
         title = "(meeting)"
     return Built(turns, tokens, people, title, attributed, first, roster=sides)
@@ -596,7 +605,7 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
         def redactor_for(people: list[Address], invited: tuple[Address, ...] = e.attendees) -> Redactor:
             return build_redactor(matcher, hasher, directory, [*invited, *people], known_people)
 
-        built = build(
+        built = await build(
             e, transcripts, roster=roster, known=known, directory=directory, redactor_for=redactor_for,
             ex_engine=ex_engine, org_domains=org_domains, result=out,
         )  # fmt: skip
@@ -611,6 +620,8 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
         # 5. Atoms in L1, stored with the user's own promises.
         try:
             atoms = await extractor.find(built.turns, started_at=built.started_at, tz=state.settings.cell_config.zone)
+        except GuardrailUnavailable:
+            raise  # not a failed meeting: nothing is recorded, it is read again next time
         except Exception as exc:
             log.warning("memory.extract_failed", error_type=type(exc).__name__)
             await record(state, user, source.kind, mh, "failed", "extract_failed", e.end)

@@ -35,7 +35,7 @@ from vanimo.learning import labels
 from vanimo.learning.embed import embed
 from vanimo.logs import get_logger
 from vanimo.redaction.parse import strip_signature_noise
-from vanimo.redaction.pipeline import Gazetteer, Person, Redacted, RedactionBlocked, Redactor
+from vanimo.redaction.pipeline import BackstopUnavailable, Gazetteer, Person, Redacted, RedactionBlocked, Redactor
 from vanimo.sources.base import Address, ChatMessage, MessageContent, WorkspaceSource
 from vanimo.vault import Vault
 
@@ -286,7 +286,7 @@ async def collect(
         uniq = {a.email.lower(): a for a in people if a.email and a.email.lower() != me}
         return [(hasher("person", e), ex_engine.domain_hashes(a.domain)) for e, a in sorted(uniq.items())]
 
-    def label_and_add(
+    async def label_and_add(
         channel: str,
         item_id: str,
         thread_hash: str,
@@ -306,20 +306,26 @@ async def collect(
             out.counts["empty"] += 1
             return
         try:
-            red = redactor.redact(body, hidden_seen=hidden)
+            red = await redactor.redact(body, hidden_seen=hidden)
+        except BackstopUnavailable:
+            raise  # the run fails and can be retried: items are never skipped for an outage
         except RedactionBlocked as e:
             out.counts[f"blocked_{e.reason}"] += 1
             return
         ctx = None
         if context:
             try:
-                ctx = redactor.redact(context)
+                ctx = await redactor.redact(context)
+            except BackstopUnavailable:
+                raise
             except RedactionBlocked as e:
                 out.counts[f"context_blocked_{e.reason}"] += 1
         subj = None
         if subject:
             try:
-                subj = redactor.redact(subject)
+                subj = await redactor.redact(subject)
+            except BackstopUnavailable:
+                raise
             except RedactionBlocked:
                 out.counts["subject_blocked"] += 1
         ws = labels.words(red.text)
@@ -385,7 +391,7 @@ async def collect(
                 continue
             ctx_msg = await source.message(ctx_header.id) if ctx_header else None
             h = allowed[mid]
-            label_and_add(
+            await label_and_add(
                 "email",
                 mid,
                 hasher("thread", conv),
@@ -429,7 +435,7 @@ async def collect(
                 continue
             await tick()
             ctx = run[-CONTEXT_MESSAGES:]
-            label_and_add(
+            await label_and_add(
                 "chat",
                 f"{c.id}:{m.id}",  # chat message IDs are unique only within their chat
                 chat_hash,

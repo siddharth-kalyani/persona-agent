@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from vanimo import audit
+from vanimo.backstops.guardrail import GuardrailBlocked, GuardrailUnavailable
 from vanimo.controls.neversend import Matcher, Term, render_removed
 from vanimo.controls.store import hasher_for, load_engine, load_terms, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
@@ -30,7 +31,7 @@ from vanimo.drafting.gate import compose, gate, render
 from vanimo.drafting.generate import OFFLINE_LABEL, BedrockGenerator, Generator, OfflineGenerator
 from vanimo.drafting.pack import load_pack
 from vanimo.drafting.prompt import apply_rules, build
-from vanimo.gates import onboarding_state
+from vanimo.gates import onboarding_state, require_pipeline_active
 from vanimo.learning import style
 from vanimo.learning.backfill import controls_version
 from vanimo.llm.router import Quality
@@ -144,6 +145,7 @@ async def premium_used(conn: AsyncConnection) -> int:
 async def require_review(state: AppState, user: UserRef, source: WorkspaceSource) -> None:
     async with user_tx(state.engine, user) as conn:
         onboarding, _ = await onboarding_state(conn, source.kind)
+        await require_pipeline_active(conn)
     if onboarding != "review_done":
         raise DraftError("review_pending", 409)
 
@@ -234,8 +236,8 @@ async def create_draft(
     generator = generator_for(state)
     try:
         body = await generator.body(ctx, pack, prompt, route)
-    except DraftError:
-        raise
+    except (DraftError, GuardrailBlocked, GuardrailUnavailable):
+        raise  # a guardrail finding or outage is not a model outage: the user is told which (F11)
     except Exception as exc:
         log.error("draft.model_failed", error_type=type(exc).__name__, model_id=route.model_id)
         raise DraftError("model_unavailable", 503) from None
@@ -524,6 +526,7 @@ async def check_text(
     sample_domains = _sample_domains(source)
     async with user_tx(state.engine, user) as conn:
         onboarding, _ = await onboarding_state(conn, source.kind)
+        await require_pipeline_active(conn)
         ex_engine = await load_engine(conn, state.vault, user, self_email=self_email, extra_org_domains=sample_domains)
         terms = await load_terms(conn, state.vault, user)
         known, _ = await _known(conn, state, user)
@@ -599,6 +602,7 @@ async def _check_chat(
     sample_domains = _sample_domains(source)
     async with user_tx(state.engine, user) as conn:
         onboarding, _ = await onboarding_state(conn, source.kind)
+        await require_pipeline_active(conn)
         ex_engine = await load_engine(conn, state.vault, user, self_email=self_email, extra_org_domains=sample_domains)
         terms = await load_terms(conn, state.vault, user)
         known, _ = await _known(conn, state, user)

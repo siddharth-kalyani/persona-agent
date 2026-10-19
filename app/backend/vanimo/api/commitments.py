@@ -23,6 +23,7 @@ from vanimo import audit
 from vanimo.api.deps import CurrentPrincipal, CurrentUser, State, UserSource
 from vanimo.api.drafting import DraftOut, draft_out
 from vanimo.api.learning import self_email
+from vanimo.backstops.guardrail import GuardrailUnavailable
 from vanimo.commitments import scan as scanning
 from vanimo.commitments.extract import OFFLINE_LABEL
 from vanimo.controls.neversend import render_removed
@@ -30,7 +31,7 @@ from vanimo.controls.store import load_engine, load_matcher
 from vanimo.db.session import user_tx
 from vanimo.drafting.context import DraftError
 from vanimo.drafting.service import DraftInput, _sample_domains, create_draft
-from vanimo.redaction.pipeline import rehydrate
+from vanimo.redaction.pipeline import BackstopUnavailable, rehydrate
 
 router = APIRouter(prefix="/api", tags=["commitments"])
 
@@ -167,7 +168,11 @@ class ScanOut(BaseModel):
 @router.post("/commitments/scan", response_model=ScanOut)
 async def scan_commitments(user: CurrentUser, principal: CurrentPrincipal, source: UserSource, state: State) -> ScanOut:
     me = await self_email(source, principal.email)
-    result = await scanning.scan(state, user, source, self_email=me)
+    try:
+        result = await scanning.scan(state, user, source, self_email=me)
+    except (BackstopUnavailable, GuardrailUnavailable):
+        scanning.THROTTLE.release(f"{user.user_id}:{source.kind}")
+        raise
     return ScanOut(**scanning.summary(result))
 
 

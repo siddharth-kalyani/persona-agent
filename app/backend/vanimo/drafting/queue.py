@@ -33,7 +33,7 @@ from vanimo import audit
 from vanimo.controls.store import hasher_for, load_engine
 from vanimo.db.session import UserRef, user_tx
 from vanimo.drafting.context import DraftError
-from vanimo.gates import onboarding_state
+from vanimo.gates import onboarding_state, require_pipeline_active
 from vanimo.learning import labels
 from vanimo.logs import get_logger
 from vanimo.redaction.parse import strip_quotes
@@ -123,6 +123,7 @@ async def waiting(state: AppState, user: UserRef, source: WorkspaceSource, *, se
     hasher = hasher_for(state.vault, user)
     async with user_tx(state.engine, user) as conn:
         onboarding, _ = await onboarding_state(conn, source.kind)
+        await require_pipeline_active(conn)
         engine = await load_engine(conn, state.vault, user, self_email=me, extra_org_domains=_sample_domains(source))
         matcher = await load_matcher(conn, state.vault, user)
         dismissed = set((await conn.execute(text("select thread_hash from vanimo.queue_dismissals"))).scalars().all())

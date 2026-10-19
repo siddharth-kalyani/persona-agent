@@ -21,6 +21,7 @@ from aws_cdk import aws_s3_deployment as s3deploy
 from aws_cdk import aws_secretsmanager as sm
 from constructs import Construct
 
+from vanimo_infra.backstops_stack import BackstopsStack, guardrail_version
 from vanimo_infra.config import DeployConfig
 from vanimo_infra.data_stack import DataStack
 
@@ -69,7 +70,9 @@ function handler(event) {
 
 
 class AppStack(Stack):
-    def __init__(self, scope: Construct, cid: str, *, cfg: DeployConfig, data: DataStack, **kw) -> None:
+    def __init__(
+        self, scope: Construct, cid: str, *, cfg: DeployConfig, data: DataStack, backstops: BackstopsStack, **kw
+    ) -> None:
         super().__init__(scope, cid, **kw)
 
         # Reference the data stack's key and secrets by ARN: grants then land on this stack's IAM roles
@@ -170,6 +173,13 @@ class AppStack(Stack):
                 # Teams (M5): empty until the Teams app and its bot are registered.
                 "VANIMO_TEAMS_APP_ID": cfg.teams_app_id,
                 "VANIMO_TEAMS_BOT_ID": cfg.teams_bot_id,
+                # F11 redaction backstops: the real AWS services (a deployed cell refuses the stand-ins).
+                "VANIMO_PII_DETECTOR": "comprehend",
+                "VANIMO_GUARDRAIL": "bedrock",
+                "VANIMO_GUARDRAIL_ID": backstops.guardrail.attr_guardrail_id,
+                "VANIMO_GUARDRAIL_VERSION": guardrail_version(self, backstops).attr_version,
+                "VANIMO_MACIE": "aws",
+                "VANIMO_L1_SNAPSHOT_BUCKET": backstops.bucket.bucket_name,
             },
             secrets={
                 "VANIMO_DB_APP_PASSWORD": ecs.Secret.from_secrets_manager(app_password),
@@ -188,6 +198,9 @@ class AppStack(Stack):
                 conditions={"StringEquals": {"aws:RequestedRegion": cfg.region}},
             )
         )
+
+        # Comprehend, the guardrail, the snapshot bucket and Macie findings (F11).
+        task.task_role.add_managed_policy(backstops.policy)
 
         service = ecs.FargateService(
             self,

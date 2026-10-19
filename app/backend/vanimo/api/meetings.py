@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from vanimo import audit
 from vanimo.api.deps import AdminPrincipal, CurrentPrincipal, CurrentUser, State, UserSource
 from vanimo.api.learning import self_email
+from vanimo.backstops.guardrail import GuardrailUnavailable
 from vanimo.commitments import store as ledger
 from vanimo.commitments.extract import Found
 from vanimo.controls.neversend import Matcher, render_removed
@@ -36,11 +37,12 @@ from vanimo.controls.store import hasher_for, load_engine, load_matcher, lock_us
 from vanimo.db.session import UserRef, user_tx
 from vanimo.drafting.context import DraftError, DraftThrottle, build_redactor
 from vanimo.drafting.service import _known, _sample_domains
+from vanimo.gates import pipeline_paused
 from vanimo.memory import ask as asking
 from vanimo.memory import ingest
 from vanimo.memory.atoms import OFFLINE_LABEL
 from vanimo.redaction.marks import TOKEN
-from vanimo.redaction.pipeline import RedactionBlocked, rehydrate
+from vanimo.redaction.pipeline import BackstopUnavailable, RedactionBlocked, rehydrate
 from vanimo.sources.base import TranscriptsUnavailable
 from vanimo.vault import Vault
 
@@ -209,7 +211,11 @@ class ScanOut(BaseModel):
 @router.post("/scan", response_model=ScanOut)
 async def scan_meetings(user: CurrentUser, principal: CurrentPrincipal, source: UserSource, state: State) -> ScanOut:
     me = await self_email(source, principal.email)
-    result = await ingest.scan(state, user, source, self_email=me)
+    try:
+        result = await ingest.scan(state, user, source, self_email=me)
+    except (BackstopUnavailable, GuardrailUnavailable):
+        ingest.THROTTLE.release(f"{user.user_id}:{source.kind}")
+        raise
     return ScanOut(**ingest.summary(result))
 
 
@@ -538,6 +544,8 @@ async def ask_meetings(
         )  # fmt: skip
         display = await _display(conn, v, user)
         _, known_people = await _known(conn, state, user)
+        # Paused organisation (F11): your own notes are still answered, from the notes alone (no model).
+        paused = await pipeline_paused(conn)
         await audit.record(conn, user, "meeting.ask", request_id=request.state.request_id)
     refs = [MeetingRefOut(id=c.id, title=display.show(c.title), startsAt=c.starts_at) for c in candidates]
     if ambiguous:
@@ -553,14 +561,13 @@ async def ask_meetings(
     # The question goes to the model as L1, like any other text (names become the same tokens).
     llm = router_ = None
     question_l1 = ""
-    if state.settings.drafter == "bedrock":
+    if state.settings.drafter == "bedrock" and not paused:
         directory = await state.directory_cache.get((str(user.user_id), source.kind), source, me)
         async with user_tx(state.engine, user) as conn:
             matcher = await load_matcher(conn, v, user)
         try:
-            question_l1 = (
-                build_redactor(matcher, hasher_for(v, user), directory, [], known_people).redact(body.question).text
-            )
+            redactor = build_redactor(matcher, hasher_for(v, user), directory, [], known_people)
+            question_l1 = (await redactor.redact(body.question)).text
             llm, router_ = state.llm, state.router
         except RedactionBlocked:
             llm = None

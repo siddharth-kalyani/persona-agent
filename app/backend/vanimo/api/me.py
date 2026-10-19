@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from vanimo.aio import gather_strict
 from vanimo.api.deps import CurrentPrincipal, CurrentUser, State, UserSource
 from vanimo.db.session import user_tx
-from vanimo.gates import onboarding_state
+from vanimo.gates import onboarding_state, pipeline_paused
 from vanimo.sources.base import Profile
 
 router = APIRouter(prefix="/api", tags=["me"])
@@ -43,6 +43,8 @@ class MeOut(BaseModel):
     # "graph" = your Microsoft 365; "sample" = the synthetic Kestrel Analytics workspace.
     dataSource: str
     microsoft365Connected: bool
+    # F11: a Macie finding paused the organisation's pipeline (an admin resumes it).
+    pipelinePaused: bool = False
 
 
 def _person(p: Profile | None) -> PersonOut | None:
@@ -53,6 +55,7 @@ def _person(p: Profile | None) -> PersonOut | None:
 async def get_me(principal: CurrentPrincipal, user: CurrentUser, source: UserSource, state: State) -> MeOut:
     async with user_tx(state.engine, user) as conn:
         onboarding, _ = await onboarding_state(conn, source.kind)
+        paused = await pipeline_paused(conn)
     profile, manager, sent = await gather_strict(source.profile(), source.manager(), source.recent_sent(5))
     return MeOut(
         user=_person(profile) or PersonOut(),
@@ -66,4 +69,5 @@ async def get_me(principal: CurrentPrincipal, user: CurrentUser, source: UserSou
         email=principal.email,
         dataSource=source.kind,
         microsoft365Connected=source.kind == "graph",
+        pipelinePaused=paused,
     )

@@ -4,7 +4,8 @@ Every few minutes: scans and learning runs still "running" after 2 hours are mar
 retry instead of spinning), and purge/scrub jobs left pending or running are run again (they are
 idempotent). Uses SECURITY DEFINER functions from migration 0005, which return IDs only. Meeting
 memory retention (M6): transcript turns after 30 days, notes after 12 months. Then (M5) the
-notifications round: `vanimo.notify.run_once`.
+notifications round: `vanimo.notify.run_once`. Then (F11) the redaction backstops: L1 snapshots that
+are due are exported for Macie, and new Macie findings are read (each pauses its tenant).
 """
 
 from __future__ import annotations
@@ -52,14 +53,26 @@ async def sweep_once(engine: AsyncEngine, vault: Vault) -> tuple[int, int]:
     return failed, len(jobs)
 
 
-async def sweep_forever(engine: AsyncEngine, vault: Vault, notifications: Any = None) -> None:
+async def backstops_once(engine: AsyncEngine, vault: Vault, backstops: Any) -> None:
+    from vanimo.backstops import macie, snapshots
+
+    await snapshots.export_due(engine, vault, backstops)
+    await macie.poll_round(engine, backstops)
+
+
+async def sweep_forever(engine: AsyncEngine, vault: Vault, notifications: Any = None, backstops: Any = None) -> None:
     """`notifications`: an async callable run each round after the jobs (M5: make and deliver the
-    content-free notifications)."""
+    content-free notifications). `backstops`: likewise, the F11 snapshot export and Macie poll."""
     while True:
         try:
             await sweep_once(engine, vault)
         except Exception as exc:  # keep sweeping; the next round retries
             log.warning("sweeper.failed", error_type=type(exc).__name__)
+        if backstops is not None:
+            try:
+                await backstops()
+            except Exception as exc:
+                log.warning("sweeper.backstops_failed", error_type=type(exc).__name__)
         if notifications is not None:
             try:
                 await notifications()

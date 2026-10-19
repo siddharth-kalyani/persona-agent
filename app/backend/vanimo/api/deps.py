@@ -10,6 +10,7 @@ from fastapi import Depends, Request
 from vanimo.auth.entra import AuthError, Principal
 from vanimo.auth.local import resolve_session
 from vanimo.auth.passwords import SESSION_PREFIX
+from vanimo.backstops.events import ACTING_USER
 from vanimo.db.session import UserRef, provision_user
 from vanimo.graph.client import GraphClient
 from vanimo.sources.base import WorkspaceSource
@@ -53,6 +54,7 @@ async def get_user(principal: CurrentPrincipal, state: State) -> UserRef:
     if principal.local_user is not None:  # password sessions are already bound to a user
         ref = principal.local_user
         structlog.contextvars.bind_contextvars(tenant_ref=str(ref.tenant_id), user_ref=str(ref.user_id))
+        ACTING_USER.set(ref)  # whom a blocked model call is recorded for (vanimo.backstops.events)
         return ref
     ref = await provision_user(
         state.engine,
@@ -63,6 +65,7 @@ async def get_user(principal: CurrentPrincipal, state: State) -> UserRef:
     )
     # Internal UUIDs only — never the Entra object ID, name or e-mail address.
     structlog.contextvars.bind_contextvars(tenant_ref=str(ref.tenant_id), user_ref=str(ref.user_id))
+    ACTING_USER.set(ref)
     return ref
 
 

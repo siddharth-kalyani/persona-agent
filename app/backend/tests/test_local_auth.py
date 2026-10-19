@@ -62,9 +62,18 @@ def test_password_hashing_and_rules() -> None:
 def test_password_auth_never_in_prod() -> None:
     with pytest.raises(ValidationError, match="local/dev only"):
         Settings(env="prod", enable_password_auth=True)
-    # A dev cell may run on password sign-in alone before the Entra app exists.
+    # A dev cell may run on password sign-in alone before the Entra app exists (with the F11 backstops).
     assert Settings(
-        env="dev", enable_password_auth=True, ref_hmac_key="k" * 32, vault_master_key="v" * 32
+        env="dev",
+        enable_password_auth=True,
+        ref_hmac_key="k" * 32,
+        vault_master_key="v" * 32,
+        pii_detector="comprehend",
+        guardrail="bedrock",
+        guardrail_id="gr-1",
+        guardrail_version="1",
+        macie="aws",
+        l1_snapshot_bucket="vanimo-in-dev-l1-snapshots",
     ).enable_password_auth
 
 

@@ -33,7 +33,7 @@ from vanimo.learning import labels
 from vanimo.learning.backfill import controls_version
 from vanimo.logs import get_logger
 from vanimo.redaction.parse import strip_quotes, strip_signature_noise
-from vanimo.redaction.pipeline import RedactionBlocked
+from vanimo.redaction.pipeline import BackstopUnavailable, RedactionBlocked
 from vanimo.sources.base import Address, WorkspaceSource
 from vanimo.state import AppState
 
@@ -70,6 +70,10 @@ class ScanThrottle:
 
     def __init__(self) -> None:
         self._last: dict[str, float] = {}
+
+    def release(self, key: str) -> None:
+        """A scan stopped by an outage (F11 backstops) doesn't count: the retry may run at once."""
+        self._last.pop(key, None)
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
@@ -173,7 +177,9 @@ async def scan(state: AppState, user: UserRef, source: WorkspaceSource, *, self_
             continue
         redactor = build_redactor(matcher, hasher, directory, p.audience, known_people)
         try:
-            red = redactor.redact(body)
+            red = await redactor.redact(body)
+        except BackstopUnavailable:
+            raise  # stop: nothing is marked scanned, the next scan reads these again
         except RedactionBlocked as e:
             out.counts[f"blocked_{e.reason}"] = out.counts.get(f"blocked_{e.reason}", 0) + 1
             continue

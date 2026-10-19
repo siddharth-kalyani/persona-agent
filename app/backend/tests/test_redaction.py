@@ -100,16 +100,16 @@ def test_unicode_tags_removed_and_quotes_split() -> None:
 
 
 # --- pipeline -----------------------------------------------------------------------------------
-def test_pipeline_masks_tier_r_and_tokenises_people() -> None:
+async def test_pipeline_masks_tier_r_and_tokenises_people() -> None:
     r = _redactor(people=[("Meera Iyer", "meera.iyer@kestrel.example"), ("Rahul Verma", "rahul@kestrel.example")])
-    out = r.redact("Hi Meera-ji, Rahul's PAN is ABCPE1234F, mail rahul@kestrel.example.\nThanks, Siddharth")
+    out = await r.redact("Hi Meera-ji, Rahul's PAN is ABCPE1234F, mail rahul@kestrel.example.\nThanks, Siddharth")
     assert "ABCPE1234F" not in out.text and "[PAN]" in out.text
     assert "Meera" not in out.text and "Rahul" not in out.text and "Siddharth" not in out.text
     assert "-ji," in out.text and "⟦ME⟧" in out.text  # honorific kept outside the token
     assert "rahul@kestrel.example" not in out.text
     assert out.counts["PAN"] == 1 and out.counts["email"] == 1
     # Same person, same token, across messages.
-    again = r.redact("Rahul, please check.")
+    again = await r.redact("Rahul, please check.")
     tok = again.text.split(",")[0]
     assert tok in out.text
     # Display for the owner: tokens back, never-send placeholders as [removed], Tier R stays a slot.
@@ -117,16 +117,16 @@ def test_pipeline_masks_tier_r_and_tokenises_people() -> None:
     assert "Meera" in shown and "Siddharth" in shown and "[PAN]" in shown
 
 
-def test_never_send_runs_first_and_is_never_tokenised() -> None:
+async def test_never_send_runs_first_and_is_never_tokenised() -> None:
     r = _redactor(terms=[Term("aaaa0001", "Falcon", "codename")])
-    out = r.redact("Project Falcon timeline; project-falcon repo")
+    out = await r.redact("Project Falcon timeline; project-falcon repo")
     assert "alcon" not in out.text.lower() and out.counts["never_send"] == 2
     assert rehydrate(out.text, {}) == "Project [removed] timeline; project-[removed] repo"
 
 
-def test_common_word_names_need_capitals() -> None:
+async def test_common_word_names_need_capitals() -> None:
     r = _redactor(people=[("Will Smith", "will@x.example")])
-    out = r.redact("I will ask Will tomorrow.")
+    out = await r.redact("I will ask Will tomorrow.")
     assert out.text.startswith("I will ask ⟦PERSON_")
 
 
@@ -139,14 +139,14 @@ def test_verify_blocks_residue() -> None:
         r.verify("reach me at a@b.example")
 
 
-def test_matcher_failure_blocks() -> None:
+async def test_matcher_failure_blocks() -> None:
     class Broken(Matcher):
         def mask(self, text: str | None) -> tuple[str | None, int]:
             raise RuntimeError("boom")
 
     r = Redactor(Broken([]), Gazetteer(), _hasher)
     with pytest.raises(RedactionBlocked) as e:
-        r.redact("anything")
+        await r.redact("anything")
     assert e.value.reason == "never_send_error"
 
 
@@ -172,7 +172,7 @@ async def test_sample_workspace_redacts_clean() -> None:
         *("4111", "AKIAIOSFODNN7EXAMPLE", "Kestrel@2026", "falcon", "monsoon", "536-22-1847", "021000021"),
     ]
     for body in texts:
-        out = r.redact(body).text.lower()
+        out = (await r.redact(body)).text.lower()
         assert not [p for p in planted if p.lower() in out]
 
 
@@ -195,9 +195,9 @@ async def test_sample_workspace_redacts_clean() -> None:
         ("pan abcpe1234f", "PAN"),
     ],
 )
-def test_detects_reformatted_identifiers(text: str, kind: str) -> None:
+async def test_detects_reformatted_identifiers(text: str, kind: str) -> None:
     assert kind in [s.kind for s in detect(text)]
-    out = _redactor().redact(text).text
+    out = (await _redactor().redact(text)).text
     assert f"[{kind}]" in out
 
 
@@ -206,22 +206,22 @@ def test_phone_next_to_card_still_finds_card() -> None:
     assert hits == {"phone", "card number"}
 
 
-def test_brackets_in_input_cannot_hide_values_or_plant_tokens() -> None:
+async def test_brackets_in_input_cannot_hide_values_or_plant_tokens() -> None:
     r = _redactor(people=[("Meera Iyer", "meera@kestrel.example")])
-    out = r.redact("see ⟦2341 2341 2346⟧ and ⟦PERSON_deadbeef⟧")
+    out = await r.redact("see ⟦2341 2341 2346⟧ and ⟦PERSON_deadbeef⟧")
     assert "2341" not in out.text and "[Aadhaar number]" in out.text
     assert "⟦PERSON_deadbeef⟧" not in out.text  # a planted token is plain text now
 
 
-def test_short_names_titles_and_initials_are_tokenised() -> None:
+async def test_short_names_titles_and_initials_are_tokenised() -> None:
     r = _redactor(
         people=[("Deepa Rao", "deepa@b.example"), ("Dr. Anil Kumar", "anil@b.example"), ("Om Prakash", "om@b.example")]
     )
-    out = r.redact("Hi Rao, Dr. Kumar and Anil said Om will call.").text
+    out = (await r.redact("Hi Rao, Dr. Kumar and Anil said Om will call.")).text
     for name in ("Rao", "Kumar", "Anil", "Om "):
         assert name not in out, name
     assert "Dr. ⟦PERSON_" in out  # the title stays, it's not a name
-    assert r.redact("the om symbol").text == "the om symbol"  # short names need a capital
+    assert (await r.redact("the om symbol")).text == "the om symbol"  # short names need a capital
 
 
 def test_style_forms_never_keep_names() -> None:

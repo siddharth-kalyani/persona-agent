@@ -21,9 +21,12 @@ from sqlalchemy import text
 from vanimo import audit
 from vanimo.api.deps import CurrentPrincipal, CurrentUser, State, UserSource
 from vanimo.api.learning import self_email
+from vanimo.backstops.guardrail import GuardrailUnavailable
 from vanimo.db.session import user_tx
 from vanimo.drafting.context import DraftError
 from vanimo.edits import matching, rules
+from vanimo.gates import require_pipeline_active
+from vanimo.redaction.pipeline import BackstopUnavailable
 
 router = APIRouter(prefix="/api", tags=["edits"])
 
@@ -47,16 +50,21 @@ async def sync(user: CurrentUser, principal: CurrentPrincipal, source: UserSourc
         return SyncOut(matched=0, unmatched=0, excluded=0, skipped=True)
     me = await self_email(source, principal.email)
     async with user_tx(state.engine, user) as conn:
-        from vanimo.gates import onboarding_state
+        from vanimo.gates import onboarding_state, require_pipeline_active
 
         onboarding, _ = await onboarding_state(conn, source.kind)
+        await require_pipeline_active(conn)
     if onboarding != "review_done":
         raise DraftError("review_pending", 409)
     # Armed only once a sync really starts (a refused or failed one doesn't block the next minute).
     if len(_last_sync) > 10_000:
         _last_sync.clear()
     _last_sync[key] = time.monotonic()
-    counts = await matching.sync(state, user, source, self_email=me)
+    try:
+        counts = await matching.sync(state, user, source, self_email=me)
+    except (BackstopUnavailable, GuardrailUnavailable):
+        _last_sync.pop(key, None)  # stopped by an outage: the retry may run at once
+        raise
     return SyncOut(**counts, skipped=False)
 
 
@@ -83,6 +91,8 @@ async def mark_sent(
     """Sample workspace only: your edited text stands in for the email you sent. It is compared in
     memory with the draft; only the outcome and the kinds of edit are kept."""
     me = await self_email(source, principal.email)
+    async with user_tx(state.engine, user) as conn:
+        await require_pipeline_active(conn)  # the text is redacted and compared: content, so paused too
     c = await matching.record_sent(state, user, source, self_email=me, draft_id=str(draft_id), sent_text=body.text)
     async with user_tx(state.engine, user) as conn:
         await audit.record(

@@ -24,7 +24,7 @@ from vanimo.commitments.scan import extractor_for
 from vanimo.controls.jobs import run_job
 from vanimo.controls.store import add_purge_job, hasher_for, load_engine
 from vanimo.db.session import UserRef, user_tx
-from vanimo.gates import onboarding_state
+from vanimo.gates import onboarding_state, require_pipeline_active
 from vanimo.learning import backfill
 from vanimo.learning.persona import PersonaSettings, save_settings, snapshot
 from vanimo.redaction.pipeline import rehydrate
@@ -115,6 +115,7 @@ async def start_learning(
     """Starts the backfill in the background; poll GET /learning. Sample workspaces finish in seconds."""
     async with user_tx(state.engine, user) as conn:
         onboarding, _ = await onboarding_state(conn, source.kind)
+        await require_pipeline_active(conn)
     if onboarding != "review_done":
         raise HTTPException(409, detail={"error": "review_pending"})
     email = await self_email(source, principal.email)

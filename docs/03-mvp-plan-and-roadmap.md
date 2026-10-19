@@ -3,6 +3,7 @@
 > **Date:** 2026-10-06 · **Assumptions:** 3–6 engineers, ~12-week MVP, M365 mid-market & enterprise buyers (beachhead: client-facing teams at IT-services/consulting firms in the US and India), work-only company-governed recorder. Architecture: `02-solution-architecture.md`; strategy: `01-product-strategy.md`. Research cited as [R01]…[R10].
 > Effort figures are estimates in **engineer-weeks (ew)**. v0.2 aligns scope and targets with the market track [R09] and the hardware track [R08]. **v0.3 (2026-10-09)** adds user data controls (F7) and moves India model residency out of the MVP (F6) [R12]. **2026-10-11:** records founder decision F8 — the MVP keeps plain relationship tables; company-level shared context and graph are planned for later phases [R11].
 > **2026-10-12 — build reality (founder decisions F9 and F10, `05` §1):** the MVP is built by the founder with Claude, inside a large IT organisation, starting with 2–3 internal users. **§0 below is now the build plan.** §1–§4 (team-based scoping, team shapes, 12-week plan) are kept unchanged for reference and for when a team is hired; §5 still defines quality, privacy and data-control exit criteria.
+> **2026-10-19 (founder decision F11, `05` §1):** while the MVP runs on synthetic data, it deploys to **one small EC2 instance** instead of the production cell, and adds **Amazon Comprehend + Bedrock Guardrails** as redaction backstops *(amended the same day: **+ Amazon Macie** over daily L1 snapshots, so all three run as if the data were real)*. Resources and monthly cost in **§0.1**.
 
 ---
 
@@ -43,7 +44,42 @@
 
 **Deferred from the MVP by the solo build:** the Teams personal agent (chat with the agent) → v1.5, so meeting Q&A lives in the web app/Teams tab for now · light EA/delegate mode → v1.5 · the US cell → when the first US users need it · Hindi/Hinglish → v1.5 · phone recorder → Phase 2 (unchanged) · super-admin console → operator scripts until there are external tenants · external pentest, legal/trust pack and SOC 2 readiness → before any external customer · everything external in §4 (Partner Center, publisher verification, LOIs, pricing, marketplace).
 
-**Access the founder arranges (not decisions):** the organisation's approval to process the first users' mail and chats with Claude on Bedrock; Entra app registration and admin consent (`Mail.Read`, `Mail.ReadWrite`, `Chat.Read`, `User.Read.All`, `Calendars.Read`, `OnlineMeetingTranscript.Read.All`); a Teams admin to enable meeting transcription (and an application access policy if we read transcripts with application permissions), and to sideload the Teams app and deploy the Outlook add-in; an AWS account that can deploy CDK, with Bedrock access to Claude Haiku 4.5 and Sonnet 5.5 from `ap-south-1`.
+**Access the founder arranges (not decisions):** the organisation's approval to process the first users' mail and chats with Claude on Bedrock; Entra app registration and admin consent (`Mail.Read`, `Mail.ReadWrite`, `Chat.Read`, `User.Read.All`, `Calendars.Read`, `OnlineMeetingTranscript.Read.All`); a Teams admin to enable meeting transcription (and an application access policy if we read transcripts with application permissions), and to sideload the Teams app and deploy the Outlook add-in; an AWS account that can deploy CDK, with Bedrock access to Claude ~~Haiku 4.5~~ **Haiku 5.5** and Sonnet 5.5 from `ap-south-1` *(2026-10-19, F11: plus Amazon Comprehend, Bedrock Guardrails and Amazon Macie in `ap-south-1`; for the synthetic-data MVP the account only needs EC2 ~~, not CDK~~ plus the small backstops stack (`app/infra`, guardrail + snapshot bucket + Macie identifiers) — see §0.1. Before any real data: the AWS Organizations **AI-services opt-out policy** for Comprehend)*.
+
+### 0.1 MVP deployment for synthetic data (2026-10-19, F11)
+
+**Why:** with one user and synthetic data only, the production cell's network security (NAT gateway, five VPC interface endpoints, internal load balancer, private subnets, CloudFront VPC origin) costs ≈ $180–250/month and protects no real data. A single instance costs ≈ $35–50/month.
+
+**What stays exactly like production:** redaction L0→L1 (never-send, Tier R validators, gazetteer names, tokens, verify pass, fail-closed), exclusion rules, pre-send checks, drafting and the model router, Postgres row-level security and per-user isolation. All of it is application code, so it behaves the same on the instance.
+
+**Added to redaction (F11):**
+- **Amazon Comprehend `DetectPiiEntities`** — an extra detector at S5 (English; includes Aadhaar, PAN, voter ID). Its findings join our own spans; if it is unreachable the item is blocked, not passed. In the MVP it runs on every item (cost is pennies at synthetic volume); a setting switches it to the production rule (only items L0 flags as India-ID-bearing or high-risk).
+- **Bedrock Guardrails `ApplyGuardrail`** — sensitive-information filter + custom regex on every model input (after L1) and every model output (before re-hydration). A finding blocks the call; traces are never logged (they can hold raw PII).
+- ~~**Macie: not in the MVP** (it scans S3 and the MVP stores nothing in S3). It returns with the production cell (S13).~~ **Amended the same day (founder, 2026-10-19): Amazon Macie is in the MVP.** Each user's L1 text is exported once a day to a dedicated S3 bucket (`l1/<tenant>/<user>.jsonl`: L1 only, never the token values; SSE-S3, TLS only, no public access, readable only by Macie, no versions, objects expire after 3 days; a purge job deletes the user's object at once, and any other deletion or change of L1 — forgetting a meeting, retention, a re-run — makes it due, rewritten within minutes). A scheduled Macie job (created by `python -m vanimo.ops.macie_job`; CloudFormation has no resource for it) scans new snapshots daily with Macie's recommended identifiers plus custom Aadhaar, PAN, GSTIN, IFSC, UPI and voter-ID identifiers. Vanimo reads the findings every 15 minutes: each is recorded content-free (types, counts, severity, and the rows it names, from the export's manifest) and **pauses the organisation's pipeline** (nothing new is read, learned or drafted) until an admin removes the flagged rows (without seeing them) and resumes, on the Redaction checks page. Review fixes (2026-10-19): row IDs are written without dashes (a dashed UUID looks like an Aadhaar number), Macie's Aadhaar identifier needs a keyword nearby and the guardrail leaves bare 12-digit numbers to S5 (a regex can't check the checksum; order numbers would block drafts).
+
+**Resources (`ap-south-1`, approximate list prices — confirm in the AWS Pricing Calculator):**
+
+| # | Resource | Purpose | ≈ $/month |
+|---|---|---|---|
+| 1 | **EC2 `t4g.medium`** (2 vCPU, 4 GB, Graviton), always running | Docker Compose: Postgres 18, API, web | 25 |
+| 2 | EBS gp3, 30 GB | Disk (OS, Docker images, database) | 3 |
+| 3 | **Elastic IP** (static public IPv4; AWS charges every public IPv4 the same, ephemeral or static) | **Outbound only**: Bedrock, Comprehend, Guardrails, SSM, image pulls (the cheap alternative to a ≈ $45 NAT gateway). Stays the same across restarts | 4 |
+| 4 | **Amazon Bedrock** — Claude Haiku 5.5 (default), Sonnet 5.5 (premium) | Labelling, style cards, drafts, extraction, Q&A | 5–20 |
+| 5 | **Amazon Comprehend** `DetectPiiEntities` | Redaction backstop (S5) | < 1 |
+| 6 | **Bedrock Guardrails** `ApplyGuardrail` | Model input/output backstop | < 1 |
+| 6a | **Amazon Macie** (added 2026-10-19): one bucket monitored + a daily job over a few MB of snapshots | At-rest backstop over L1 (S13) | ≈ 1 |
+| 6b | **S3 bucket** for L1 snapshots (added 2026-10-19) | What Macie scans; a few MB, expired after 3 days | < 0.1 |
+| 7 | IAM instance role | Bedrock, Comprehend, Guardrails, ~~and~~ SSM access *and (2026-10-19) snapshot writes + Macie findings, via the backstops stack's managed policy* with no stored keys | 0 |
+| 8 | Security group with **no inbound ports** | Nothing on the instance is reachable from the internet | 0 |
+| 9 | **SSM Session Manager port forwarding** | The founder opens the app at `http://localhost:8080` through an SSM tunnel; also the admin shell (no SSH). Needs the AWS CLI + Session Manager plugin on the laptop | 0 |
+| 10 | AWS Budgets alert | Email at $60/month | 0 |
+| | **Total** | | **≈ 35–50** *(≈ 36–51 with Macie)* |
+
+- **Name-detection models** (Presidio/GLiNER/IndicNER, S5 — planned, not built yet) need 2–4 GB more memory: resize to **`t4g.large`** (8 GB, ≈ +$25/month) when they land. Resizing is a stop/start, no rebuild.
+- **No Entra, Graph, Outlook add-in or Teams app in this deployment:** synthetic data only, with local email/password sign-in and the sample workspace. Those surfaces need HTTPS and a fixed address, and arrive with the production cell.
+- **No backups:** the database holds only synthetic data, rebuilt from the sample workspace in code if the disk is lost.
+- **Not included and not needed for synthetic data:** NAT gateway, VPC endpoints, load balancer, Fargate, Aurora, CloudFront, HTTPS certificate, KMS customer key, Secrets Manager (secrets live in a root-only `.env` on the instance), ~~Macie~~ *(Macie added 2026-10-19, see above)*.
+- **Before any real mailbox data:** switch to the production cell (`app/infra`, unchanged).
 
 ---
 

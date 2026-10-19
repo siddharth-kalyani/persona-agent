@@ -44,7 +44,7 @@ from vanimo.edits.diff import REWRITE_SIMILARITY, Comparison, compare, similarit
 from vanimo.learning.backfill import controls_version
 from vanimo.logs import get_logger
 from vanimo.redaction.parse import strip_quotes, strip_signature_noise
-from vanimo.redaction.pipeline import RedactionBlocked
+from vanimo.redaction.pipeline import BackstopUnavailable, RedactionBlocked
 from vanimo.sources.base import Address, SentHeader, WorkspaceSource
 from vanimo.state import AppState
 
@@ -85,10 +85,12 @@ async def _context(state: AppState, user: UserRef, source: WorkspaceSource, self
     }
 
 
-def _to_l1(ctx: dict[str, Any], body: str, people: list[Address]) -> str | None:
+async def _to_l1(ctx: dict[str, Any], body: str, people: list[Address]) -> str | None:
     redactor = build_redactor(ctx["matcher"], ctx["hasher"], ctx["directory"], people, ctx["known_people"])
     try:
-        return redactor.redact(strip_signature_noise(strip_quotes(body)[0])[:8000]).text
+        return (await redactor.redact(strip_signature_noise(strip_quotes(body)[0])[:8000])).text
+    except BackstopUnavailable:
+        raise
     except RedactionBlocked:
         return None
 
@@ -351,7 +353,7 @@ async def _sync_chats(
             ]  # fmt: skip
             if not open_drafts:
                 continue
-            sent_l1 = _chat_l1(ctx, m.text, list(chat.members))
+            sent_l1 = await _chat_l1(ctx, m.text, list(chat.members))
             if sent_l1 is None:
                 continue
             # The latest draft this message resembles; drafts made before it in this chat are superseded.
@@ -389,10 +391,12 @@ async def _sync_chats(
     return "ok"
 
 
-def _chat_l1(ctx: dict[str, Any], body: str, people: list[Address]) -> str | None:
+async def _chat_l1(ctx: dict[str, Any], body: str, people: list[Address]) -> str | None:
     redactor = build_redactor(ctx["matcher"], ctx["hasher"], ctx["directory"], people, ctx["known_people"])
     try:
-        return redactor.redact(strip_signature_noise(body)[:8000]).text
+        return (await redactor.redact(strip_signature_noise(body)[:8000])).text
+    except BackstopUnavailable:
+        raise
     except RedactionBlocked:
         return None
 
@@ -412,7 +416,7 @@ async def _try(
 ) -> str:
     if body is None:
         return "skip"
-    sent_l1 = _to_l1(ctx, body, list(h.participants))
+    sent_l1 = await _to_l1(ctx, body, list(h.participants))
     if sent_l1 is None:
         return "skip"
     draft_l1 = state.vault.decrypt_user(user.tenant_id, user.user_id, d.text_enc, "draft_text") or ""
@@ -452,7 +456,7 @@ async def record_sent(
         raise DraftError("already_matched", 409)
     ctx = await _context(state, user, source, self_email)
     people = [Address(p.email or "", p.full_name) for p in ctx["known_people"] if p.email]
-    sent_l1 = _chat_l1(ctx, sent_text, people) if d.channel == "chat" else _to_l1(ctx, sent_text, people)
+    sent_l1 = await (_chat_l1(ctx, sent_text, people) if d.channel == "chat" else _to_l1(ctx, sent_text, people))
     if sent_l1 is None:
         raise DraftError("text_blocked", 422)
     draft_l1 = state.vault.decrypt_user(user.tenant_id, user.user_id, d.text_enc, "draft_text") or ""

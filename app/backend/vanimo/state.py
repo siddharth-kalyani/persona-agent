@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from vanimo.auth.entra import JwksCache, TokenValidator
 from vanimo.auth.local import LoginThrottle
 from vanimo.auth.obo import OboClient
+from vanimo.backstops import Backstops
+from vanimo.backstops import build as build_backstops
+from vanimo.backstops.guardrail import GuardrailBlocked
 from vanimo.config import Settings
 from vanimo.db.session import make_engine
 from vanimo.drafting.context import DirectoryCache, DraftThrottle
@@ -42,13 +45,29 @@ class AppState:
         return task
 
     _llm: LlmClient | None = field(default=None, repr=False)
+    _backstops: Backstops | None = field(default=None, repr=False)
+
+    @property
+    def backstops(self) -> Backstops:
+        """Comprehend, Guardrails and Macie (or their offline stand-ins), from settings (F11)."""
+        if self._backstops is None:
+            self._backstops = build_backstops(self.settings)
+        return self._backstops
 
     @property
     def llm(self) -> LlmClient:
         # Created on first use so local runs without AWS credentials still start.
         if self._llm is None:
-            self._llm = LlmClient(self.settings, self.router)
+            self._llm = LlmClient(
+                self.settings, self.router, self.backstops.guardrail, on_block=self._guardrail_blocked
+            )
         return self._llm
+
+    async def _guardrail_blocked(self, blocked: GuardrailBlocked) -> None:
+        from vanimo.backstops import events
+
+        stage = "model_input" if blocked.source == "INPUT" else "model_output"
+        await events.record(self.engine, source="guardrail", stage=stage, outcome="blocked", kinds=blocked.kinds)
 
     @property
     def vault(self) -> Vault:

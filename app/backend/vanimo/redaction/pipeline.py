@@ -4,6 +4,9 @@
     S2.5 never-send words → ⟦NS_…⟧ placeholders (user's matcher)          fail-closed
     S4   Tier R (regulated identifiers, secrets) → typed slots "[PAN]"     fail-closed
     S5   names from the M365 header/directory gazetteer → person tokens
+    S5   PII backstop (F11): Amazon Comprehend (or its offline stand-in) on the text so far; names it
+         finds → person tokens, contact details → tokens, identifiers and addresses → slots
+                                                                            fail-closed
     S8   names, email addresses, phone numbers → reversible tokens
     S9   verify: detectors re-run on the output; any Tier R, never-send, address, phone or
          gazetteer-name residue blocks the item                           fail-closed
@@ -15,8 +18,10 @@ the token (`⟦PERSON_3fa2c1d0⟧` first name, `.full`, `.last`) and honorifics 
 The token → value map is returned to the caller to store encrypted for the owner's display.
 
 The NER ensemble (Presidio/GLiNER/IndicNER, S5) and the contextual Tier C/S classifier (S6)
-are not in the MVP: the gazetteer of known participants is the name source. Names that never
-appear in a header or the directory stay in L1 — a documented M2 gap (app/README.md).
+are not in the MVP: the gazetteer of known participants is the main name source, and the S5
+backstop (Comprehend, F11) catches names that never appear in a header or the directory. The
+backstop sees only text our own stages already masked. If it can't be reached, the item is
+blocked with `BackstopUnavailable` (a `RedactionBlocked`): jobs stop and retry rather than skip.
 """
 
 from __future__ import annotations
@@ -26,12 +31,23 @@ import unicodedata
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
+from vanimo.backstops.pii import ACTIONS, Finding, PiiDetector, PiiUnavailable, wanted
 from vanimo.controls.neversend import Matcher
 from vanimo.redaction import detectors
 from vanimo.redaction.marks import L1_MARKS, SLOT, TOKEN
 from vanimo.redaction.parse import clean
 
-__all__ = ["SLOT", "TOKEN", "Gazetteer", "Person", "Redacted", "RedactionBlocked", "Redactor", "rehydrate"]
+__all__ = [
+    "SLOT",
+    "TOKEN",
+    "BackstopUnavailable",
+    "Gazetteer",
+    "Person",
+    "Redacted",
+    "RedactionBlocked",
+    "Redactor",
+    "rehydrate",
+]
 _HONORIFIC_TAIL = ("ji", "jee", "bhai", "sahab", "saheb")
 _NAME_STOP = frozenset({"team", "all", "sir", "madam", "dear", "hi", "hello", "thanks", "regards", "best", "the"})
 # Titles in directory display names ("Dr. Anil Kumar", "Shri R. K. Sharma"): never a name form.
@@ -53,6 +69,16 @@ class RedactionBlocked(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class BackstopUnavailable(RedactionBlocked):
+    """The S5 backstop couldn't be reached. The item is blocked like any other; a job reading many
+    items stops instead of skipping them (it retries later, nothing is lost or marked done)."""
+
+    code = "pii_backstop_unavailable"  # a failed run's error code
+
+    def __init__(self) -> None:
+        super().__init__("pii_backstop_unavailable")
 
 
 @dataclass(frozen=True)
@@ -110,10 +136,25 @@ def _name_parts(full_name: str) -> list[str]:
 class Redactor:
     """One user's redactor: their never-send matcher, gazetteer and token hasher."""
 
-    def __init__(self, matcher: Matcher, gazetteer: Gazetteer, hasher: Hasher) -> None:
+    def __init__(
+        self,
+        matcher: Matcher,
+        gazetteer: Gazetteer,
+        hasher: Hasher,
+        *,
+        pii: PiiDetector | None = None,
+        pii_scope: str | None = None,
+    ) -> None:
         self.matcher = matcher
         self.hasher = hasher
         self._names = self._name_patterns(gazetteer)
+        if pii is None:  # the process's backstop (vanimo.backstops): never skipped by omission
+            from vanimo.backstops import current
+
+            b = current()
+            pii, pii_scope = b.pii, pii_scope or b.comprehend_scope
+        self.pii = pii
+        self.pii_scope = pii_scope or "all"
 
     # --- tokens -------------------------------------------------------------------------------
     def _token(self, kind: str, value: str) -> str:
@@ -178,9 +219,34 @@ class Redactor:
         return out
 
     # --- pipeline -----------------------------------------------------------------------------
-    def redact(self, text: str | None, *, hidden_seen: bool = False) -> Redacted:
+    async def redact(self, text: str | None, *, hidden_seen: bool = False) -> Redacted:
         if not text:
             return Redacted("", {}, {})
+        body, tokens, counts, had_tags = self._local(text)
+        suspicious = had_tags or hidden_seen
+
+        # S5 backstop: a second detector on what our own stages left (fail-closed).
+        if self._wants_backstop(counts, suspicious):
+            try:
+                findings = await self.pii.detect(body)
+            except PiiUnavailable:
+                raise BackstopUnavailable() from None
+            except Exception as exc:
+                raise BackstopUnavailable() from exc
+            body = self._apply_findings(body, findings, tokens, counts)
+
+        self.verify(body)
+        return Redacted(body, tokens, counts, suspicious=suspicious)
+
+    def _wants_backstop(self, counts: dict[str, int], suspicious: bool) -> bool:
+        """ "all": every item. "flagged" (the production rule, architecture §7.2 S5): only items our
+        detectors found regulated identifiers or hidden content in."""
+        if self.pii_scope == "all":
+            return True
+        return suspicious or any(k not in ("email", "phone", "name", "never_send") for k in counts)
+
+    def _local(self, text: str) -> tuple[str, dict[str, tuple[str, str]], dict[str, int], bool]:
+        """S2-S5 (gazetteer) in our own code: (text so far, tokens, counts, tag characters seen)."""
         counts: dict[str, int] = {}
         tokens: dict[str, tuple[str, str]] = {}
 
@@ -229,9 +295,48 @@ class Redactor:
             if n:
                 tokens[tok] = ("person", surface)
                 counts["name"] = counts.get("name", 0) + n
+        return body, tokens, counts, had_tags
 
-        self.verify(body)
-        return Redacted(body, tokens, counts, suspicious=had_tags or hidden_seen)
+    def _apply_findings(
+        self, body: str, findings: Iterable[Finding], tokens: dict[str, tuple[str, str]], counts: dict[str, int]
+    ) -> str:
+        """Backstop findings (offsets into `body`) masked like our own: never inside a mark, never
+        overlapping each other (the longest finding at a position wins)."""
+        marks = [(m.start(), m.end()) for m in L1_MARKS.finditer(body)]
+        pieces: list[tuple[int, int, str, str]] = []  # (start, end, replacement, count kind)
+        for f in sorted((f for f in findings if wanted(f)), key=lambda f: (f.start, f.start - f.end)):
+            if not 0 <= f.start < f.end <= len(body):
+                continue
+            what, label = ACTIONS[f.type]
+            for s, e in _outside(f.start, f.end, marks):
+                s, e = _trim(body, s, e)
+                if what == "person":
+                    e = s + len(_without_honorific(body[s:e]))
+                if e <= s or not re.search(r"\w", body[s:e]) or any(ps < e and s < pe for ps, pe, _, _ in pieces):
+                    continue
+                value = body[s:e]
+                if what == "slot":
+                    repl = f"[{label}]"
+                elif what == "person":
+                    parts = _name_parts(value) or value.split()
+                    repl = self.person_base(Person(" ".join(parts))) + (".full⟧" if len(parts) >= 2 else "⟧")
+                    tokens[repl] = ("person", value)
+                else:
+                    key = value.lower() if what == "email" else (re.sub(r"\D", "", value)[-10:] or _fold(value))
+                    repl = f"⟦{what.upper()}_{self._token(what, key)}⟧"
+                    tokens[repl] = (what, value)
+                pieces.append((s, e, repl, label))
+        if not pieces:
+            return body
+        out: list[str] = []
+        pos = 0
+        for s, e, repl, label in sorted(pieces):
+            out += [body[pos:s], repl]
+            pos = e
+            counts[label] = counts.get(label, 0) + 1
+        out.append(body[pos:])
+        counts["s5_backstop"] = counts.get("s5_backstop", 0) + len(pieces)
+        return "".join(out)
 
     def verify(self, l1: str) -> None:
         """S9: the output must hold no Tier R value, never-send word, address, phone or known name."""
@@ -249,8 +354,38 @@ class Redactor:
         if names:
             raise RedactionBlocked("residue_name")
 
-    def redact_many(self, texts: Iterable[str | None]) -> list[Redacted]:
-        return [self.redact(t) for t in texts]
+    async def redact_many(self, texts: Iterable[str | None]) -> list[Redacted]:
+        return [await self.redact(t) for t in texts]
+
+
+def _outside(start: int, end: int, marks: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The parts of [start, end) not covered by a mark."""
+    out: list[tuple[int, int]] = []
+    pos = start
+    for ms, me in marks:
+        if me <= pos or ms >= end:
+            continue
+        if ms > pos:
+            out.append((pos, ms))
+        pos = max(pos, me)
+    if pos < end:
+        out.append((pos, end))
+    return out
+
+
+def _trim(text: str, start: int, end: int) -> tuple[int, int]:
+    while start < end and (text[start].isspace() or text[start] in ",;:"):
+        start += 1
+    while end > start and (text[end - 1].isspace() or text[end - 1] in ",;:"):
+        end -= 1
+    return start, end
+
+
+def _without_honorific(name: str) -> str:
+    """ "Meera-ji" → "Meera": an honorific stays outside a person token, as for gazetteer names."""
+    tail = "|".join(_HONORIFIC_TAIL)
+    m = re.fullmatch(rf"(.*\w)[\s\-](?:{tail})", name, re.I)
+    return m.group(1) if m else name
 
 
 def _inside_token(text: str, start: int, end: int) -> bool:

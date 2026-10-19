@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from vanimo.backstops.guardrail import GuardrailUnavailable
 from vanimo.commitments.extract import Extractor, Found, looks_done
 from vanimo.controls.neversend import Matcher
 from vanimo.controls.store import load_matcher, lock_user_controls
@@ -102,6 +103,8 @@ async def find(
     for i, u in enumerate(todo, 1):
         try:
             found = await extractor.find(u.text, made_at=u.sent_at, tz=tz)
+        except GuardrailUnavailable:
+            raise  # stop before anything is saved or marked scanned; the next scan reads these again
         except Exception as exc:
             counts["extract_failed"] = counts.get("extract_failed", 0) + 1
             log.warning("commitments.extract_failed", error_type=type(exc).__name__)

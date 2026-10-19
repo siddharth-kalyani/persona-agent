@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
+from vanimo.backstops.guardrail import GuardrailUnavailable
 from vanimo.commitments.extract import find_due
 from vanimo.llm.router import LlmClient, ModelRouter
 from vanimo.logs import get_logger
@@ -117,6 +118,8 @@ class BedrockAtomExtractor:
                     max_tokens=2000,
                 )
                 found = parse(answer.text, safe, people, started_at=started_at, tz=tz)
+            except GuardrailUnavailable:
+                raise  # the meeting is read again later, not stored with stand-in notes
             except Exception as exc:
                 log.warning("memory.model_failed", error_type=type(exc).__name__)
                 found = None

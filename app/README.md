@@ -535,8 +535,7 @@ deployment refuses the stand-ins (settings validation).
   An outage (`503 model_check_unavailable`) stops a promise scan or meeting read before anything is saved, so it is
   retried; a scan or sync stopped by an outage doesn't use up its once-a-minute slot. ~~Bare 12-digit numbers are
   left to S5~~ *(F12: Aadhaar is detected here too, bare 12-digit numbers included; an order or tracking number of
-  that shape blocks the call — a regex can't check the checksum)*. Names are reported by the guardrail and block
-  only for users who chose to replace names (F12).
+  that shape blocks the call — a regex can't check the checksum)*.
 - **Macie** scans `l1/<tenant>/<user>.jsonl`: one line per stored L1 field (`{"t","f","text"}`: no row ID or other
   number of ours, so nothing Vanimo writes can look like an Aadhaar number), never the token values, Sources names
   or never-send words. Its Aadhaar identifier matches bare 12-digit numbers (no keyword needed). Written by the sweeper every `VANIMO_SNAPSHOT_EVERY_HOURS` (24), under the same per-user lock as purge jobs,
@@ -550,14 +549,10 @@ deployment refuses the stand-ins (settings validation).
   still work. Home shows a banner. The admin removes the flagged rows (**Remove flagged items**; drafts excepted —
   their owner deletes what Vanimo learned) without seeing them, then resumes.
 
-**Names are each user's choice (F12, 2026-10-19).** Learning page → **Replace people's names with placeholders**,
-off for a new user. Off: names stay in L1 as written and reach the model; no gazetteer names, no Comprehend NAME
-findings, no name residue check. On: as before F12. Identifiers (Aadhaar included), card and bank details,
-addresses, secrets, email addresses, phone numbers and never-send words are masked either way. Greetings and
-sign-offs still use placeholders internally, filled back in before you see a draft. Each learning run records the
-choice it learned with (`counts.names_redacted`); after a change the page asks you to learn again. Stored in
-`users.redact_names` (migration 0015); the Bedrock guardrail only reports names (`NAME` action NONE, response scope
-FULL) and the app blocks on a reported name when the user's choice is on.
+**Names are always replaced** (F12's opt-in switch was reverted the same day). Tone per person doesn't need
+names: the relationship comes from email addresses and the directory, past messages to the same people are
+matched by keyed hashes of their addresses, and a person's token is the same everywhere, so greetings are
+learned as "Hi {first name}" and filled in for whoever you write to.
 
 **Admin → Redaction checks** (`/api/admin/backstops`): which service runs (or its stand-in), the pause, what was
 caught (types, counts, severity, internal user ID — never values), **Check the services** (made-up PII only),

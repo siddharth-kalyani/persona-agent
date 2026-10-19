@@ -213,11 +213,8 @@ class _Pattern:
 class Matcher:
     """Compiled from a user's terms; hold in memory only, never log."""
 
-    def __init__(self, terms: list[Term], *, redact_names: bool = True) -> None:
+    def __init__(self, terms: list[Term]) -> None:
         self.terms = terms
-        # The user's choice (F12) for the redactor built with this matcher: replace people's names with
-        # tokens, or leave them. Matchers built in code default to replacing; users' choice is off by default.
-        self.redact_names = redact_names
         self._patterns: list[_Pattern] = []
         for term in terms:
             forms = variants(term.text, term.kind)

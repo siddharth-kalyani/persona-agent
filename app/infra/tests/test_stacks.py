@@ -255,10 +255,7 @@ def test_guardrail_blocks_pii_and_indian_identifiers(backstops: Template, templa
     policy = g["SensitiveInformationPolicyConfig"]
     assert {e["Type"] for e in policy["PiiEntitiesConfig"]} == set(GUARDRAIL_PII_TYPES)
     assert {"NAME", "ADDRESS", "EMAIL", "PHONE"} <= set(GUARDRAIL_PII_TYPES)
-    actions = {e["Type"]: e["Action"] for e in policy["PiiEntitiesConfig"]}
-    assert actions.pop("NAME") == "NONE"  # reported only: the app blocks per user's name choice (F12)
-    assert all(a == "BLOCK" for a in actions.values())
-    assert all(r["Action"] == "BLOCK" for r in policy["RegexesConfig"])
+    assert all(e["Action"] == "BLOCK" for e in policy["PiiEntitiesConfig"] + policy["RegexesConfig"])
     assert {r["Name"] for r in policy["RegexesConfig"]} == set(GUARDRAIL_REGEXES)
     assert "india_aadhaar" in GUARDRAIL_REGEXES  # Aadhaar detected everywhere (founder, 2026-10-19)
     for r in policy["RegexesConfig"]:
@@ -353,4 +350,4 @@ def test_guardrail_policy_digest_follows_every_setting() -> None:
     block, detect = guardrail_policy("block"), guardrail_policy("detect")
     assert guardrail_config_digest(block) != guardrail_config_digest(detect)
     assert {e["type"] for e in detect["pii"] if e["action"] == "NONE"} >= {"NAME", "ADDRESS"}
-    assert {e["type"] for e in block["pii"] if e["action"] != "BLOCK"} == {"NAME"}
+    assert all(e["action"] == "BLOCK" for e in block["pii"])

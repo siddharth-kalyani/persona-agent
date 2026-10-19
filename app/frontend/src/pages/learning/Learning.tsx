@@ -117,20 +117,6 @@ export function Learning() {
     }
   };
 
-  const setNames = async (on: boolean) => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      setStatus(await api.setNameRedaction(on));
-      setNotice(on ? "Names will be replaced with placeholders." : "Names will be kept as written.");
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const remove = async () => {
     setConfirm(false);
     setBusy(true);
@@ -186,29 +172,11 @@ export function Learning() {
           description={
             <Caption1>
               Only your own sent emails and chat messages from sources you allowed. Each one is redacted before it is
-              stored: ID numbers (Aadhaar, PAN and others), card and bank details, addresses and secrets are removed for
-              good, email addresses and phone numbers become placeholders, and so do your never-send words.
-              {status.redactNames ? " Names become placeholders too." : " Names are kept as written (your choice below)."}
+              stored: ID numbers, card and bank details and secrets are removed for good, names become tokens, and your
+              never-send words become placeholders.
             </Caption1>
           }
         />
-        <Switch
-          checked={!!status.redactNames}
-          disabled={busy}
-          onChange={(_, d) => void setNames(d.checked)}
-          label="Replace people's names with placeholders"
-        />
-        <Caption1 className={styles.muted}>
-          On: names (yours and everyone else's) are swapped for placeholders before anything is stored or sent to the AI,
-          and shown back only to you. Off: names stay as written, so the AI sees them. Off until you turn it on.
-        </Caption1>
-        {status.namesOutOfDate && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              What Vanimo already learned was learned with the other setting. Learn again so it follows your choice.
-            </MessageBarBody>
-          </MessageBar>
-        )}
         <div className={styles.row}>
           <Button appearance="primary" disabled={gated || busy || run?.status === "running"} onClick={() => void start()}>
             {run?.status === "running" ? "Learning…" : run ? "Learn again" : "Start learning"}

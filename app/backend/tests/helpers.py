@@ -14,16 +14,7 @@ from vanimo.state import AppState
 PASSWORD = "a long enough test phrase"
 
 
-async def _user(
-    client: httpx.AsyncClient,
-    database: dict[str, str],
-    settings: Settings,
-    role: str = "user",
-    *,
-    redact_names: bool = True,
-) -> dict:
-    """A password user. `redact_names`: their choice on the Learning page (F12; off for a new user). The
-    tests written before F12 check name redaction, so their users choose it."""
+async def _user(client: httpx.AsyncClient, database: dict[str, str], settings: Settings, role: str = "user") -> dict:
     email = f"user.{uuid.uuid4().hex[:8]}@example.com"
     otp = upsert_local_user(database["owner"], email, role, reset=False, settings=settings)
     token = (await client.post("/api/auth/login", json={"email": email, "password": otp})).json()["token"]
@@ -32,11 +23,7 @@ async def _user(
         headers={"Authorization": f"Bearer {token}"},
         json={"currentPassword": otp, "newPassword": PASSWORD},
     )
-    h = {"Authorization": f"Bearer {changed.json()['token']}"}
-    if redact_names:
-        resp = await client.put("/api/learning/names", json={"redactNames": True}, headers=h)
-        assert resp.status_code == 200, resp.text
-    return h
+    return {"Authorization": f"Bearer {changed.json()['token']}"}
 
 
 async def _settle(state: AppState) -> None:

@@ -170,7 +170,6 @@ async def run_learning(
             log.warning("learning.commitments_failed", error_type=type(exc).__name__)
             found = None
         counts = dict(collected.counts) | {"stored": len(collected.items), "style_cards": cards}
-        counts["names_redacted"] = int(matcher.redact_names)  # F12: which choice this run learned with
         counts["commitments"] = found.stored if found else 0
         counts |= {f"eval_{k}": v for k, v in metrics.items() if isinstance(v, int | float)}
         await _finish(engine, ref, run_id, "done", counts, version)

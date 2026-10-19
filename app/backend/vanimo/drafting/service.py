@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from vanimo import audit
 from vanimo.backstops.guardrail import GuardrailBlocked, GuardrailUnavailable
 from vanimo.controls.neversend import Matcher, Term, render_removed
-from vanimo.controls.store import hasher_for, load_engine, load_redact_names, load_terms, lock_user_controls
+from vanimo.controls.store import hasher_for, load_engine, load_terms, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.drafting import checks as chk
 from vanimo.drafting.checks import Check, ClientAccount
@@ -173,16 +173,12 @@ async def create_draft(
     async with user_tx(state.engine, user) as conn:
         ex_engine = await load_engine(conn, state.vault, user, self_email=self_email, extra_org_domains=sample_domains)
         terms = await load_terms(conn, state.vault, user)
-        names = await load_redact_names(conn)
         used = await premium_used(conn)
         known, known_people = await _known(conn, state, user)
         accounts = await _client_accounts(conn, state, user)
         version = await controls_version(conn)
         meeting = await _chat_meeting(conn, hasher, req.conversation_id) if req.channel == "chat" else None
-    matcher = Matcher(
-        [Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms],
-        redact_names=names,
-    )
+    matcher = Matcher([Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms])
     blocked_matcher = Matcher(
         [
             Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"])

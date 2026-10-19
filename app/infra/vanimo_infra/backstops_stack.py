@@ -2,8 +2,7 @@
 
 * Bedrock Guardrail: sensitive-information filter on every model input and output. Built-in PII types
   for names, addresses, contact details and US/UK/CA identifiers; regexes for the Indian identifiers
-  Guardrails has no types for. Every finding BLOCKs (the app records it), except names, which it only
-  reports: names are each user's choice (F12) and the app decides; `-c guardrail_noisy=detect`
+  Guardrails has no types for. Every finding BLOCKs (the app records it); `-c guardrail_noisy=detect`
   switches the context-dependent types to detect-only while false positives are measured. The
   published version lives in the app stack (`guardrail_version`), so a policy change never has to
   replace a value another stack imports.
@@ -49,10 +48,7 @@ GUARDRAIL_PII_TYPES = (
     "VEHICLE_IDENTIFICATION_NUMBER",
 )  # fmt: skip
 # Types judged from context by a model (most prone to false positives in ordinary business text).
-NOISY_TYPES = ("ADDRESS", "PASSWORD", "DRIVER_ID", "LICENSE_PLATE", "US_PASSPORT_NUMBER")
-# Names are each user's choice (F12): the guardrail only reports them, and the app blocks on a reported
-# name for users who chose to replace names (`vanimo.backstops.guardrail.BLOCK_NAMES`).
-APP_DECIDES = ("NAME",)
+NOISY_TYPES = ("NAME", "ADDRESS", "PASSWORD", "DRIVER_ID", "LICENSE_PLATE", "US_PASSPORT_NUMBER")
 
 # Indian identifiers. No lookaround (Guardrails doesn't support it), no capturing groups (Macie doesn't),
 # ≤ 500 characters each.
@@ -81,7 +77,7 @@ def guardrail_policy(noisy: str = "block") -> dict:
     published version, so any change to it (types, actions, regexes, messages) publishes a new one."""
 
     def action(t: str) -> str:
-        return "NONE" if t in APP_DECIDES or (noisy == "detect" and t in NOISY_TYPES) else "BLOCK"
+        return "NONE" if noisy == "detect" and t in NOISY_TYPES else "BLOCK"
 
     return {
         "pii": [{"type": t, "action": action(t)} for t in GUARDRAIL_PII_TYPES],

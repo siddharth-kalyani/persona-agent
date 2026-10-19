@@ -36,7 +36,7 @@ from typing import Any
 from sqlalchemy import text
 
 from vanimo.controls.neversend import Matcher, Term
-from vanimo.controls.store import hasher_for, load_engine, load_redact_names, load_terms, lock_user_controls
+from vanimo.controls.store import hasher_for, load_engine, load_terms, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.drafting.context import DraftError, build_redactor
 from vanimo.edits import rules
@@ -71,14 +71,10 @@ async def _context(state: AppState, user: UserRef, source: WorkspaceSource, self
             conn, state.vault, user, self_email=self_email, extra_org_domains=_sample_domains(source)
         )
         terms = await load_terms(conn, state.vault, user)
-        names = await load_redact_names(conn)
         _, known_people = await _known(conn, state, user)
         version = await controls_version(conn)
     directory = await state.directory_cache.get((str(user.user_id), source.kind), source, self_email)
-    matcher = Matcher(
-        [Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms],
-        redact_names=names,
-    )
+    matcher = Matcher([Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms])
     return {
         "engine": engine,
         "matcher": matcher,

@@ -50,26 +50,10 @@ async def load_terms(conn: AsyncConnection, vault: Vault, ref: UserRef) -> list[
     return out
 
 
-async def load_redact_names(conn: AsyncConnection) -> bool:
-    """The user's choice (F12, Learning page): replace people's names, or leave them (the default). Also
-    tells this request's model calls whether a name found by the guardrail must block (it must only
-    for users who chose to replace names)."""
-    from vanimo.backstops.guardrail import BLOCK_NAMES
-
-    on = bool((await conn.execute(text("select redact_names from vanimo.users"))).scalar_one_or_none())
-    BLOCK_NAMES.set(on)
-    return on
-
-
 async def load_matcher(conn: AsyncConnection, vault: Vault, ref: UserRef) -> Matcher:
-    """The user's never-send matcher, carrying their name choice. Decrypted terms live only inside the
-    returned object."""
+    """The user's never-send matcher. Decrypted terms live only inside the returned object."""
     terms = await load_terms(conn, vault, ref)
-    names = await load_redact_names(conn)
-    return Matcher(
-        [Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms],
-        redact_names=names,
-    )
+    return Matcher([Term(t["term_id"], t["text"], t["kind"], tuple(t["variants"]), t["folds"]) for t in terms])
 
 
 async def lock_user_controls(conn: AsyncConnection, ref: UserRef) -> None:

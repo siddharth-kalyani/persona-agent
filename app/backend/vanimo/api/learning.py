@@ -22,7 +22,7 @@ from vanimo import audit
 from vanimo.api.deps import CurrentPrincipal, CurrentUser, State, UserSource
 from vanimo.commitments.scan import extractor_for
 from vanimo.controls.jobs import run_job
-from vanimo.controls.store import add_purge_job, hasher_for, load_engine, load_redact_names
+from vanimo.controls.store import add_purge_job, hasher_for, load_engine
 from vanimo.db.session import UserRef, user_tx
 from vanimo.gates import onboarding_state, require_pipeline_active
 from vanimo.learning import backfill
@@ -60,14 +60,6 @@ class LearningOut(BaseModel):
     run: RunOut | None
     stored: dict[str, int]
     styleCards: int
-    # F12: replace people's names with placeholders before anything is learned or sent to the AI (off by
-    # default). `namesOutOfDate`: what's stored was learned with the other choice; run learning again.
-    redactNames: bool = False
-    namesOutOfDate: bool = False
-
-
-class NamesIn(BaseModel):
-    redactNames: bool
 
 
 async def _learning(state: AppState, user: UserRef, kind: str) -> LearningOut:
@@ -91,16 +83,6 @@ async def _learning(state: AppState, user: UserRef, kind: str) -> LearningOut:
         cards = (
             await conn.execute(text("select count(*) from vanimo.style_cards where source_kind = :k"), {"k": kind})
         ).scalar_one()
-        names = await load_redact_names(conn)
-        learned_with = (
-            await conn.execute(
-                text(
-                    "select (counts ->> 'names_redacted')::int from vanimo.learning_runs "
-                    "where source_kind = :k and status = 'done' order by started_at desc limit 1"
-                ),
-                {"k": kind},
-            )
-        ).scalar_one_or_none()
     counts = {r.channel: r.n for r in stored}
     return LearningOut(
         onboardingState=onboarding,
@@ -118,26 +100,7 @@ async def _learning(state: AppState, user: UserRef, kind: str) -> LearningOut:
         else None,
         stored={"email": counts.get("email", 0), "chat": counts.get("chat", 0), "total": sum(counts.values())},
         styleCards=cards,
-        redactNames=names,
-        namesOutOfDate=bool(counts) and learned_with is not None and bool(learned_with) != names,
     )
-
-
-@router.put("/learning/names", response_model=LearningOut)
-async def set_name_redaction(
-    body: NamesIn, user: CurrentUser, source: UserSource, state: State, request: Request
-) -> LearningOut:
-    """Your choice (F12): names replaced by placeholders, or left as they are. Applies to everything read
-    from now on; run learning again so what's already learned follows it too."""
-    async with user_tx(state.engine, user) as conn:
-        await conn.execute(text("update vanimo.users set redact_names = :n"), {"n": body.redactNames})
-        await audit.record(
-            conn,
-            user,
-            "learning.names_redaction_on" if body.redactNames else "learning.names_redaction_off",
-            request_id=request.state.request_id,
-        )
-    return await _learning(state, user, source.kind)
 
 
 @router.get("/learning", response_model=LearningOut)

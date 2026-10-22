@@ -1,0 +1,5 @@
+{
+  "name": "vanimo-in-dev-upi",
+  "regex": "\\b[A-Za-z0-9._-]{2,64}@(?:okaxis|okhdfcbank|okicici|oksbi|ybl|ibl|axl|apl|paytm|upi|ptyes|ptsbi|ptaxis|pthdfc)\\b",
+  "description": "Vanimo L1 backstop: UPI payment address"
+}

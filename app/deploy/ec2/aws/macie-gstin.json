@@ -1,0 +1,5 @@
+{
+  "name": "vanimo-in-dev-gstin",
+  "regex": "\\b[0-3][0-9][A-Za-z]{5}[0-9]{4}[A-Za-z][1-9A-Za-z][Zz][0-9A-Za-z]\\b",
+  "description": "Vanimo L1 backstop: GSTIN"
+}

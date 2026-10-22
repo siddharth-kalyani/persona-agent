@@ -1,0 +1,5 @@
+{
+  "name": "vanimo-in-dev-pan",
+  "regex": "\\b[A-Za-z]{3}[ABCFGHJLPTabcfghjlpt][A-Za-z][0-9]{4}[A-Za-z]\\b",
+  "description": "Vanimo L1 backstop: PAN (income-tax ID)"
+}

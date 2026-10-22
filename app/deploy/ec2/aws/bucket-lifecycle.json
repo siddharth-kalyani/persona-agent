@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-unrefreshed-snapshots",
+      "Status": "Enabled",
+      "Filter": {},
+      "Expiration": {
+        "Days": 3
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}

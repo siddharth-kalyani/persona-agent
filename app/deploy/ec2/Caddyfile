@@ -1,0 +1,32 @@
+# Vanimo web server on the EC2 instance (F11). Plain HTTP on 127.0.0.1:8080 only: the founder reaches it
+# through an SSM port-forwarding tunnel (http://localhost:8080 on the laptop), so nothing is public and
+# no certificate is needed. Security headers match the CloudFront ones in app/infra/vanimo_infra/app_stack.py.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		root * /srv
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		header X-Frame-Options DENY
+		header /config.json Cache-Control no-store
+		# Client-side routes (no file extension) serve the app; files are served as they are, or 404.
+		@route not path_regexp \.[A-Za-z0-9]+$
+		rewrite @route /index.html
+		file_server
+	}
+}

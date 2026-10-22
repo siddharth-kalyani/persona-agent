@@ -1,0 +1,5 @@
+{
+  "name": "vanimo-in-dev-ifsc",
+  "regex": "\\b[A-Za-z]{4}0[A-Za-z0-9]{6}\\b",
+  "description": "Vanimo L1 backstop: IFSC bank branch code"
+}

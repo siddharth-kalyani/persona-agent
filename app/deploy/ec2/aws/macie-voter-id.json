@@ -1,0 +1,11 @@
+{
+  "name": "vanimo-in-dev-voter-id",
+  "regex": "\\b[A-Za-z]{3}[0-9]{7}\\b",
+  "description": "Vanimo L1 backstop: Voter ID (EPIC), next to a keyword",
+  "keywords": [
+    "voter",
+    "epic",
+    "electoral"
+  ],
+  "maximumMatchDistance": 50
+}

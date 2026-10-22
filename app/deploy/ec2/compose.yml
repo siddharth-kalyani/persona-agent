@@ -1,0 +1,91 @@
+# Vanimo on one EC2 instance (F11 low-cost MVP; set up by hand, F13). Synthetic data only: password
+# sign-in and the sample workspace for everyone, no Entra or Graph.
+#
+#   cd app/deploy/ec2 && sudo docker compose up -d --build
+#
+# Secrets and AWS resource IDs come from ./.env (copy .env.example; owned by root, chmod 600). Nothing
+# listens on a public port: the web app is on 127.0.0.1:8080, reached through an SSM tunnel. AWS access
+# comes from the instance role (IMDSv2, hop limit 2 so containers can reach it), never stored keys.
+name: vanimo
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+x-db-owner: &db-owner
+  VANIMO_DB_ADMIN_URL: postgresql://postgres:${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env}@postgres:5432/postgres
+  VANIMO_DB_OWNER_PASSWORD: ${DB_OWNER_PASSWORD:?set DB_OWNER_PASSWORD in .env}
+  VANIMO_DB_APP_PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}
+  VANIMO_DB_OWNER_URL: postgresql+psycopg://vanimo_owner:${DB_OWNER_PASSWORD}@postgres:5432/vanimo
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_ADMIN_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - vanimo-pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    logging: *logging
+
+  # One-shot on every `up`: create roles + schema (idempotent), then apply migrations. Also where
+  # owner-only tools run, e.g. `sudo docker compose run --rm migrate python -m vanimo.ops.local_user
+  # --email you@example.com --role superadmin` (prints a one-time password to your terminal only).
+  migrate:
+    build: { context: ../../backend }
+    image: vanimo-api
+    command: ["sh", "-c", "python -m vanimo.ops.bootstrap_db && alembic upgrade head"]
+    environment: *db-owner
+    depends_on:
+      postgres: { condition: service_healthy }
+    logging: *logging
+
+  api:
+    build: { context: ../../backend }
+    image: vanimo-api
+    environment:
+      VANIMO_ENV: dev
+      VANIMO_CELL: in
+      VANIMO_DATABASE_URL: postgresql+psycopg://vanimo_app:${DB_APP_PASSWORD}@postgres:5432/vanimo
+      # No Entra (F11): password sign-in, and the sample workspace for every account.
+      VANIMO_ENABLE_PASSWORD_AUTH: "true"
+      VANIMO_SAMPLE_DATA: always
+      VANIMO_WEB_URL: http://localhost:8080
+      VANIMO_CORS_ORIGINS: "[]"  # same origin through Caddy
+      VANIMO_REF_HMAC_KEY: ${VANIMO_REF_HMAC_KEY:?set VANIMO_REF_HMAC_KEY in .env}
+      VANIMO_VAULT_MASTER_KEY: ${VANIMO_VAULT_MASTER_KEY:?set VANIMO_VAULT_MASTER_KEY in .env}
+      # Claude on Bedrock and the three redaction backstops: the real services, never the stand-ins.
+      VANIMO_DRAFTER: bedrock
+      VANIMO_PII_DETECTOR: comprehend
+      VANIMO_GUARDRAIL: bedrock
+      VANIMO_GUARDRAIL_ID: ${VANIMO_GUARDRAIL_ID:?set VANIMO_GUARDRAIL_ID in .env}
+      VANIMO_GUARDRAIL_VERSION: ${VANIMO_GUARDRAIL_VERSION:?set VANIMO_GUARDRAIL_VERSION in .env}
+      VANIMO_MACIE: aws
+      VANIMO_L1_SNAPSHOT_BUCKET: ${VANIMO_L1_SNAPSHOT_BUCKET:?set VANIMO_L1_SNAPSHOT_BUCKET in .env}
+      AWS_DEFAULT_REGION: ap-south-1
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+    logging: *logging
+
+  web:
+    build: { context: ../../frontend }
+    image: vanimo-web
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  vanimo-pg:

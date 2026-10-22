@@ -663,6 +663,10 @@ cd app/backend  && uv run python -m vanimo.evals --dataset evals/datasets/synthe
 
 CI runs the same steps (`.github/workflows/ci.yml`) against Postgres 18 and 17.
 
+## Deploy the synthetic-data MVP on one EC2 instance (F11, by hand: F13)
+
+Step by step in **`app/deploy/ec2/README.md`**: console, CloudShell and the AWS CLI, no CDK, no Entra (password sign-in and the sample workspace for every account). `compose.yml` runs Postgres 18, migrations, the API and Caddy (web app + `/api`) on `127.0.0.1:8080`, reached through an SSM tunnel. The AWS JSON in `app/deploy/ec2/aws/` is generated from the CDK definitions (`cd app/infra && uv run python -m vanimo_infra.manual`); `tests/test_manual.py` fails if it drifts.
+
 ## Deploy the India cell (once AWS access is in place)
 
 1. **AWS credentials.**

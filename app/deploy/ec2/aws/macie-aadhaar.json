@@ -1,0 +1,5 @@
+{
+  "name": "vanimo-in-dev-aadhaar",
+  "regex": "\\b[2-9][0-9]{3}[ -]?[0-9]{4}[ -]?[0-9]{4}\\b",
+  "description": "Vanimo L1 backstop: Aadhaar number (12 digits)"
+}

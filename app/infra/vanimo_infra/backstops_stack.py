@@ -15,7 +15,8 @@
   The scheduled classification job has no CloudFormation resource: `python -m vanimo.ops.macie_job`.
 * One managed policy with exactly what the app needs: Comprehend DetectPiiEntities, ApplyGuardrail on
   this guardrail, put/delete of snapshot objects, and reading Macie findings. The API task role attaches
-  it; the low-cost EC2 deployment (F11) attaches it to its instance role.
+  it; the low-cost EC2 deployment (F11), built by hand (F13), uses the same statements from
+  `app/deploy/ec2/aws/app-policy.json` (`vanimo_infra.manual`).
 
 Comprehend needs no resource. **Before real data:** opt the account out of AWS AI-service content use
 (Organizations "AI services opt-out" policy): Comprehend may otherwise keep content to improve itself.

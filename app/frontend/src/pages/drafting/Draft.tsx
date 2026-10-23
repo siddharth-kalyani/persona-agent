@@ -1,13 +1,12 @@
 /** Draft (M3): reply to a conversation or write a new email in your voice, see the pre-send
  * checks, and copy the result. The same drafting service backs the Outlook add-in; this page is
  * also the persona test bench. M5: Teams chats too (the same service as Teams' "Draft reply").
- * Nothing is ever sent from here. */
+ * Nothing is ever sent from here.
+ *
+ * Layout: conversations on the left (two-line rows), the conversation and composer on the right,
+ * the draft below it in reading type. Ctrl/⌘ Enter drafts from the instruction box. */
 import {
-  Badge,
   Button,
-  Caption1,
-  Card,
-  CardHeader,
   Field,
   Input,
   Link,
@@ -17,11 +16,11 @@ import {
   MessageBarBody,
   Spinner,
   Switch,
-  Text,
   Textarea,
-  Title3,
   tokens,
+  Tooltip,
 } from "@fluentui/react-components";
+import { Chat16Regular, Compose16Regular, Mail16Regular } from "@fluentui/react-icons";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -39,19 +38,73 @@ import {
 } from "../../api/client";
 import { useApi } from "../../api/context";
 import { DraftView, draftErrorText, hasBlock, RateButtons, recheck } from "../../drafting/DraftView";
+import {
+  absoluteTime,
+  EmptyState,
+  isMod,
+  List,
+  ListRow,
+  modKey,
+  Page,
+  PageSkeleton,
+  Pill,
+  relativeTime,
+  Rise,
+  Section,
+  StatusDot,
+  Surface,
+  Time,
+  typo,
+  vt,
+} from "../../ui";
 import { errorText } from "../Home";
 import { newChatLink } from "../TeamsPrefill";
 
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: tokens.spacingVerticalL },
-  layout: { display: "grid", gap: tokens.spacingHorizontalXL, gridTemplateColumns: "minmax(240px, 320px) 1fr", "@media (max-width: 760px)": { gridTemplateColumns: "1fr" } },
-  list: { display: "grid", gap: tokens.spacingVerticalXS, alignContent: "start" },
-  thread: { textAlign: "left", justifyContent: "flex-start", height: "auto", padding: tokens.spacingVerticalS },
-  threadText: { display: "grid", gap: "2px" },
-  row: { display: "flex", gap: tokens.spacingHorizontalM, alignItems: "center", flexWrap: "wrap" },
-  muted: { color: tokens.colorNeutralForeground3 },
-  message: { whiteSpace: "pre-wrap", margin: 0, fontFamily: tokens.fontFamilyBase, fontSize: tokens.fontSizeBase300 },
-}); // prettier-ignore
+  layout: {
+    display: "grid",
+    gap: "24px",
+    gridTemplateColumns: "minmax(260px, 340px) minmax(0, 1fr)",
+    alignItems: "start",
+    "@media (max-width: 899px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+  },
+  listPane: {
+    display: "grid",
+    gap: "12px",
+    alignContent: "start",
+    position: "sticky",
+    top: "16px",
+    maxHeight: "calc(100vh - 32px)",
+    overflowY: "auto",
+    "@media (max-width: 899px)": { position: "static", maxHeight: "none" },
+  },
+  groupLabel: { ...typo.label, color: vt.text3, padding: "8px 2px 0" },
+  work: { display: "grid", gap: "20px", minWidth: 0 },
+  engine: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" },
+  engineMeta: { ...typo.meta, color: vt.text3, ...typo.tabular },
+  convoHead: { display: "grid", gap: "2px", paddingBottom: "12px", borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
+  convoTitle: { ...typo.sectionTitle, color: vt.text1, margin: 0, overflowWrap: "anywhere" },
+  convoMeta: { ...typo.meta, color: vt.text2 },
+  messages: { display: "grid", maxHeight: "420px", overflowY: "auto", marginRight: "-8px", paddingRight: "8px" },
+  message: { display: "grid", gap: "4px", padding: "14px 0", borderTop: `1px solid ${tokens.colorNeutralStroke3}`, ":first-child": { borderTop: "none" } },
+  from: { display: "flex", gap: "8px", alignItems: "baseline", ...typo.meta, color: vt.text2 },
+  fromName: { ...typo.itemTitle, color: vt.text1 },
+  body: { whiteSpace: "pre-wrap", margin: 0, fontFamily: tokens.fontFamilyBase, ...typo.reading, color: vt.text1, overflowWrap: "anywhere" },
+  excluded: { ...typo.meta, color: vt.text2, padding: "12px 0 0" },
+  composer: { display: "grid", gap: "16px" },
+  instruction: { ...typo.body, minHeight: "72px" },
+  controls: {
+    display: "flex",
+    gap: "16px",
+    alignItems: "center",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+  switches: { display: "flex", gap: "8px 16px", alignItems: "center", flexWrap: "wrap" },
+  go: { display: "flex", gap: "10px", alignItems: "center", marginLeft: "auto" },
+  hint: { ...typo.meta, color: vt.text3, "@media (pointer: coarse)": { display: "none" } },
+  working: { display: "flex", gap: "10px", alignItems: "center", ...typo.meta, color: vt.text2 },
+});
 
 /** "a@x.com, Bob <b@y.com>" → people. Invalid entries are returned separately. */
 export function parseRecipients(value: string): { people: PersonRef[]; invalid: string[] } {
@@ -65,10 +118,6 @@ export function parseRecipients(value: string): { people: PersonRef[]; invalid: 
     else invalid.push(part);
   }
   return { people, invalid };
-}
-
-function when(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 type Target = { kind: "reply"; thread: DraftThread } | { kind: "new" } | { kind: "chat"; chat: DraftChat };
@@ -255,29 +304,42 @@ export function Draft() {
     setDraft(null);
   }
 
-  if (!status) return error ? <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar> : <Spinner label="Loading…" />;
+  if (!status)
+    return error ? (
+      <Page title="Draft">
+        <MessageBar intent="error">
+          <MessageBarBody>{error}</MessageBarBody>
+        </MessageBar>
+      </Page>
+    ) : (
+      <PageSkeleton label="Loading…" />
+    );
+
+  const exclusion = (by: string | null, unverifiable: string) =>
+    by === "unverifiable" ? unverifiable : `excluded by ${by === "organisation" ? "your organisation" : "you"}`;
+  const drafting = target?.kind === "new" || (target?.kind === "chat" && chatNew);
+  const conversation = target?.kind === "chat" ? chatView : view;
 
   return (
-    <div className={styles.stack}>
-      <div>
-        <Title3 as="h2">Draft</Title3>
-        <Text as="p">
-          Reply or write a new email or Teams message in your voice. Vanimo never sends: copy the draft into Outlook or
-          Teams, or use the Vanimo button inside Outlook (or "Draft reply" on a Teams message).
-        </Text>
-      </div>
-      <div className={styles.row}>
-        {status.generator === "offline" ? (
-          <Badge appearance="tint" color="warning">Offline stand-in, no AI model</Badge>
-        ) : (
-          <Badge appearance="tint">Claude on Amazon Bedrock</Badge>
-        )}
-        <Caption1 className={styles.muted}>
-          {status.generator === "offline"
-            ? "Until the AWS account is connected, drafts are built without a model: your greeting, sign-off and register around your instruction."
-            : `Standard: ${status.defaultModel} · Higher quality: ${status.premiumModel} (${status.premiumLeftToday} left today)`}
-        </Caption1>
-      </div>
+    <Page
+      title="Draft"
+      width="wide"
+      description="Reply or write a new email or Teams message in your voice. Vanimo never sends: copy the draft into Outlook or Teams, or use the Vanimo button inside Outlook (or “Draft reply” on a Teams message)."
+      eyebrow={
+        <span className={styles.engine}>
+          {status.generator === "offline" ? (
+            <Pill tone="warning">Offline stand-in, no AI model</Pill>
+          ) : (
+            <StatusDot tone="accent">Claude on Amazon Bedrock</StatusDot>
+          )}
+          <span className={styles.engineMeta}>
+            {status.generator === "offline"
+              ? "Until the AWS account is connected, drafts are built without a model: your greeting, sign-off and register around your instruction."
+              : `Standard: ${status.defaultModel} · Higher quality: ${status.premiumModel} (${status.premiumLeftToday} left today)`}
+          </span>
+        </span>
+      }
+    >
       {!status.reviewDone && (
         <MessageBar intent="warning">
           <MessageBarBody>Vanimo can't draft until you finish choosing what it learns from.</MessageBarBody>
@@ -295,85 +357,107 @@ export function Draft() {
       )}
 
       <div className={styles.layout}>
-        <div className={styles.list}>
-          <Button appearance={target?.kind === "new" ? "primary" : "secondary"} onClick={() => reset({ kind: "new" })}>
+        <nav className={styles.listPane} aria-label="Conversations">
+          <Button
+            icon={<Compose16Regular />}
+            appearance={target?.kind === "new" ? "primary" : "secondary"}
+            onClick={() => reset({ kind: "new" })}
+          >
             New email
           </Button>
-          <Caption1 className={styles.muted}>Reply to</Caption1>
-          {threads.length === 0 && <Caption1>No received mail found.</Caption1>}
-          {threads.map((t) => (
-            <Button
-              key={t.conversationId}
-              className={styles.thread}
-              appearance={target?.kind === "reply" && target.thread.conversationId === t.conversationId ? "primary" : "subtle"}
-              onClick={() => reset({ kind: "reply", thread: t })}
-            >
-              <span className={styles.threadText}>
-                <Text weight="semibold" truncate wrap={false}>{t.subject ?? "(no subject)"}</Text>
-                <Caption1>
-                  {t.sender.name ?? t.sender.email} · {when(t.receivedAt)}
-                  {t.excluded &&
-                    (t.excludedBy === "unverifiable"
-                      ? " · not used (someone can't be checked)"
-                      : ` · excluded by ${t.excludedBy === "organisation" ? "your organisation" : "you"}`)}
-                </Caption1>
-              </span>
-            </Button>
-          ))}
-          {chats.length > 0 && <Caption1 className={styles.muted}>Teams chats</Caption1>}
-          {chats.map((c) => (
-            <Button
-              key={c.chatId}
-              className={styles.thread}
-              appearance={target?.kind === "chat" && target.chat.chatId === c.chatId ? "primary" : "subtle"}
-              onClick={() => reset({ kind: "chat", chat: c })}
-            >
-              <span className={styles.threadText}>
-                <Text weight="semibold" truncate wrap={false}>{c.label}</Text>
-                <Caption1>
-                  {CHAT_TYPES[c.chatType]} · {c.members} people
-                  {c.excluded &&
-                    (c.excludedBy === "unverifiable"
-                      ? " · not used (can't be checked)"
-                      : ` · excluded by ${c.excludedBy === "organisation" ? "your organisation" : "you"}`)}
-                </Caption1>
-              </span>
-            </Button>
-          ))}
-        </div>
-
-        <div className={styles.stack}>
-          {!target && <Text>Pick a conversation or a Teams chat to reply to, or start a new email.</Text>}
-          {target?.kind === "chat" && (
-            <Card>
-              <CardHeader header={<Text weight="semibold">{chatView?.label ?? target.chat.label}</Text>} />
-              {target.chat.excluded && <Caption1>You can't view or use this chat: it's excluded.</Caption1>}
-              {chatView?.messages.map((m, i) => (
-                <div key={i}>
-                  <Caption1 className={styles.muted}>
-                    {m.fromMe ? "You" : (m.sender.name ?? m.sender.email)} · {when(m.sentAt)}
-                  </Caption1>
-                  <pre className={styles.message}>{m.text}</pre>
-                </div>
+          <div className={styles.groupLabel}>Reply to</div>
+          {threads.length === 0 ? (
+            <EmptyState title="No received mail">Mail you receive shows up here to reply to.</EmptyState>
+          ) : (
+            <List bordered label="Emails to reply to">
+              {threads.map((t) => (
+                <ListRow
+                  key={t.conversationId}
+                  leading={<Mail16Regular aria-hidden />}
+                  title={t.subject ?? "(no subject)"}
+                  meta={
+                    <>
+                      {t.sender.name ?? t.sender.email}
+                      {t.excluded && ` · ${exclusion(t.excludedBy, "not used (someone can't be checked)")}`}
+                    </>
+                  }
+                  trailing={t.excluded ? <Pill>Excluded</Pill> : <span title={absoluteTime(t.receivedAt)}>{shortTime(t.receivedAt)}</span>}
+                  selected={target?.kind === "reply" && target.thread.conversationId === t.conversationId}
+                  onClick={() => reset({ kind: "reply", thread: t })}
+                />
               ))}
-            </Card>
+            </List>
           )}
-          {target?.kind === "reply" && (
-            <Card>
-              <CardHeader header={<Text weight="semibold">{view?.subject ?? target.thread.subject ?? "(no subject)"}</Text>} />
-              {target.thread.excluded && <Caption1>You can't view or use this conversation: it's excluded.</Caption1>}
-              {view?.messages.map((m, i) => (
-                <div key={i}>
-                  <Caption1 className={styles.muted}>
-                    {m.fromMe ? "You" : (m.sender.name ?? m.sender.email)} · {when(m.sentAt)}
-                  </Caption1>
-                  <pre className={styles.message}>{m.text}</pre>
+          {chats.length > 0 && (
+            <>
+              <div className={styles.groupLabel}>Teams chats</div>
+              <List bordered label="Teams chats to reply to">
+                {chats.map((c) => (
+                  <ListRow
+                    key={c.chatId}
+                    leading={<Chat16Regular aria-hidden />}
+                    title={c.label}
+                    meta={
+                      <>
+                        {CHAT_TYPES[c.chatType]} · {c.members} people
+                        {c.excluded && ` · ${exclusion(c.excludedBy, "not used (can't be checked)")}`}
+                      </>
+                    }
+                    trailing={c.excluded ? <Pill>Excluded</Pill> : undefined}
+                    selected={target?.kind === "chat" && target.chat.chatId === c.chatId}
+                    onClick={() => reset({ kind: "chat", chat: c })}
+                  />
+                ))}
+              </List>
+            </>
+          )}
+        </nav>
+
+        <div className={styles.work}>
+          {!target && (
+            <EmptyState icon={<Compose16Regular />} title="Pick a conversation">
+              Choose an email or a Teams chat to reply to, or start a new email. Vanimo writes in your voice for that
+              audience; you edit and send it yourself.
+            </EmptyState>
+          )}
+          {(target?.kind === "reply" || target?.kind === "chat") && (
+            <Surface padding="m" as="article" aria-label="Conversation">
+              <div className={styles.convoHead}>
+                <h2 className={styles.convoTitle}>
+                  {target.kind === "chat"
+                    ? (chatView?.label ?? target.chat.label)
+                    : (view?.subject ?? target.thread.subject ?? "(no subject)")}
+                </h2>
+                <span className={styles.convoMeta}>
+                  {target.kind === "chat"
+                    ? `${CHAT_TYPES[target.chat.chatType]} · ${target.chat.members} people`
+                    : conversation
+                      ? `${conversation.messages.length} message${conversation.messages.length === 1 ? "" : "s"}`
+                      : "Email"}
+                </span>
+              </div>
+              {(target.kind === "chat" ? target.chat.excluded : target.thread.excluded) && (
+                <p className={styles.excluded}>
+                  You can't view or use this {target.kind === "chat" ? "chat" : "conversation"}: it's excluded.
+                </p>
+              )}
+              {conversation && conversation.messages.length > 0 && (
+                <div className={styles.messages}>
+                  {conversation.messages.map((m, i) => (
+                    <div key={i} className={styles.message}>
+                      <div className={styles.from}>
+                        <span className={styles.fromName}>{m.fromMe ? "You" : (m.sender.name ?? m.sender.email)}</span>
+                        <Time iso={m.sentAt} />
+                      </div>
+                      <pre className={styles.body}>{m.text}</pre>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </Card>
+              )}
+            </Surface>
           )}
           {target && (
-            <>
+            <div className={styles.composer}>
               {target.kind === "new" && (
                 <>
                   <Field label="To" hint="Email addresses, separated by commas">
@@ -385,35 +469,58 @@ export function Draft() {
                 </>
               )}
               <Field
-                label={
-                  target.kind === "new" || (target.kind === "chat" && chatNew)
-                    ? "What should it say?"
-                    : "What should the reply say? (optional)"
-                }
+                label={drafting ? "What should it say?" : "What should the reply say? (optional)"}
                 hint="For example: tell her I'll send the plan by Wednesday; ask him for the UAT feedback"
               >
-                <Textarea value={instruction} maxLength={1000} onChange={(_, d) => setInstruction(d.value)} />
+                <Textarea
+                  value={instruction}
+                  maxLength={1000}
+                  resize="vertical"
+                  textarea={{ className: styles.instruction }}
+                  onChange={(_, d) => setInstruction(d.value)}
+                  onKeyDown={(e) => {
+                    if (isMod(e, "Enter") && !busy && status.reviewDone) {
+                      e.preventDefault();
+                      void run();
+                    }
+                  }}
+                />
               </Field>
-              <div className={styles.row}>
-                {target.kind === "reply" && (
-                  <Switch label="Reply all" checked={replyAll} onChange={(_, d) => setReplyAll(d.checked)} />
-                )}
-                {target.kind === "chat" && (
-                  <Switch label="New message (not a reply)" checked={chatNew} onChange={(_, d) => setChatNew(d.checked)} />
-                )}
-                {status.generator === "bedrock" && (
-                  <Switch
-                    label="Higher quality"
-                    checked={premium}
-                    disabled={status.premiumLeftToday === 0}
-                    onChange={(_, d) => setPremium(d.checked)}
-                  />
-                )}
-                <Button appearance="primary" disabled={busy || !status.reviewDone} onClick={() => void run()}>
-                  {busy ? "Drafting…" : draft ? "Draft again" : "Draft"}
-                </Button>
+              <div className={styles.controls}>
+                <div className={styles.switches}>
+                  {target.kind === "reply" && (
+                    <Switch label="Reply all" checked={replyAll} onChange={(_, d) => setReplyAll(d.checked)} />
+                  )}
+                  {target.kind === "chat" && (
+                    <Switch label="New message (not a reply)" checked={chatNew} onChange={(_, d) => setChatNew(d.checked)} />
+                  )}
+                  {status.generator === "bedrock" && (
+                    <Switch
+                      label="Higher quality"
+                      checked={premium}
+                      disabled={status.premiumLeftToday === 0}
+                      onChange={(_, d) => setPremium(d.checked)}
+                    />
+                  )}
+                </div>
+                <div className={styles.go}>
+                  <span className={styles.hint} aria-hidden>
+                    {modKey} ↵
+                  </span>
+                  <Tooltip content={`Draft (${modKey}+Enter in the instruction box)`} relationship="description">
+                    <Button appearance="primary" disabled={busy || !status.reviewDone} onClick={() => void run()}>
+                      {busy ? "Drafting…" : draft ? "Draft again" : "Draft"}
+                    </Button>
+                  </Tooltip>
+                </div>
               </div>
-            </>
+            </div>
+          )}
+          {busy && (
+            <div className={styles.working} role="status">
+              <Spinner size="extra-tiny" />
+              Writing in your voice. Names, ID numbers and never-send words are masked before the model sees anything.
+            </div>
           )}
           {error && (
             <MessageBar intent="error">
@@ -431,56 +538,83 @@ export function Draft() {
             </MessageBar>
           )}
           {draft && (
-            <DraftView
-              draft={draft}
-              text={text}
-              onTextChange={setText}
-              checks={checks}
-              confirmed={confirmed}
-              onConfirm={setConfirmed}
-              actions={
-                <>
-                  <Button appearance="primary" disabled={hasBlock(checks) && !confirmed} onClick={() => void copy()}>
-                    Copy
-                  </Button>
-                  {draft.channel === "chat" && prefill && (draft.chatUsers?.length ?? 0) > 0 && (
-                    <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void openInTeams()}>
-                      Open in Teams with this text
-                    </Button>
-                  )}
-                  <Button onClick={() => void checkAgain()}>Check my edits</Button>
-                  {draft.id && target?.kind === "reply" && (
-                    <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void placeInOutlook()}>
-                      Put in my Drafts folder
-                    </Button>
-                  )}
-                  {draft.id && status.sourceKind === "sample" && (
-                    <Button onClick={() => void markSent()}>Mark as sent (sample)</Button>
-                  )}
-                  <Button appearance="subtle" onClick={() => void discard()}>
-                    Discard
-                  </Button>
-                  {draft.id && <RateButtons rated={rated} onRate={(r) => void rate(r)} />}
-                </>
-              }
-            />
+            <Rise visible appear>
+              <div>
+                <DraftView
+                  draft={draft}
+                  text={text}
+                  onTextChange={setText}
+                  checks={checks}
+                  confirmed={confirmed}
+                  onConfirm={setConfirmed}
+                  actions={
+                    <>
+                      <Button appearance="primary" disabled={hasBlock(checks) && !confirmed} onClick={() => void copy()}>
+                        Copy
+                      </Button>
+                      {draft.channel === "chat" && prefill && (draft.chatUsers?.length ?? 0) > 0 && (
+                        <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void openInTeams()}>
+                          Open in Teams with this text
+                        </Button>
+                      )}
+                      {draft.id && target?.kind === "reply" && (
+                        <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void placeInOutlook()}>
+                          Put in my Drafts folder
+                        </Button>
+                      )}
+                      <Button onClick={() => void checkAgain()}>Check my edits</Button>
+                      {draft.id && status.sourceKind === "sample" && (
+                        <Button onClick={() => void markSent()}>Mark as sent (sample)</Button>
+                      )}
+                      <Button appearance="subtle" onClick={() => void discard()}>
+                        Discard
+                      </Button>
+                      {draft.id && <RateButtons rated={rated} onRate={(r) => void rate(r)} />}
+                    </>
+                  }
+                />
+              </div>
+            </Rise>
           )}
         </div>
       </div>
 
       {recent.length > 0 && (
-        <Card>
-          <CardHeader header={<Text weight="semibold">Recent drafts</Text>} description={<Caption1>What was drafted, never the text</Caption1>} />
-          {recent.map((r) => (
-            <Caption1 key={r.id}>
-              {when(r.createdAt)} · {r.mode === "reply" ? "reply" : "new message"} to {r.relationship} · {r.surface} ·{" "}
-              {r.generator === "offline" ? "offline stand-in" : r.modelId} · {r.wordCount} words
-              {r.outcome ? ` · ${r.outcome.replace("_", " ")}` : ""}
-              {r.checks.length ? ` · checks: ${r.checks.join(", ")}` : ""}
-            </Caption1>
-          ))}
-        </Card>
+        <Section title="Recent drafts" description="What was drafted, never the text.">
+          <List bordered label="Recent drafts">
+            {recent.map((r) => (
+              <ListRow
+                key={r.id}
+                title={`${r.mode === "reply" ? "Reply" : "New message"} to ${r.relationship}`}
+                meta={[
+                  r.surface,
+                  r.generator === "offline" ? "offline stand-in" : r.modelId,
+                  `${r.wordCount} words`,
+                  r.checks.length ? `checks: ${r.checks.join(", ")}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                trailing={
+                  <>
+                    {r.outcome && (
+                      <Pill tone={r.outcome === "discarded" ? "neutral" : "success"}>{r.outcome.replace("_", " ")}</Pill>
+                    )}
+                    <Time iso={r.createdAt} />
+                  </>
+                }
+              />
+            ))}
+          </List>
+        </Section>
       )}
-    </div>
+    </Page>
   );
+}
+
+/** Compact time for the conversation list: today's time, otherwise the day. */
+function shortTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return relativeTime(iso, now);
 }

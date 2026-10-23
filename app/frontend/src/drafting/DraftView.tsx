@@ -1,9 +1,10 @@
-/** A draft as both surfaces show it: who it's for, what wrote it, the text (editable), the
- * pre-send checks and, for a blocking check, the confirmation that unlocks insert. */
+/** A draft as every surface shows it (web, Outlook add-in, Teams): who it's for, what wrote it and
+ * from how much of your writing, the text (editable, in reading type), the pre-send checks (blocking
+ * first, shown at once, never animated) and, for a blocking check, the confirmation that unlocks
+ * insert. Uses Fluent tokens and fallback-safe Vanimo tokens, so it also looks right under
+ * Microsoft's own themes in Outlook and Teams. */
 import {
-  Badge,
   Button,
-  Caption1,
   Checkbox,
   makeStyles,
   MessageBar,
@@ -14,12 +15,49 @@ import {
 } from "@fluentui/react-components";
 import type { ReactNode } from "react";
 import { ApiError, type Draft, type DraftCheck } from "../api/client";
+import { Pill } from "../ui/feedback";
+import { vt } from "../theme/theme";
+import { typo } from "../theme/typography";
 
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: tokens.spacingVerticalS },
-  row: { display: "flex", gap: tokens.spacingHorizontalS, alignItems: "center", flexWrap: "wrap" },
-  muted: { color: tokens.colorNeutralForeground3 },
-  text: { minHeight: "180px" },
+  card: {
+    position: "relative",
+    display: "grid",
+    gap: "12px",
+    padding: "16px",
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    minWidth: 0,
+    // A thin accent rule marks text Vanimo wrote (no glow, no sparkle).
+    "::before": {
+      content: '""',
+      position: "absolute",
+      left: "-1px",
+      top: "16px",
+      bottom: "16px",
+      width: "2px",
+      borderRadius: "2px",
+      backgroundColor: vt.accent,
+    },
+  },
+  head: { display: "grid", gap: "6px" },
+  row: { display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" },
+  kicker: { ...typo.label, color: vt.text3, marginRight: "2px" },
+  provenance: { ...typo.meta, color: vt.text2, margin: 0 },
+  textarea: { width: "100%" },
+  text: { ...typo.reading, minHeight: "220px", padding: "10px 12px" },
+  checks: { display: "grid", gap: "8px" },
+  confirm: { marginTop: "-2px" },
+  actions: {
+    display: "flex",
+    gap: "8px",
+    alignItems: "center",
+    flexWrap: "wrap",
+    paddingTop: "12px",
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  rate: { display: "inline-flex", gap: "2px", marginLeft: "auto" },
 });
 
 const SEVERITY_INTENT = { block: "error", warn: "warning", info: "info" } as const;
@@ -125,60 +163,66 @@ export function DraftView({
   const styles = useStyles();
   const offline = draft.generator === "offline";
   return (
-    <div className={styles.stack}>
-      <div className={styles.row}>
-        <Badge appearance="tint" color="brand">
-          Writing to: {draft.audience.label}
-        </Badge>
-        {offline ? (
-          <Badge appearance="tint" color="warning">
-            Offline stand-in, no AI model
-          </Badge>
-        ) : (
-          <Badge appearance="tint">{draft.tier === "premium" ? "Higher quality" : "Standard"}</Badge>
-        )}
-        {draft.oneOff && <Badge appearance="tint" color="informative">One-off, not saved</Badge>}
+    <section className={styles.card} aria-label="Vanimo draft">
+      <div className={styles.head}>
+        <div className={styles.row}>
+          <span className={styles.kicker}>Vanimo draft</span>
+          <Pill tone="accent">Writing to: {draft.audience.label}</Pill>
+          {offline ? (
+            <Pill tone="warning">Offline stand-in, no AI model</Pill>
+          ) : (
+            <Pill>{draft.tier === "premium" ? "Higher quality" : "Standard"}</Pill>
+          )}
+          {draft.oneOff && <Pill>One-off, not saved</Pill>}
+        </div>
+        <p className={styles.provenance}>
+          {offline ? draft.label : `Written by ${draft.modelId}`}
+          {draft.learned ? ` · in your style from ${draft.basedOn} of your messages` : " · your style isn't learned yet"}
+        </p>
       </div>
-      <Caption1 className={styles.muted}>
-        {offline ? draft.label : `Written by ${draft.modelId}`}
-        {draft.learned ? ` · in your style from ${draft.basedOn} of your messages` : " · your style isn't learned yet"}
-      </Caption1>
       <Textarea
         aria-label="Draft"
-        className={styles.text}
+        className={styles.textarea}
+        textarea={{ className: styles.text }}
         resize="vertical"
         value={text}
         onChange={(_, d) => onTextChange(d.value)}
       />
-      {sortChecks(checks).map((c) => (
-        <MessageBar key={c.code} intent={SEVERITY_INTENT[c.severity]}>
-          <MessageBarBody>
-            <MessageBarTitle>{SEVERITY_TITLE[c.severity]}</MessageBarTitle>
-            {c.message}
-          </MessageBarBody>
-        </MessageBar>
-      ))}
-      {hasBlock(checks) && (
-        <Checkbox
-          checked={confirmed}
-          onChange={(_, d) => onConfirm(Boolean(d.checked))}
-          label="I've checked this another way (for example, by phone on a number I already had)"
-        />
+      {checks.length > 0 && (
+        <div className={styles.checks}>
+          {sortChecks(checks).map((c) => (
+            <MessageBar key={c.code} intent={SEVERITY_INTENT[c.severity]} layout="multiline">
+              <MessageBarBody>
+                <MessageBarTitle>{SEVERITY_TITLE[c.severity]}</MessageBarTitle>
+                {c.message}
+              </MessageBarBody>
+            </MessageBar>
+          ))}
+          {hasBlock(checks) && (
+            <Checkbox
+              className={styles.confirm}
+              checked={confirmed}
+              onChange={(_, d) => onConfirm(Boolean(d.checked))}
+              label="I've checked this another way (for example, by phone on a number I already had)"
+            />
+          )}
+        </div>
       )}
-      <div className={styles.row}>{actions}</div>
-    </div>
+      <div className={styles.actions}>{actions}</div>
+    </section>
   );
 }
 
 export function RateButtons({ onRate, rated }: { onRate: (rating: "good" | "bad") => void; rated: string | null }) {
+  const styles = useStyles();
   return (
-    <>
-      <Button size="small" appearance={rated === "good" ? "primary" : "subtle"} onClick={() => onRate("good")}>
+    <span className={styles.rate} role="group" aria-label="Does this sound like you?">
+      <Button size="small" appearance={rated === "good" ? "secondary" : "subtle"} aria-pressed={rated === "good"} onClick={() => onRate("good")}>
         Sounds like me
       </Button>
-      <Button size="small" appearance={rated === "bad" ? "primary" : "subtle"} onClick={() => onRate("bad")}>
+      <Button size="small" appearance={rated === "bad" ? "secondary" : "subtle"} aria-pressed={rated === "bad"} onClick={() => onRate("bad")}>
         Doesn't sound like me
       </Button>
-    </>
+    </span>
   );
 }

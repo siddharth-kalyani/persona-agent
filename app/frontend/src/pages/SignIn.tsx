@@ -1,24 +1,59 @@
 import {
   Button,
-  Card,
   Divider,
   Field,
   Input,
   makeStyles,
   MessageBar,
   MessageBarBody,
-  Text,
-  Title3,
   tokens,
 } from "@fluentui/react-components";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { AuthFailure, useAuth } from "../auth/session";
+import { Mark } from "../shell/Sidebar";
+import { typo, vt } from "../ui";
 
 const useStyles = makeStyles({
-  wrap: { display: "grid", justifyItems: "center", marginTop: "8vh" },
-  card: { width: "min(420px, 100%)", padding: tokens.spacingHorizontalXXL, display: "grid", gap: tokens.spacingVerticalL },
-  form: { display: "grid", gap: tokens.spacingVerticalM },
+  panel: {
+    width: "min(400px, 100%)",
+    display: "grid",
+    gap: "20px",
+    padding: "32px",
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    "@media (max-width: 479px)": { padding: "24px 20px", border: "none", backgroundColor: "transparent" },
+  },
+  brand: { display: "flex", alignItems: "center", gap: "10px", ...typo.itemTitle, fontSize: "15px", fontWeight: 600, color: vt.text1 },
+  heading: { display: "grid", gap: "6px" },
+  title: { ...typo.pageTitle, color: vt.text1, margin: 0 },
+  lead: { ...typo.body, color: vt.text2, margin: 0 },
+  form: { display: "grid", gap: "16px" },
+  submit: { marginTop: "4px" },
+  footer: { ...typo.meta, color: vt.text3, margin: 0, textAlign: "center" },
 });
+
+/** The centred panel the signed-out screens share: the mark, a title, a line of purpose, content. */
+export function AuthPanel({ title, lead, children, footer }: { title: string; lead: ReactNode; children: ReactNode; footer?: ReactNode }) {
+  const s = useStyles();
+  useEffect(() => {
+    document.title = `${title} · Vanimo`;
+  }, [title]);
+  return (
+    <div className={s.panel}>
+      <div className={s.brand}>
+        <Mark size={24} />
+        Vanimo
+      </div>
+      <div className={s.heading}>
+        <h1 className={s.title}>{title}</h1>
+        <p className={s.lead}>{lead}</p>
+      </div>
+      {children}
+      {footer && <p className={s.footer}>{footer}</p>}
+    </div>
+  );
+}
 
 export function signInError(code: string): string {
   switch (code) {
@@ -54,40 +89,57 @@ export function SignIn() {
   }
 
   return (
-    <div className={styles.wrap}>
-      <Card className={styles.card}>
-        <Title3 as="h2">Sign in to Vanimo</Title3>
-        <Text>Your writing voice and work memory, inside Outlook and Teams.</Text>
-        {error && (
-          <MessageBar intent="error">
-            <MessageBarBody>{error}</MessageBarBody>
-          </MessageBar>
-        )}
-        {auth.options.password && (
-          <form className={styles.form} onSubmit={(e) => void submit(e)}>
-            <Field label="Email" required>
-              <Input type="email" autoComplete="username" value={email} onChange={(_, d) => setEmail(d.value)} />
-            </Field>
-            <Field label="Password" required>
-              <Input
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(_, d) => setPassword(d.value)}
-              />
-            </Field>
-            <Button appearance="primary" type="submit" disabled={busy || !email || !password}>
-              {busy ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
-        )}
-        {auth.options.password && auth.options.microsoft && <Divider>or</Divider>}
-        {auth.options.microsoft && (
-          <Button appearance={auth.options.password ? "secondary" : "primary"} onClick={() => void auth.signInWithMicrosoft()}>
-            Sign in with Microsoft
+    <AuthPanel
+      title="Sign in to Vanimo"
+      lead="Your writing voice and work memory, inside Outlook and Teams."
+      footer="Vanimo drafts; you send. It never sends anything on your behalf."
+    >
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>{error}</MessageBarBody>
+        </MessageBar>
+      )}
+      {auth.options.password && (
+        <form className={styles.form} onSubmit={(e) => void submit(e)}>
+          <Field label="Email" required>
+            <Input
+              size="large"
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={(_, d) => setEmail(d.value)}
+            />
+          </Field>
+          <Field label="Password" required>
+            <Input
+              size="large"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(_, d) => setPassword(d.value)}
+            />
+          </Field>
+          <Button
+            className={styles.submit}
+            appearance="primary"
+            size="large"
+            type="submit"
+            disabled={busy || !email || !password}
+          >
+            {busy ? "Signing in…" : "Sign in"}
           </Button>
-        )}
-      </Card>
-    </div>
+        </form>
+      )}
+      {auth.options.password && auth.options.microsoft && <Divider>or</Divider>}
+      {auth.options.microsoft && (
+        <Button
+          size="large"
+          appearance={auth.options.password ? "secondary" : "primary"}
+          onClick={() => void auth.signInWithMicrosoft()}
+        >
+          Sign in with Microsoft
+        </Button>
+      )}
+    </AuthPanel>
   );
 }

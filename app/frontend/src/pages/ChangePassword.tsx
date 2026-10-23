@@ -1,23 +1,11 @@
-import {
-  Button,
-  Caption1,
-  Card,
-  Field,
-  Input,
-  makeStyles,
-  MessageBar,
-  MessageBarBody,
-  Text,
-  Title3,
-  tokens,
-} from "@fluentui/react-components";
+import { Button, Field, Input, makeStyles, MessageBar, MessageBarBody } from "@fluentui/react-components";
 import { useState, type FormEvent } from "react";
 import { AuthFailure, useAuth } from "../auth/session";
+import { AuthPanel } from "./SignIn";
 
 const useStyles = makeStyles({
-  wrap: { display: "grid", justifyItems: "center", marginTop: "8vh" },
-  card: { width: "min(440px, 100%)", padding: tokens.spacingHorizontalXXL, display: "grid", gap: tokens.spacingVerticalL },
-  form: { display: "grid", gap: tokens.spacingVerticalM },
+  form: { display: "grid", gap: "16px" },
+  submit: { marginTop: "4px" },
 });
 
 export const MIN_PASSWORD_LENGTH = 12;
@@ -71,40 +59,41 @@ export function ChangePassword() {
   }
 
   return (
-    <div className={styles.wrap}>
-      <Card className={styles.card}>
-        <Title3 as="h2">Set your password</Title3>
-        <Text>You signed in with a one-time password. Choose your own to continue.</Text>
-        {error && (
-          <MessageBar intent="error">
-            <MessageBarBody>{error}</MessageBarBody>
-          </MessageBar>
-        )}
-        <form className={styles.form} onSubmit={(e) => void submit(e)}>
-          <Field label="One-time password" required>
-            <Input type="password" autoComplete="current-password" value={current} onChange={(_, d) => setCurrent(d.value)} />
-          </Field>
-          <Field label="New password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters. A phrase works well.`}>
-            <Input type="password" autoComplete="new-password" value={next} onChange={(_, d) => setNext(d.value)} />
-          </Field>
-          <Field
-            label="Confirm new password"
-            required
-            validationState={mismatch ? "error" : "none"}
-            validationMessage={mismatch ? "The passwords don't match." : undefined}
-          >
-            <Input type="password" autoComplete="new-password" value={confirm} onChange={(_, d) => setConfirm(d.value)} />
-          </Field>
-          <Button
-            appearance="primary"
-            type="submit"
-            disabled={busy || !current || next.length < MIN_PASSWORD_LENGTH || next !== confirm}
-          >
-            {busy ? "Saving…" : "Set password"}
-          </Button>
-        </form>
-        <Caption1>Signed in as {auth.email}</Caption1>
-      </Card>
-    </div>
+    <AuthPanel
+      title="Set your password"
+      lead="You signed in with a one-time password. Choose your own to continue."
+      footer={`Signed in as ${auth.email ?? ""}`}
+    >
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>{error}</MessageBarBody>
+        </MessageBar>
+      )}
+      <form className={styles.form} onSubmit={(e) => void submit(e)}>
+        <Field label="One-time password" required>
+          <Input size="large" type="password" autoComplete="current-password" value={current} onChange={(_, d) => setCurrent(d.value)} />
+        </Field>
+        <Field label="New password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters. A phrase works well.`}>
+          <Input size="large" type="password" autoComplete="new-password" value={next} onChange={(_, d) => setNext(d.value)} />
+        </Field>
+        <Field
+          label="Confirm new password"
+          required
+          validationState={mismatch ? "error" : "none"}
+          validationMessage={mismatch ? "The passwords don't match." : undefined}
+        >
+          <Input size="large" type="password" autoComplete="new-password" value={confirm} onChange={(_, d) => setConfirm(d.value)} />
+        </Field>
+        <Button
+          className={styles.submit}
+          appearance="primary"
+          size="large"
+          type="submit"
+          disabled={busy || !current || next.length < MIN_PASSWORD_LENGTH || next !== confirm}
+        >
+          {busy ? "Saving…" : "Set password"}
+        </Button>
+      </form>
+    </AuthPanel>
   );
 }

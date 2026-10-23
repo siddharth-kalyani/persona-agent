@@ -113,7 +113,7 @@ export function CommandPalette({ open, onOpenChange, commands }: { open: boolean
   useEffect(() => setActive(0), [query]);
 
   useEffect(() => {
-    listRef.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
+    listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [active]);
 
   function run(c: Command | undefined) {

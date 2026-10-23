@@ -28,7 +28,7 @@ Apple HIG, Emil Kowalski and Rauno Freiberg on motion.
    Microsoft's own themes). Never hard-code hex in pages. Light and dark must both work.
 6. **Status never by colour alone.** `StatusDot` and `Pill` always carry a word. Pills are neutral
    unless the state needs attention (`warning`, `danger`), `success` for a finished good outcome,
-   `accent` for "selected/active".
+   `accent` for "selected/active" or "waiting on you" (e.g. Queue's "Needs a reply").
 7. **Loading.** `PageSkeleton` for a page's first load and `RowsSkeleton` inside a section (both appear
    only after 300ms, so fast loads never flash). Spinners only inside the button or row doing the work.
    Long AI work (learning, drafting, probes) shows a `StepList` in plain words.

@@ -45,7 +45,11 @@ import {
 } from "../../ui";
 import { errorText } from "../Home";
 
+/** Stored items shown before "Show all". */
+const SHOWN = 12;
+
 const useStyles = makeStyles({
+  more: { listStyle: "none", padding: "8px 12px", display: "flex", justifyContent: "center" },
   runHead: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px 16px", ...typo.meta, color: vt.text2 },
   runHeadItem: { ...typo.tabular },
   runNote: { ...typo.meta, color: vt.text2, margin: 0, maxWidth: "72ch" },
@@ -268,6 +272,7 @@ export function Learning() {
   const [status, setStatus] = useState<LearningStatus | null>(null);
   const [items, setItems] = useState<StoredItem[]>([]);
   const [asStored, setAsStored] = useState(true);
+  const [showAll, setShowAll] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -348,7 +353,7 @@ export function Learning() {
   if (items.length > 0) {
     storedBody = (
       <ul className={styles.items} aria-label="Stored items">
-        {items.map((i) => (
+        {(showAll ? items : items.slice(0, SHOWN)).map((i) => (
           <li key={i.id} className={styles.item}>
             <div className={styles.itemMeta}>
               <span>{i.channel === "email" ? "Email" : "Chat"}</span>
@@ -368,6 +373,13 @@ export function Learning() {
             </p>
           </li>
         ))}
+        {!showAll && items.length > SHOWN && (
+          <li className={styles.more}>
+            <Button appearance="subtle" size="small" onClick={() => setShowAll(true)}>
+              Show all {items.length}
+            </Button>
+          </li>
+        )}
       </ul>
     );
   } else {

@@ -20,7 +20,7 @@ import {
   WeatherMoon16Regular,
   WeatherSunny16Regular,
 } from "@fluentui/react-icons";
-import { startTransition, useEffect, useMemo, useState, ViewTransition } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, ViewTransition } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { Me } from "./api/client";
 import { useApi } from "./api/context";
@@ -47,6 +47,7 @@ import { activePath, visibleDestinations } from "./shell/nav";
 import { AccountMenu, Mark, Sidebar } from "./shell/Sidebar";
 import { useThemePreference } from "./theme/ThemeProvider";
 import { isMod, typo, vt } from "./ui";
+import { ME_CHANGED } from "./shell/events";
 
 const useStyles = makeStyles({
   shell: {
@@ -110,12 +111,38 @@ const useStyles = makeStyles({
   auth: { minHeight: "100vh", backgroundColor: vt.frame, display: "grid", placeItems: "start center", padding: "12vh 16px 48px" },
 });
 
+/** True below the sidebar breakpoint (the shell switches to a top bar and a drawer). */
+function useNarrow(): boolean {
+  const query = "(max-width: 1023px)";
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.(query).matches === true);
+  useEffect(() => {
+    const mq = window.matchMedia?.(query);
+    if (!mq) return;
+    const onChange = () => setNarrow(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
+}
+
 /** The signed-in user's profile once, for the shell (data source, name, organisation pause). */
-function useMe(ready: boolean): Me | null {
+function useMe(ready: boolean, pathname: string): Me | null {
   const api = useApi();
   const [me, setMe] = useState<Me | null>(null);
+  const [nudge, setNudge] = useState(0);
+  const lastRead = useRef(0);
+  useEffect(() => {
+    const onChange = () => setNudge((n) => n + 1);
+    window.addEventListener(ME_CHANGED, onChange);
+    return () => window.removeEventListener(ME_CHANGED, onChange);
+  }, []);
   useEffect(() => {
     if (!ready) return;
+    lastRead.current = 0;
+  }, [ready, nudge]);
+  useEffect(() => {
+    if (!ready || Date.now() - lastRead.current < 30_000) return;
+    lastRead.current = Date.now();
     let live = true;
     api.me().then(
       (m) => live && setMe(m),
@@ -124,7 +151,7 @@ function useMe(ready: boolean): Me | null {
     return () => {
       live = false;
     };
-  }, [api, ready]);
+  }, [api, ready, pathname, nudge]);
   return me;
 }
 
@@ -135,9 +162,10 @@ export function App() {
   const location = useLocation();
   const theme = useThemePreference();
   const ready = auth.signedIn && !auth.mustChangePassword;
-  const me = useMe(ready);
+  const me = useMe(ready, location.pathname);
   const [palette, setPalette] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const narrow = useNarrow();
 
   const destinations = useMemo(
     () => visibleDestinations({ isAdmin: auth.isAdmin, sample: me?.dataSource === "sample" }),
@@ -179,13 +207,16 @@ export function App() {
 
   const name = me?.user.displayName ?? auth.email ?? "You";
   const badge = auth.roles.includes("Vanimo.SuperAdmin") ? "Super-admin" : auth.isAdmin ? "Admin" : null;
-  const sidebar = (onNavigate?: () => void) => (
+  const sidebar = (onNavigate?: () => void, bell = true) => (
     <Sidebar
       destinations={destinations}
       active={active}
-      onSearch={() => setPalette(true)}
+      onSearch={() => {
+        setDrawer(false);
+        setPalette(true);
+      }}
       onNavigate={onNavigate}
-      notifications={<NotificationBell />}
+      notifications={bell ? <NotificationBell /> : undefined}
       account={<AccountMenu name={name} email={auth.email} badge={badge} onSignOut={() => void auth.signOut()} />}
     />
   );
@@ -198,7 +229,7 @@ export function App() {
         Skip to content
       </a>
       <aside className={styles.sidebar} aria-label="Sidebar">
-        {sidebar()}
+        {!narrow && sidebar()}
       </aside>
       <div style={{ minWidth: 0 }}>
         <div className={styles.topbar}>
@@ -207,10 +238,17 @@ export function App() {
             <Mark size={18} />
             Vanimo
           </span>
+          {narrow && <NotificationBell />}
           <Button appearance="subtle" icon={<Search20Regular />} aria-label="Search or jump to" onClick={() => setPalette(true)} />
         </div>
-        <OverlayDrawer open={drawer} onOpenChange={(_, d) => setDrawer(d.open)} className={styles.drawer} position="start">
-          <DrawerBody className={styles.drawerBody}>{sidebar(() => setDrawer(false))}</DrawerBody>
+        <OverlayDrawer
+          open={drawer}
+          onOpenChange={(_, d) => setDrawer(d.open)}
+          className={styles.drawer}
+          position="start"
+          aria-label="Navigation"
+        >
+          <DrawerBody className={styles.drawerBody}>{sidebar(() => setDrawer(false), false)}</DrawerBody>
         </OverlayDrawer>
         <main id="main" className={styles.panel} tabIndex={-1}>
           <div className={styles.content}>

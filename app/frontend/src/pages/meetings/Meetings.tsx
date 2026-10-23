@@ -193,7 +193,7 @@ const useStyles = makeStyles({
     listStyle: "none",
     maxHeight: "440px",
     overflowY: "auto",
-    border: `1px solid ${tokens.colorNeutralStroke3}`,
+    backgroundColor: vt.inset,
     borderRadius: tokens.borderRadiusLarge,
   },
   turn: {
@@ -205,7 +205,7 @@ const useStyles = makeStyles({
     "@media (max-width: 639px)": { gridTemplateColumns: "minmax(0, 1fr)", gap: "2px" },
   },
   turnFocus: { backgroundColor: vt.accentTint },
-  turnTime: { ...typo.meta, ...typo.tabular, color: vt.text3, paddingTop: "3px" },
+  turnTime: { ...typo.meta, ...typo.tabular, color: vt.text2, paddingTop: "3px" },
   turnBody: { display: "grid", gap: "2px", minWidth: 0 },
   turnSpeaker: { ...typo.label, color: vt.text2 },
   turnText: { ...typo.reading, color: vt.text1, overflowWrap: "anywhere" },
@@ -327,6 +327,9 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<MeetingAnswer | null>(null);
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const opened = useRef<string | null>(null);
+  const moveFocus = useRef(false);
   const [focusTurn, setFocusTurn] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -370,6 +373,10 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
     try {
       setDetail(await api.meeting(id));
       setFocusTurn(turn);
+      if (opened.current !== id) {
+        opened.current = id;
+        moveFocus.current = true;
+      }
     } catch (e) {
       setNotice(draftErrorText(e));
     }
@@ -385,6 +392,22 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
       setNotice(draftErrorText(e));
     }
   }
+
+  // A newly opened meeting takes focus (its title) and scrolls into view; refreshes of the same one don't.
+  useEffect(() => {
+    if (!detail) {
+      opened.current = null;
+      return;
+    }
+    if (!moveFocus.current) return;
+    moveFocus.current = false;
+    const title = detailRef.current?.querySelector<HTMLElement>("h2");
+    if (title) {
+      title.tabIndex = -1;
+      title.focus({ preventScroll: true });
+      title.scrollIntoView?.({ block: "start", behavior: "auto" });
+    }
+  }, [detail]);
 
   const frame = (children: ReactNode) =>
     embedded ? (
@@ -523,31 +546,6 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
       </div>
 
       <div className={styles.split}>
-        {detail ? (
-          <div className={styles.detailPane}>
-            <MeetingView
-              key={`${detail.id}:${detail.transcript.map((t) => t.speakerId).join(",")}`}
-              detail={detail}
-              focusTurn={focusTurn}
-              onDecide={(n) => void decide(n)}
-              onClose={() => setDetail(null)}
-              onChanged={async (forgotten) => {
-                if (forgotten) setDetail(null);
-                else await open(detail.id, focusTurn);
-                await refresh();
-              }}
-              onError={setNotice}
-            />
-          </div>
-        ) : (
-          list.items.length > 0 && (
-            <p className={styles.placeholder}>
-              <CalendarLtr20Regular className={styles.placeholderIcon} aria-hidden />
-              Pick a meeting to read its notes and transcript, or ask a question above.
-            </p>
-          )
-        )}
-
         <section className={styles.listPane} aria-labelledby="meetings-list-title">
           <h2 id="meetings-list-title" className={styles.h2}>
             Remembered meetings
@@ -589,6 +587,31 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
             <p className={styles.hidden}>{list.hidden} hidden because of a rule you added; they're being deleted.</p>
           )}
         </section>
+
+        {detail ? (
+          <div className={styles.detailPane} ref={detailRef}>
+            <MeetingView
+              key={`${detail.id}:${detail.transcript.map((t) => t.speakerId).join(",")}`}
+              detail={detail}
+              focusTurn={focusTurn}
+              onDecide={(n) => void decide(n)}
+              onClose={() => setDetail(null)}
+              onChanged={async (forgotten) => {
+                if (forgotten) setDetail(null);
+                else await open(detail.id, focusTurn);
+                await refresh();
+              }}
+              onError={setNotice}
+            />
+          </div>
+        ) : (
+          list.items.length > 0 && (
+            <p className={styles.placeholder}>
+              <CalendarLtr20Regular className={styles.placeholderIcon} aria-hidden />
+              Pick a meeting to read its notes and transcript, or ask a question above.
+            </p>
+          )
+        )}
       </div>
     </>,
   );

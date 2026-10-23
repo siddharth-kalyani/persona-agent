@@ -19,9 +19,10 @@ import {
   Textarea,
   tokens,
   Tooltip,
+  useAnnounce,
 } from "@fluentui/react-components";
 import { Chat16Regular, Compose16Regular, Mail16Regular } from "@fluentui/react-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ApiError,
@@ -76,10 +77,12 @@ const useStyles = makeStyles({
     top: "16px",
     maxHeight: "calc(100vh - 32px)",
     overflowY: "auto",
+    // Below 1024px the 48px top bar is sticky too.
+    "@media (max-width: 1023px)": { top: "64px", maxHeight: "calc(100vh - 80px)" },
     "@media (max-width: 899px)": { position: "static", maxHeight: "none" },
   },
   groupLabel: { ...typo.label, color: vt.text3, padding: "8px 2px 0" },
-  work: { display: "grid", gap: "20px", minWidth: 0 },
+  work: { display: "grid", gap: "20px", minWidth: 0, outline: "none", scrollMarginTop: "64px" },
   engine: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" },
   engineMeta: { ...typo.meta, color: vt.text3, ...typo.tabular },
   convoHead: { display: "grid", gap: "2px", paddingBottom: "12px", borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
@@ -139,6 +142,8 @@ export function Draft() {
   const [premium, setPremium] = useState(false);
   const [replyAll, setReplyAll] = useState(false);
   const [busy, setBusy] = useState(false);
+  const workRef = useRef<HTMLDivElement>(null);
+  const { announce } = useAnnounce();
   const [error, setError] = useState<string | null>(null);
   const [oneOffOffer, setOneOffOffer] = useState(false);
   const [draft, setDraft] = useState<DraftResult | null>(null);
@@ -171,6 +176,13 @@ export function Draft() {
   }, [refresh]);
 
   function reset(next: Target) {
+    // One column on narrow screens: the list comes first, so bring the chosen conversation into view.
+    if (window.matchMedia?.("(max-width: 899px)").matches === true) {
+      requestAnimationFrame(() => {
+        workRef.current?.scrollIntoView?.({ block: "start" });
+        workRef.current?.focus({ preventScroll: true });
+      });
+    }
     setTarget(next);
     setDraft(null);
     setError(null);
@@ -220,6 +232,7 @@ export function Draft() {
     try {
       const d = await api.createDraft(req);
       setDraft(d);
+      announce(`Draft ready, ${d.text.split(/\s+/).filter(Boolean).length} words.`, { polite: true });
       setText(d.text);
       setChecks(d.checks);
       setConfirmed(false);
@@ -324,7 +337,7 @@ export function Draft() {
     <Page
       title="Draft"
       width="wide"
-      description="Reply or write a new email or Teams message in your voice. Vanimo never sends: copy the draft into Outlook or Teams, or use the Vanimo button inside Outlook (or “Draft reply” on a Teams message)."
+      description="Reply or write a new email or Teams message in your voice. Vanimo never sends: you copy the draft into Outlook or Teams, or use the Vanimo button there."
       eyebrow={
         <span className={styles.engine}>
           {status.generator === "offline" ? (
@@ -332,11 +345,11 @@ export function Draft() {
           ) : (
             <StatusDot tone="accent">Claude on Amazon Bedrock</StatusDot>
           )}
-          <span className={styles.engineMeta}>
-            {status.generator === "offline"
-              ? "Until the AWS account is connected, drafts are built without a model: your greeting, sign-off and register around your instruction."
-              : `Standard: ${status.defaultModel} · Higher quality: ${status.premiumModel} (${status.premiumLeftToday} left today)`}
-          </span>
+          {status.generator === "bedrock" && (
+            <span className={styles.engineMeta}>
+              Standard: {status.defaultModel} · Higher quality: {status.premiumModel} ({status.premiumLeftToday} left today)
+            </span>
+          )}
         </span>
       }
     >
@@ -360,14 +373,14 @@ export function Draft() {
         <nav className={styles.listPane} aria-label="Conversations">
           <Button
             icon={<Compose16Regular />}
-            appearance={target?.kind === "new" ? "primary" : "secondary"}
+            aria-pressed={target?.kind === "new"}
             onClick={() => reset({ kind: "new" })}
           >
             New email
           </Button>
           <div className={styles.groupLabel}>Reply to</div>
           {threads.length === 0 ? (
-            <EmptyState title="No received mail">Mail you receive shows up here to reply to.</EmptyState>
+            <EmptyState headingLevel={2} title="No received mail">Mail you receive shows up here to reply to.</EmptyState>
           ) : (
             <List bordered label="Emails to reply to">
               {threads.map((t) => (
@@ -413,9 +426,9 @@ export function Draft() {
           )}
         </nav>
 
-        <div className={styles.work}>
+        <div className={styles.work} ref={workRef} tabIndex={-1} aria-label="Conversation and draft">
           {!target && (
-            <EmptyState icon={<Compose16Regular />} title="Pick a conversation">
+            <EmptyState headingLevel={2} icon={<Compose16Regular />} title="Pick a conversation">
               Choose an email or a Teams chat to reply to, or start a new email. Vanimo writes in your voice for that
               audience; you edit and send it yourself.
             </EmptyState>
@@ -508,7 +521,11 @@ export function Draft() {
                     {modKey} ↵
                   </span>
                   <Tooltip content={`Draft (${modKey}+Enter in the instruction box)`} relationship="description">
-                    <Button appearance="primary" disabled={busy || !status.reviewDone} onClick={() => void run()}>
+                    <Button
+                      appearance={draft ? "secondary" : "primary"}
+                      disabled={busy || !status.reviewDone}
+                      onClick={() => void run()}
+                    >
                       {busy ? "Drafting…" : draft ? "Draft again" : "Draft"}
                     </Button>
                   </Tooltip>

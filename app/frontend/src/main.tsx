@@ -2,7 +2,7 @@ import type { IPublicClientApplication } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
 import "@fontsource-variable/inter/opsz.css";
 import "@fontsource-variable/jetbrains-mono";
-import "./theme/view-transitions.css";
+import "./theme/global.css";
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";

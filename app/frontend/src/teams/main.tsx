@@ -1,5 +1,5 @@
 import { createNestablePublicClientApplication, type IPublicClientApplication } from "@azure/msal-browser";
-import { Button, Caption1, FluentProvider, makeStyles, Text, tokens, webLightTheme } from "@fluentui/react-components";
+import { AriaLiveAnnouncer, Button, Caption1, FluentProvider, makeStyles, Text, tokens, webLightTheme } from "@fluentui/react-components";
 import { app, chat, dialog } from "@microsoft/teams-js";
 import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -174,7 +174,9 @@ async function start() {
     root.render(
       <StrictMode>
         <FluentProvider theme={webLightTheme}>
-          <TeamsApp config={config} options={options} inTeams={inTeams} />
+          <AriaLiveAnnouncer>
+            <TeamsApp config={config} options={options} inTeams={inTeams} />
+          </AriaLiveAnnouncer>
         </FluentProvider>
       </StrictMode>,
     );

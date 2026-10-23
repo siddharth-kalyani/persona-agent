@@ -114,7 +114,8 @@ const useStyles = makeStyles({
   accountText: { display: "grid", minWidth: 0, flexGrow: 1 },
   accountName: { ...typo.itemTitle, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   accountMeta: { display: "flex", alignItems: "center", gap: "6px", minWidth: 0 },
-  accountEmail: { ...typo.label, fontWeight: 400, color: vt.text3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  accountEmail: { ...typo.label, fontWeight: 400, color: vt.text3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 },
+  accountBadge: { flexShrink: 0 },
   chevron: { color: vt.text3, flexShrink: 0 },
 });
 
@@ -160,7 +161,7 @@ export function Sidebar({
       </div>
       <button type="button" className={s.search} onClick={onSearch} aria-label="Search or jump to (command palette)">
         <Search16Regular />
-        <span className={s.searchLabel}>Search or jump to…</span>
+        <span className={s.searchLabel}>Search</span>
         <Kbd>{modKey}</Kbd>
         <Kbd>K</Kbd>
       </button>
@@ -231,8 +232,8 @@ export function AccountMenu({
           <span className={s.accountText}>
             <span className={s.accountName}>{name}</span>
             <span className={s.accountMeta}>
-              {email && <span className={s.accountEmail}>{email}</span>}
-              {badge && <Pill>{badge}</Pill>}
+              {email && email !== name && <span className={s.accountEmail}>{email}</span>}
+              {badge && <Pill className={s.accountBadge}>{badge}</Pill>}
             </span>
           </span>
           <ChevronUpDown16Regular className={s.chevron} />

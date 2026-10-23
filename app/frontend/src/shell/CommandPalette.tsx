@@ -33,6 +33,8 @@ const useStyles = makeStyles({
     height: "52px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
     color: vt.text3,
+    // The input itself has no outline; the row's rule marks focus.
+    ":focus-within": { borderBottomColor: tokens.colorStrokeFocus2 },
   },
   input: {
     flexGrow: 1,
@@ -44,8 +46,17 @@ const useStyles = makeStyles({
     fontSize: "15px",
     lineHeight: "24px",
     "::placeholder": { color: vt.text3 },
+    // 16px on phones so iOS doesn't zoom on focus.
+    "@media (max-width: 639px)": { fontSize: "16px" },
   },
-  list: { maxHeight: "min(400px, 60vh)", overflowY: "auto", padding: "6px", margin: 0, listStyle: "none" },
+  list: {
+    maxHeight: "min(400px, 60vh)",
+    overflowY: "auto",
+    padding: "6px",
+    margin: 0,
+    listStyle: "none",
+    "@media (max-width: 639px)": { maxHeight: "calc(100dvh - 52px)" },
+  },
   group: { ...typo.label, color: vt.text3, padding: "10px 10px 4px" },
   item: {
     display: "flex",
@@ -150,7 +161,7 @@ export function CommandPalette({ open, onOpenChange, commands }: { open: boolean
             onKeyDown={onKeyDown}
             role="combobox"
             aria-expanded="true"
-            aria-controls={listId}
+            aria-controls={results.length ? listId : undefined}
             aria-activedescendant={results[active] ? `${listId}-${results[active].id}` : undefined}
             aria-label="Search pages and actions"
           />

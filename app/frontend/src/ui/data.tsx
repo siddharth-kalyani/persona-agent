@@ -59,6 +59,7 @@ const useStyles = makeStyles({
     },
     "@media (hover: hover)": { ":hover": { backgroundColor: tokens.colorNeutralBackground1Selected } },
   },
+  selectedTrailing: { color: vt.text2 },
   noLeading: { gridTemplateColumns: "minmax(0, 1fr) auto" },
   leading: { display: "grid", placeItems: "center", color: vt.text2 },
   body: { display: "grid", gap: "2px", minWidth: 0 },
@@ -70,11 +71,10 @@ const useStyles = makeStyles({
   strip: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-    gap: "1px",
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralStroke3, // shows through the gaps as hairlines
-    overflow: "hidden",
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: "hidden", // clips the first row's and column's outer hairlines
   },
   stat: {
     ...hoverTransition,
@@ -84,6 +84,8 @@ const useStyles = makeStyles({
     textAlign: "left",
     border: "none",
     backgroundColor: tokens.colorNeutralBackground1,
+    // Hairlines on each cell's left and top: whatever the wrap, rows and columns stay ruled.
+    boxShadow: `-1px 0 0 0 ${tokens.colorNeutralStroke3}, 0 -1px 0 0 ${tokens.colorNeutralStroke3}`,
     color: "inherit",
     font: "inherit",
     minWidth: 0,
@@ -178,7 +180,7 @@ export function ListRow({
           <span className={mergeClasses(s.title, wrap && s.titleWrap)}>{title}</span>
           {meta && <span className={mergeClasses(s.meta, wrap && s.metaWrap)}>{meta}</span>}
         </span>
-        {trailing && <span className={s.trailing}>{trailing}</span>}
+        {trailing && <span className={mergeClasses(s.trailing, selected && s.selectedTrailing)}>{trailing}</span>}
       </Tag>
     </li>
   );

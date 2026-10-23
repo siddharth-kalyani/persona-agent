@@ -1,6 +1,6 @@
 /** Light, dark or the system's choice. The preference is a per-browser convenience (localStorage);
  * the page renders correctly without it. */
-import { FluentProvider, makeStyles } from "@fluentui/react-components";
+import { AriaLiveAnnouncer, FluentProvider } from "@fluentui/react-components";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useGlobalStyles } from "./global";
 import { vanimoDark, vanimoLight } from "./theme";
@@ -30,13 +30,8 @@ function systemDark(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
 }
 
-const useStyles = makeStyles({
-  root: { minHeight: "100vh", backgroundColor: "var(--vFrame)" },
-});
-
 export function VanimoThemeProvider({ children }: { children: ReactNode }) {
   useGlobalStyles();
-  const styles = useStyles();
   const [preference, setPreferenceState] = useState<ThemePreference>(stored);
   const [dark, setDark] = useState(systemDark);
 
@@ -75,8 +70,11 @@ export function VanimoThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={value}>
-      <FluentProvider theme={mode === "dark" ? vanimoDark : vanimoLight} className={styles.root}>
-        {children}
+      {/* No className here: Fluent copies the provider's classes onto every portal mount node (menus,
+          tooltips, the live announcer), so a layout style on it would cover the page. The shell and
+          the signed-out screens paint the frame themselves. */}
+      <FluentProvider theme={mode === "dark" ? vanimoDark : vanimoLight}>
+        <AriaLiveAnnouncer>{children}</AriaLiveAnnouncer>
       </FluentProvider>
     </ThemeContext.Provider>
   );

@@ -1,6 +1,6 @@
 /// <reference types="office-js" />
 import { createNestablePublicClientApplication, type IPublicClientApplication } from "@azure/msal-browser";
-import { Button, Caption1, FluentProvider, makeStyles, Text, tokens, webLightTheme } from "@fluentui/react-components";
+import { AriaLiveAnnouncer, Button, Caption1, FluentProvider, makeStyles, Text, tokens, webLightTheme } from "@fluentui/react-components";
 import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Api } from "../api/client";
@@ -134,7 +134,9 @@ Office.onReady(async () => {
     root.render(
       <StrictMode>
         <FluentProvider theme={webLightTheme}>
-          <AddIn config={config} options={options} />
+          <AriaLiveAnnouncer>
+            <AddIn config={config} options={options} />
+          </AriaLiveAnnouncer>
         </FluentProvider>
       </StrictMode>,
     );

@@ -11,6 +11,7 @@ import { ShieldCheckmark20Regular } from "@fluentui/react-icons";
 import { useCallback, useEffect, useState } from "react";
 import type { BackstopEvent, BackstopKey, BackstopProbe, BackstopStatus } from "../../api/client";
 import { useApi } from "../../api/context";
+import { announceMeChanged } from "../../shell/events";
 import {
   absoluteTime,
   DataTable,
@@ -140,6 +141,7 @@ export function Backstops() {
     try {
       setNote(await fn());
       await load();
+      announceMeChanged(); // the shell's paused banner follows a resume at once
     } catch (e) {
       setError(errorText(e));
     } finally {

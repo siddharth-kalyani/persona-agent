@@ -167,7 +167,9 @@ export function DraftView({
       <div className={styles.head}>
         <div className={styles.row}>
           <span className={styles.kicker}>Vanimo draft</span>
-          <Pill tone="accent">Writing to: {draft.audience.label}</Pill>
+          <Pill tone="accent" wrap>
+            Writing to: {draft.audience.label}
+          </Pill>
           {offline ? (
             <Pill tone="warning">Offline stand-in, no AI model</Pill>
           ) : (

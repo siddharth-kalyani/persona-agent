@@ -26,7 +26,7 @@ const useStyles = makeStyles({
     height: "16px",
     padding: "0 4px",
     borderRadius: "8px",
-    backgroundColor: vt.accent,
+    backgroundColor: tokens.colorBrandBackground,
     color: tokens.colorNeutralForegroundOnBrand,
     fontSize: "10px",
     fontWeight: 600,

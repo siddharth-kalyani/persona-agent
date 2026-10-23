@@ -1,4 +1,4 @@
-import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import { FluentProvider, Popover, PopoverSurface, PopoverTrigger, webLightTheme } from "@fluentui/react-components";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -55,6 +55,35 @@ describe("theme", () => {
     expect(localStorage.getItem("vanimo.theme")).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
     localStorage.removeItem("vanimo.theme");
+  });
+});
+
+describe("portals", () => {
+  it("never get page-layout styles from the theme provider (they would cover the app)", async () => {
+    const { container } = render(
+      <VanimoThemeProvider>
+        <Popover open>
+          <PopoverTrigger>
+            <button type="button">Open</button>
+          </PopoverTrigger>
+          <PopoverSurface>Inside a portal</PopoverSurface>
+        </Popover>
+      </VanimoThemeProvider>,
+    );
+    const surface = await screen.findByText("Inside a portal");
+    const mount = [...document.body.children].find((el) => el !== container && el.contains(surface)) as HTMLElement;
+    expect(mount).toBeTruthy();
+    // jsdom doesn't apply Griffel's rules to computed styles, so read the rules themselves: none of the
+    // mount node's classes may give it a height or fix it in place (it would lay a sheet over the app;
+    // Fluent's own background on the zero-height node is harmless).
+    const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]) as CSSStyleRule[];
+    const offending = rules.filter(
+      (r) =>
+        r.selectorText &&
+        [...mount.classList].some((c) => r.selectorText.split(/[\s,>+~]+/).includes(`.${c}`)) &&
+        /(^|[\s{;])(min-)?height:|position:\s*fixed|inset:/.test(r.cssText),
+    );
+    expect(offending.map((r) => r.cssText)).toEqual([]);
   });
 });
 

@@ -82,10 +82,11 @@ const useStyles = makeStyles({
     },
   },
   rowTitle: { ...typo.itemTitle, color: vt.text1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  rowWhen: { ...typo.label, ...typo.tabular, fontWeight: 400, color: vt.text3, whiteSpace: "nowrap" },
+  rowWhen: { ...typo.label, ...typo.tabular, fontWeight: 400, color: vt.text2, whiteSpace: "nowrap" },
   rowLine: { ...typo.meta, color: vt.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   rowEmpty: { ...typo.meta, color: vt.text2, padding: "16px" },
-  readPane: { overflowY: "auto", minHeight: 0, padding: "24px 28px 32px", [NARROW]: { padding: "16px" } },
+  // Focusable only from code (tabIndex -1) when it opens on phones; the pane itself needs no ring.
+  readPane: { overflowY: "auto", minHeight: 0, padding: "24px 28px 32px", outline: "none", [NARROW]: { padding: "16px" } },
   back: { display: "none", marginBottom: "12px", [NARROW]: { display: "inline-flex" } },
   article: { display: "grid", gap: "20px", maxWidth: "720px", minWidth: 0 },
   head: { display: "grid", gap: "8px", paddingBottom: "16px", borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
@@ -119,7 +120,7 @@ const useStyles = makeStyles({
   },
   mine: { justifySelf: "end", backgroundColor: vt.selected },
   messageHead: { display: "flex", gap: "8px", alignItems: "baseline", ...typo.label, color: vt.text2 },
-  messageWhen: { fontWeight: 400, color: vt.text3, ...typo.tabular },
+  messageWhen: { fontWeight: 400, color: vt.text2, ...typo.tabular },
   messageText: { ...typo.reading, color: vt.text1, whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: 0 },
   messageStatus: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", marginTop: "4px" },
   note: { ...typo.meta, color: vt.text2, margin: 0 },
@@ -247,6 +248,7 @@ type View = "inbox" | "sent" | "chats" | "meetings";
 
 /** One two-line row in the list pane. */
 function Row({
+  id,
   first,
   selected,
   title,
@@ -255,6 +257,7 @@ function Row({
   status,
   onClick,
 }: {
+  id: string;
   first: boolean;
   selected: boolean;
   title: ReactNode;
@@ -268,6 +271,7 @@ function Row({
     <li>
       <button
         type="button"
+        data-row={id}
         className={mergeClasses(styles.row, first && styles.rowFirst, selected && styles.rowSelected)}
         aria-current={selected ? "true" : undefined}
         onClick={onClick}
@@ -294,6 +298,16 @@ export function SampleWorkspace() {
   const [showStored, setShowStored] = useState<string | null>(null);
   const readRef = useRef<HTMLDivElement>(null);
   const storedRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const returnTo = useRef<string | null>(null);
+
+  // On phones the list and the reading pane are separate views: move focus with the view, so it
+  // never drops to the page when the focused row (or the Back button) disappears.
+  useEffect(() => {
+    if (window.matchMedia?.("(max-width: 759px)").matches !== true) return;
+    if (selected) readRef.current?.focus();
+    else if (returnTo.current) listRef.current?.querySelector<HTMLElement>(`[data-row="${returnTo.current}"]`)?.focus();
+  }, [selected]);
 
   useEffect(() => {
     let live = true;
@@ -373,11 +387,12 @@ export function SampleWorkspace() {
       />
       <div className={styles.frame}>
         <div className={mergeClasses(styles.listPane, selected !== null && styles.hideOnNarrow)}>
-          <ul className={styles.list} aria-label={view}>
+          <ul className={styles.list} aria-label={view} ref={listRef}>
             {(view === "inbox" || view === "sent") &&
               emails.map((e, i) => (
                 <Row
                   key={e.id}
+                  id={e.id}
                   first={i === 0}
                   selected={selected === e.id}
                   onClick={() => select(e.id)}
@@ -391,6 +406,7 @@ export function SampleWorkspace() {
               ws.chats.map((c, i) => (
                 <Row
                   key={c.id}
+                  id={c.id}
                   first={i === 0}
                   selected={selected === c.id}
                   onClick={() => select(c.id)}
@@ -404,6 +420,7 @@ export function SampleWorkspace() {
               ws.meetings.map((m, i) => (
                 <Row
                   key={m.id}
+                  id={m.id}
                   first={i === 0}
                   selected={selected === m.id}
                   onClick={() => setSelected(m.id)}
@@ -417,13 +434,19 @@ export function SampleWorkspace() {
           </ul>
         </div>
 
-        <div ref={readRef} className={mergeClasses(styles.readPane, selected === null && styles.hideOnNarrow)}>
+        <div
+          ref={readRef}
+          tabIndex={-1}
+          aria-label="Reading pane"
+          className={mergeClasses(styles.readPane, selected === null && styles.hideOnNarrow)}
+        >
           <Button
             className={styles.back}
             appearance="subtle"
             size="small"
             icon={<ArrowLeft16Regular />}
             onClick={() => {
+              returnTo.current = selected;
               setSelected(null);
               setShowStored(null);
             }}
@@ -431,7 +454,7 @@ export function SampleWorkspace() {
             Back to the list
           </Button>
           {!selected && (
-            <EmptyState icon={<MailRead20Regular />} title="Select an item to read it">
+            <EmptyState headingLevel={2} icon={<MailRead20Regular />} title="Select an item to read it">
               Each item says what Vanimo did with it: learned from a redacted copy, excluded, or not used.
             </EmptyState>
           )}

@@ -1,3 +1,28 @@
+/* Global rules Griffel's makeStaticStyles can't express (selectors inside media queries). */
+
+/* Reduced motion: transitions and animations end at once. Fluent's own motion handles itself. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Keyboard focus never lands under a sticky bar: the top bar below 1024px, or a sticky footer. */
+html {
+  scroll-padding-bottom: 96px;
+}
+
+@media (max-width: 1023px) {
+  html {
+    scroll-padding-top: 64px;
+  }
+}
+
 /* Page changes: only the content area fades (150 ms in, 120 ms out); the sidebar and frame swap
    instantly. Opacity only, no slides. Browsers without view transitions just navigate. */
 ::view-transition-old(root),

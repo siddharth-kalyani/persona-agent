@@ -1,4 +1,4 @@
-import { Button, Field, Input, makeStyles, MessageBar, MessageBarBody } from "@fluentui/react-components";
+import { Button, Field, Input, Link, makeStyles, MessageBar, MessageBarBody } from "@fluentui/react-components";
 import { useState, type FormEvent } from "react";
 import { AuthFailure, useAuth } from "../auth/session";
 import { AuthPanel } from "./SignIn";
@@ -62,7 +62,14 @@ export function ChangePassword() {
     <AuthPanel
       title="Set your password"
       lead="You signed in with a one-time password. Choose your own to continue."
-      footer={`Signed in as ${auth.email ?? ""}`}
+      footer={
+        <>
+          Signed in as {auth.email ?? ""} ·{" "}
+          <Link as="button" onClick={() => void auth.signOut()}>
+            Sign out
+          </Link>
+        </>
+      }
     >
       {error && (
         <MessageBar intent="error">

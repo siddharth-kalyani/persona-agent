@@ -34,7 +34,17 @@ const useStyles = makeStyles({
 });
 
 /** The centred panel the signed-out screens share: the mark, a title, a line of purpose, content. */
-export function AuthPanel({ title, lead, children, footer }: { title: string; lead: ReactNode; children: ReactNode; footer?: ReactNode }) {
+export function AuthPanel({
+  title,
+  lead,
+  children,
+  footer,
+}: {
+  title: string;
+  lead: ReactNode;
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
   const s = useStyles();
   useEffect(() => {
     document.title = `${title} · Vanimo`;
@@ -50,7 +60,7 @@ export function AuthPanel({ title, lead, children, footer }: { title: string; le
         <p className={s.lead}>{lead}</p>
       </div>
       {children}
-      {footer && <p className={s.footer}>{footer}</p>}
+      {footer && <div className={s.footer}>{footer}</div>}
     </div>
   );
 }

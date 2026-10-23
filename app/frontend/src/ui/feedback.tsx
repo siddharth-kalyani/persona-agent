@@ -21,13 +21,17 @@ const useStyles = makeStyles({
     display: "inline-flex",
     alignItems: "center",
     gap: "4px",
-    height: "20px",
-    padding: "0 6px",
+    minHeight: "20px",
+    maxWidth: "100%",
+    padding: "1px 6px",
     borderRadius: tokens.borderRadiusSmall,
     ...typo.label,
     whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
     border: "1px solid transparent",
   },
+  pillWrap: { whiteSpace: "normal", overflowWrap: "anywhere" },
   pillNeutral: { backgroundColor: vt.inset, color: vt.text2, border: `1px solid ${tokens.colorNeutralStroke2}` },
   pillAccent: { backgroundColor: vt.accentTint, color: vt.accentTintText },
   pillSuccess: { backgroundColor: vt.successTint, color: vt.success },
@@ -76,11 +80,24 @@ export function StatusDot({ tone = "neutral", children }: { tone?: Tone; childre
 }
 
 /** A small label for a state. Neutral unless the state needs attention. */
-export function Pill({ tone = "neutral", icon, children, className }: { tone?: Tone; icon?: ReactNode; children: ReactNode; className?: string }) {
+export function Pill({
+  tone = "neutral",
+  icon,
+  wrap,
+  children,
+  className,
+}: {
+  tone?: Tone;
+  icon?: ReactNode;
+  /** Let long text wrap (e.g. "Writing to: someone outside your organisation") instead of truncating. */
+  wrap?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
   const s = useStyles();
   const t = { neutral: s.pillNeutral, accent: s.pillAccent, success: s.pillSuccess, warning: s.pillWarning, danger: s.pillDanger }[tone];
   return (
-    <span className={mergeClasses(s.pill, t, className)}>
+    <span className={mergeClasses(s.pill, t, wrap && s.pillWrap, className)}>
       {icon}
       {children}
     </span>
@@ -98,11 +115,11 @@ export function EmptyState({
   title: ReactNode;
   children?: ReactNode;
   action?: ReactNode;
-  /** 2 when the empty state sits directly under the page title, 3 inside a section. */
-  headingLevel?: 2 | 3;
+  /** 2 directly under the page title, 3 inside a section, 4 inside a sub-section. */
+  headingLevel?: 2 | 3 | 4;
 }) {
   const s = useStyles();
-  const Heading = headingLevel === 2 ? "h2" : "h3";
+  const Heading = (`h${headingLevel}` as "h2" | "h3" | "h4");
   return (
     <div className={s.empty}>
       {icon && <div className={s.emptyIcon} aria-hidden>{icon}</div>}

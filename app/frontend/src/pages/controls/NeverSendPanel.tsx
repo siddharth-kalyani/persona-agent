@@ -208,7 +208,7 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
           {words.length > 0 && <span className={styles.headingCount}>{words.length}</span>}
         </h3>
         {words.length === 0 ? (
-          <EmptyState icon={<TextBulletListSquare20Regular />} title="No never-send words yet">
+          <EmptyState headingLevel={4} icon={<TextBulletListSquare20Regular />} title="No never-send words yet">
             Add a codename or a name above. It's masked in everything Vanimo reads from then on, and in what it has
             already stored.
           </EmptyState>

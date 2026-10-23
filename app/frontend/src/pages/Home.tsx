@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, type DraftingStatus, type DraftSummary, type LearningStatus, type Ledger, type Me } from "../api/client";
 import { useApi } from "../api/context";
+import { AUDIENCE } from "./commitments/Commitments";
 import {
   EmptyState,
   List,
@@ -139,7 +140,10 @@ export function Home() {
   ]; // prettier-ignore
   const doneCount = steps.filter((s) => s.done).length;
   const weekAgo = Date.now() - 7 * 86_400_000;
-  const draftsThisWeek = drafts?.filter((d) => new Date(d.createdAt).getTime() > weekAgo).length;
+  const recentDrafts = drafts?.filter((d) => new Date(d.createdAt).getTime() > weekAgo).length;
+  // The API returns the 20 most recent drafts: when all of them are from this week, there may be more.
+  const draftsThisWeek =
+    drafts && recentDrafts !== undefined && drafts.length >= 20 && recentDrafts === drafts.length ? `${recentDrafts}+` : recentDrafts;
   const due = (ledger?.items ?? [])
     .filter((c) => c.dueAt)
     .sort((a, b) => new Date(a.dueAt!).getTime() - new Date(b.dueAt!).getTime())
@@ -251,7 +255,7 @@ export function Home() {
                     key={c.id}
                     leading={<TaskListSquareLtr16Regular aria-hidden />}
                     title={c.what}
-                    meta={`To ${c.relationship}${c.duePhrase ? ` · “${c.duePhrase}”` : ""}`}
+                    meta={`To ${AUDIENCE[c.relationship] ?? c.relationship}${c.duePhrase ? ` · “${c.duePhrase}”` : ""}`}
                     trailing={
                       new Date(c.dueAt!).getTime() < Date.now() ? (
                         <Pill tone="danger">Overdue</Pill>

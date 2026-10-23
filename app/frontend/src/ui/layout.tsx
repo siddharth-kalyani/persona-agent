@@ -8,7 +8,17 @@ import { vt } from "../theme/theme";
 import { typo } from "../theme/typography";
 
 const useStyles = makeStyles({
-  page: { display: "grid", gap: "32px", marginInline: "auto", width: "100%", minWidth: 0, alignContent: "start" },
+  // Grid children may shrink below their content's width: a single-line MessageBar (which switches to
+  // multi-line only when it overflows) or a long row must never widen the page.
+  page: {
+    display: "grid",
+    gap: "32px",
+    marginInline: "auto",
+    width: "100%",
+    minWidth: 0,
+    alignContent: "start",
+    "& > *": { minWidth: 0 },
+  },
   reading: { maxWidth: "760px" },
   normal: { maxWidth: "1080px" },
   wide: { maxWidth: "1280px" },
@@ -23,9 +33,16 @@ const useStyles = makeStyles({
   eyebrow: { ...typo.label, color: vt.text3, display: "flex", gap: "8px", alignItems: "center" },
   title: { ...typo.pageTitle, color: vt.text1, margin: 0 },
   description: { ...typo.body, color: vt.text2, margin: 0, maxWidth: "68ch" },
-  actions: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" },
-  section: { display: "grid", gap: "12px", minWidth: 0 },
-  sectionHeader: { display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" },
+  actions: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", minWidth: 0, maxWidth: "100%" },
+  section: { display: "grid", gap: "12px", minWidth: 0, "& > *": { minWidth: 0 } },
+  sectionHeader: {
+    display: "flex",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    gap: "12px",
+    flexWrap: "wrap",
+    minWidth: 0,
+  },
   sectionText: { display: "grid", gap: "2px", minWidth: 0 },
   sectionTitle: { ...typo.sectionTitle, color: vt.text1, margin: 0 },
   sectionDescription: { ...typo.meta, color: vt.text2, margin: 0, maxWidth: "72ch" },
@@ -60,7 +77,12 @@ const useStyles = makeStyles({
   settingText: { display: "grid", gap: "2px", minWidth: 0 },
   settingLabel: { ...typo.itemTitle, color: vt.text1 },
   settingDescription: { ...typo.meta, color: vt.text2 },
-  kv: { display: "grid", gridTemplateColumns: "minmax(120px, 200px) minmax(0, 1fr)", margin: 0 },
+  kv: {
+    display: "grid",
+    gridTemplateColumns: "minmax(120px, 200px) minmax(0, 1fr)",
+    margin: 0,
+    "@media (max-width: 479px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+  },
   kvTerm: {
     ...typo.meta,
     color: vt.text3,
@@ -74,6 +96,7 @@ const useStyles = makeStyles({
     padding: "8px 0",
     borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
     overflowWrap: "anywhere",
+    "@media (max-width: 479px)": { borderTop: "none", paddingTop: 0 },
   },
   kvFirst: { borderTop: "none" },
 });

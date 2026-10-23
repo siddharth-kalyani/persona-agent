@@ -115,6 +115,8 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke3}`,
     "@media (max-width: 639px)": { gridColumn: "1 / -1" },
   },
+  // The draft card has its own border: no box around it (never a card inside a card).
+  extraPlain: { gridColumn: "2 / -1", display: "grid", gap: "8px", minWidth: 0, "@media (max-width: 639px)": { gridColumn: "1 / -1" } },
   extraTitle: { ...typo.itemTitle, color: vt.text1, margin: 0 },
   form: { display: "flex", alignItems: "flex-end", gap: "8px", flexWrap: "wrap" },
   field: { flex: "1 1 220px", maxWidth: "320px" },
@@ -132,7 +134,7 @@ const useStyles = makeStyles({
   },
 });
 
-const AUDIENCE: Record<string, string> = {
+export const AUDIENCE: Record<string, string> = {
   manager: "your manager",
   report: "your team",
   peer: "colleagues",
@@ -199,6 +201,8 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
   const [checks, setChecks] = useState<DraftCheck[]>([]);
   const [confirmed, setConfirmed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Which commitment the notice is about (null: the page as a whole).
+  const [noticeFor, setNoticeFor] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -249,6 +253,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
       setConfirmed(false);
       setActive(null);
     } catch (e) {
+      setNoticeFor(c.id);
       setNotice(draftErrorText(e));
     } finally {
       setBusy(false);
@@ -256,6 +261,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
   }
 
   async function copy(d: Draft) {
+    setNoticeFor(draft?.id ?? null);
     try {
       await navigator.clipboard.writeText(text);
       setNotice(d.channel === "chat" ? "Copied. Paste it into the Teams chat." : "Copied. Paste it into your reply.");
@@ -266,6 +272,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
   }
 
   async function checkAgain(d: Draft) {
+    setNoticeFor(draft?.id ?? null);
     try {
       // The follow-up's conversation is the promise's: the API knows it, the page doesn't (no ID here).
       const res = await api.checkText(text, d.audience.to, d.audience.cc, null, d.channel === "chat" ? "chat" : "email");
@@ -279,6 +286,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
 
   async function place(d: Draft) {
     if (!d.id) return;
+    setNoticeFor(draft?.id ?? null);
     try {
       const res = await api.placeDraft(d.id, text, confirmed);
       setNotice(res.webLink ? "In your Outlook Drafts folder." : "In your Drafts folder (simulated in the sample workspace).");
@@ -308,7 +316,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
   if (!ledger) return <PageSkeleton label="Loading your promises…" />;
 
   // A notice about the follow-up being edited sits with it; anything else goes above the list.
-  const noticeInDraft = Boolean(draft && ledger.items.some((c) => c.id === draft.id));
+  const noticeInDraft = Boolean(draft && noticeFor === draft.id && ledger.items.some((c) => c.id === draft.id));
   const noticeBar = notice && (
     <MessageBar intent="info">
       <MessageBarBody>{notice}</MessageBarBody>
@@ -405,7 +413,11 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
                 <Field label={active.kind === "late" ? "New date (optional)" : "Next update by (optional)"} className={styles.field}>
                   <Input value={newDate} maxLength={40} placeholder="Monday, 21 Oct…" onChange={(_, d) => setNewDate(d.value)} />
                 </Field>
-                <Button appearance="primary" disabled={busy} onClick={() => void followUp(c, active.kind)}>
+                <Button
+                  appearance={draft?.id === c.id ? "secondary" : "primary"}
+                  disabled={busy}
+                  onClick={() => void followUp(c, active.kind)}
+                >
                   {busy ? "Drafting…" : "Draft it"}
                 </Button>
                 <Button appearance="subtle" onClick={() => setActive(null)}>Cancel</Button>
@@ -415,7 +427,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
         )}
         {draft?.id === c.id && (
           <Rise visible appear>
-            <div className={styles.extra} role="group" aria-label="Follow-up draft">
+            <div className={styles.extraPlain} role="group" aria-label="Follow-up draft">
               <p className={styles.extraTitle}>Follow-up draft</p>
               <DraftView
                 draft={draft.draft}
@@ -447,7 +459,7 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
                   </>
                 }
               />
-              {noticeBar}
+              {noticeInDraft && noticeBar}
             </div>
           </Rise>
         )}

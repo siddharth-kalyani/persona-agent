@@ -1,6 +1,8 @@
 import type { IPublicClientApplication } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
-import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import "@fontsource-variable/inter/opsz.css";
+import "@fontsource-variable/jetbrains-mono";
+import "./theme/view-transitions.css";
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
@@ -9,6 +11,7 @@ import { ApiProvider } from "./api/context";
 import { createMsal } from "./auth/msal";
 import { AuthProvider } from "./auth/session";
 import { loadConfig, loadSignInOptions } from "./config";
+import { VanimoThemeProvider } from "./theme/ThemeProvider";
 
 async function start() {
   const root = createRoot(document.getElementById("root")!);
@@ -19,7 +22,7 @@ async function start() {
     const withMsal = (children: ReactNode) => (msal ? <MsalProvider instance={msal}>{children}</MsalProvider> : children);
     root.render(
       <StrictMode>
-        <FluentProvider theme={webLightTheme}>
+        <VanimoThemeProvider>
           {withMsal(
             <AuthProvider config={config} options={options} msal={msal}>
               <ApiProvider config={config}>
@@ -29,11 +32,15 @@ async function start() {
               </ApiProvider>
             </AuthProvider>,
           )}
-        </FluentProvider>
+        </VanimoThemeProvider>
       </StrictMode>,
     );
   } catch (err) {
-    root.render(<p style={{ padding: 24, fontFamily: "Segoe UI, sans-serif" }}>{(err as Error).message}</p>);
+    root.render(
+      <p style={{ padding: 24, fontFamily: "'Inter Variable', 'Segoe UI', sans-serif", color: "#21201C" }}>
+        {(err as Error).message}
+      </p>,
+    );
   }
 }
 

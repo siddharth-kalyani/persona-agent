@@ -23,6 +23,8 @@ export default defineConfig({
   },
   build: {
     sourcemap: false,
+    // Fonts stay files: the CSP (default-src 'self') blocks data: URIs, which Vite uses for small assets.
+    assetsInlineLimit: (file) => (/\.(woff2?|ttf|otf)$/i.test(file) ? false : undefined),
     chunkSizeWarningLimit: 1000, // Fluent UI + MSAL; split per page in M1 when routes grow
     rolldownOptions: {
       input: { main: fileURLToPath(new URL("index.html", import.meta.url)), addin: fileURLToPath(new URL("addin.html", import.meta.url)),

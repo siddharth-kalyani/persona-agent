@@ -1,5 +1,5 @@
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -65,7 +65,7 @@ describe("sign-in", () => {
     const change = vi.fn(async () => undefined);
     renderApp(authState({ signedIn: true, method: "password", email: "me@example.com", mustChangePassword: true, changePassword: change }));
     expect(screen.getByText("Set your password")).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Home" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Main" })).not.toBeInTheDocument();
     const button = screen.getByRole("button", { name: "Set password" });
     await userEvent.type(screen.getByLabelText(/One-time password/), "ABCD-efgh-2345-jkmn");
     await userEvent.type(screen.getByLabelText(/^New password/), "a long enough phrase");
@@ -77,7 +77,7 @@ describe("sign-in", () => {
     expect(change).toHaveBeenCalledWith("ABCD-efgh-2345-jkmn", "a long enough phrase");
   });
 
-  it("super-admins see the admin tabs and a Microsoft 365 notice", async () => {
+  it("super-admins see the admin pages in the sidebar and a Microsoft 365 notice", async () => {
     const api = new Api("", async () => "t");
     const me: Me = {
       user: { displayName: "Me Example", jobTitle: "Engagement Manager" },
@@ -95,7 +95,9 @@ describe("sign-in", () => {
       authState({ signedIn: true, method: "password", email: "me@example.com", roles: me.roles, isAdmin: true }),
       api,
     );
-    expect(screen.getByRole("tab", { name: "Diagnostics" })).toBeInTheDocument();
+    const nav = screen.getAllByRole("navigation", { name: "Main" })[0]!;
+    expect(within(nav).getByRole("link", { name: "Diagnostics" })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "Home" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Super-admin")).toBeInTheDocument();
     expect(await screen.findByText(/You're seeing the sample workspace/)).toBeInTheDocument();
     expect(screen.getByText("Meera Iyer")).toBeInTheDocument();

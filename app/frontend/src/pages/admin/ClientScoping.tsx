@@ -1,9 +1,5 @@
 import {
-  Badge,
   Button,
-  Caption1,
-  Card,
-  CardHeader,
   Field,
   Input,
   makeStyles,
@@ -12,29 +8,62 @@ import {
   Radio,
   RadioGroup,
   Spinner,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
-  Text,
-  Textarea,
-  Title3,
-  tokens,
   Switch,
+  Textarea,
+  Tooltip,
 } from "@fluentui/react-components";
+import { BuildingMultiple20Regular, Delete16Regular } from "@fluentui/react-icons";
 import { useEffect, useState } from "react";
 import type { ClientAccount, MeetingHealth, Scoping } from "../../api/client";
 import { ApiError } from "../../api/client";
 import { useApi } from "../../api/context";
+import {
+  DataTable,
+  EmptyState,
+  Page,
+  PageSkeleton,
+  Pill,
+  Rise,
+  Section,
+  SettingList,
+  SettingRow,
+  StatusDot,
+  Td,
+  Time,
+  type Tone,
+  Tr,
+  typo,
+  vt,
+} from "../../ui";
 import { errorText } from "../Home";
 
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: tokens.spacingVerticalL },
-  form: { display: "grid", gap: tokens.spacingVerticalM, maxWidth: "640px" },
-  row: { display: "flex", gap: tokens.spacingHorizontalM, alignItems: "center", flexWrap: "wrap" },
-  muted: { color: tokens.colorNeutralForeground3 },
+  form: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    gap: "16px",
+    maxWidth: "720px",
+    "@media (max-width: 639px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+  },
+  full: { gridColumn: "1 / -1" },
+  formActions: { gridColumn: "1 / -1", display: "flex", gap: "8px" },
+  clientName: { ...typo.itemTitle, color: vt.text1, display: "block" },
+  clientMeta: { ...typo.meta, ...typo.tabular, color: vt.text2, display: "block" },
+  domains: { display: "flex", gap: "4px", flexWrap: "wrap" },
+  domain: { ...typo.address, fontWeight: 400, height: "auto", minHeight: "20px", whiteSpace: "normal" },
+  check: { display: "grid", gap: "12px" },
+  checkedAt: { ...typo.meta, color: vt.text3, display: "inline-flex", gap: "4px" },
+  health: { listStyle: "none", margin: 0, padding: 0, display: "grid", maxWidth: "820px" },
+  healthRow: {
+    display: "grid",
+    gridTemplateColumns: "110px minmax(0, 1fr)",
+    gap: "4px 16px",
+    padding: "10px 0",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    ":first-child": { borderTopColor: "transparent" },
+    "@media (max-width: 479px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+  },
+  healthText: { ...typo.meta, color: vt.text1 },
 });
 
 export function splitList(value: string): string[] {
@@ -50,7 +79,12 @@ function scopingError(e: unknown): string {
   return errorText(e);
 }
 
-const HEALTH_COLOR = { ok: "success", warn: "warning", fail: "danger", info: "informative" } as const;
+const HEALTH: Record<MeetingHealth["checks"][number]["state"], [Tone, string]> = {
+  ok: ["success", "OK"],
+  warn: ["warning", "Warning"],
+  fail: ["danger", "Problem"],
+  info: ["neutral", "Info"],
+};
 
 /** One transcript health check, in plain words with what to do about it. */
 export function healthText(c: MeetingHealth["checks"][number]): string {
@@ -99,6 +133,7 @@ export function ClientScoping() {
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<MeetingHealth | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     api.scoping().then(setScoping, (e) => setError(errorText(e)));
@@ -127,105 +162,40 @@ export function ClientScoping() {
     }
   }
 
-  if (!scoping) return error ? <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar> : <Spinner label="Loading…" />;
+  if (!scoping)
+    return error ? (
+      <Page title="Client scoping">
+        <MessageBar intent="error">
+          <MessageBarBody>{error}</MessageBarBody>
+        </MessageBar>
+      </Page>
+    ) : (
+      <PageSkeleton label="Loading…" />
+    );
+
+  const approvedCount = scoping.accounts.filter((a) => a.mode === "approved").length;
 
   return (
-    <div className={styles.stack}>
-      <Title3 as="h2">Client scoping</Title3>
-      <Text>
-        Rules here apply to everyone in your organisation. Users see them as locked and can't undo them. You never see
-        anyone's emails, chats or personal exclusions here.
-      </Text>
+    <Page
+      title="Client scoping"
+      description="Rules here apply to everyone in your organisation. Users see them as locked and can't undo them. You never see anyone's emails, chats or personal exclusions here."
+    >
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
-      <Card>
-        <CardHeader
-          header={<Text weight="semibold">Drafts in mailboxes</Text>}
-          description={
-            <Caption1>
-              Lets people choose to have reply drafts put in their Outlook Drafts folder (each person opts in; Vanimo
-              never sends). Turning it off stops new ones; drafts already there stay until people delete them.
-            </Caption1>
-          }
-        />
-        <Switch
-          checked={scoping.serverDrafts}
-          onChange={(_, d) => void run(() => api.setServerDrafts(d.checked))}
-          label="Allow drafts in people's Outlook Drafts folder"
-        />
-      </Card>
-      <Card>
-        <CardHeader
-          header={<Text weight="semibold">Teams</Text>}
-          description={
-            <Caption1>
-              Teams has no way for an app to type into the message box. Vanimo can open a chat with the draft already
-              typed in (never sent), which Microsoft documents for new chats only: turn it on once the Teams prefill
-              test (week-1 spike 1) shows it works in existing chats on your Teams clients. Until then people copy the
-              draft. Notifications carry counts only, never content.
-            </Caption1>
-          }
-        />
-        <Switch
-          checked={scoping.teamsPrefill}
-          onChange={(_, d) => void run(() => api.setTeamsPolicy(d.checked, scoping.teamsNotifications))}
-          label="Open Teams chats with the draft typed in"
-        />
-        <Switch
-          checked={scoping.teamsNotifications}
-          onChange={(_, d) => void run(() => api.setTeamsPolicy(scoping.teamsPrefill, d.checked))}
-          label="Send reminders to people's Teams activity feed"
-        />
-      </Card>
-      <Card>
-        <CardHeader
-          header={<Text weight="semibold">Meeting memory</Text>}
-          description={
-            <Caption1>
-              Vanimo reads the Teams transcripts of internal meetings people were invited to (as them, with their own
-              permission) and keeps their decisions, requirements and promises so they can ask about them. Each
-              person's exclusions still apply. Nothing is read until a Teams admin allows Microsoft Graph access to
-              transcripts; with speaker attribution off, notes have no names.
-            </Caption1>
-          }
-        />
-        <Switch
-          checked={scoping.meetingMemory}
-          onChange={(_, d) => void run(() => api.setMeetingsPolicy(d.checked))}
-          label="Remember Teams meetings"
-        />
-        <div className={styles.row}>
-          <Button
-            disabled={busy}
-            onClick={() => api.meetingHealth().then(setHealth, (e) => setError(errorText(e)))}
-          >
-            Check transcript access
-          </Button>
-          {health && <Caption1 className={styles.muted}>Checked {new Date(health.checkedAt).toLocaleTimeString()}</Caption1>}
-        </div>
-        {health && (
-          <ul aria-label="Transcript health">
-            {health.checks.map((c) => (
-              <li key={c.key}>
-                <Badge appearance="tint" color={HEALTH_COLOR[c.state]}>{c.state}</Badge> {healthText(c)}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-      <Card>
-        <CardHeader header={<Text weight="semibold">External people</Text>} />
+
+      <Section title="External people" description="Which conversations with people outside your organisation Vanimo may use.">
         <RadioGroup
+          aria-label="External people"
           value={scoping.externalMode}
           onChange={(_, d) => void run(() => api.setExternalMode(d.value as Scoping["externalMode"]))}
         >
           <Radio value="allow_all" label="Use conversations with any external people, except excluded clients" />
           <Radio value="approved_only" label="Only use conversations with approved clients (everything else external is excluded)" />
         </RadioGroup>
-        {scoping.externalMode === "approved_only" && !scoping.accounts.some((a) => a.mode === "approved") && (
+        {scoping.externalMode === "approved_only" && approvedCount === 0 && (
           <MessageBar intent="warning">
             <MessageBarBody>
               No client is approved yet, so every conversation with external people is excluded. Add approved clients
@@ -233,48 +203,68 @@ export function ClientScoping() {
             </MessageBarBody>
           </MessageBar>
         )}
-      </Card>
-      <Card>
-        <CardHeader header={<Text weight="semibold">Client accounts</Text>} />
-        <Table size="small" aria-label="Client accounts">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Client</TableHeaderCell>
-              <TableHeaderCell>Domains</TableHeaderCell>
-              <TableHeaderCell>Rule</TableHeaderCell>
-              <TableHeaderCell />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
+      </Section>
+
+      <Section
+        title="Client accounts"
+        description={
+          scoping.accounts.length > 0
+            ? `${scoping.accounts.length} ${scoping.accounts.length === 1 ? "client" : "clients"}, ${approvedCount} approved. Domains include their subdomains.`
+            : undefined
+        }
+      >
+        {scoping.accounts.length === 0 ? (
+          <EmptyState icon={<BuildingMultiple20Regular />} title="No client accounts yet">
+            Add a client below to exclude it for everyone, or to approve it when only approved clients are used.
+          </EmptyState>
+        ) : (
+          <DataTable
+            label="Client accounts"
+            columns={[{ label: "Client" }, { label: "Domains" }, { label: "Rule" }, { hiddenLabel: "Actions" }]}
+          >
             {scoping.accounts.map((a) => (
-              <TableRow key={a.id}>
-                <TableCell>
-                  {a.name}
-                  {a.sensitiveWords > 0 && <Caption1 className={styles.muted}> · {a.sensitiveWords} sensitive words</Caption1>}
-                </TableCell>
-                <TableCell>{a.domains.join(", ")}</TableCell>
-                <TableCell>
-                  <Badge color={a.mode === "excluded" ? "danger" : "success"} appearance="tint">
+              <Tr key={a.id}>
+                <Td primary>
+                  <span className={styles.clientName}>{a.name}</span>
+                  {a.sensitiveWords > 0 && (
+                    <span className={styles.clientMeta}>
+                      {a.sensitiveWords} sensitive {a.sensitiveWords === 1 ? "word" : "words"}
+                    </span>
+                  )}
+                </Td>
+                <Td label="Domains">
+                  <span className={styles.domains}>
+                    {a.domains.map((d) => (
+                      <Pill key={d} className={styles.domain}>
+                        {d}
+                      </Pill>
+                    ))}
+                  </span>
+                </Td>
+                <Td label="Rule">
+                  <Pill tone={a.mode === "excluded" ? "neutral" : "success"}>
                     {a.mode === "excluded" ? "Excluded" : "Approved"}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <Button size="small" disabled={busy} onClick={() => void run(() => api.removeAccount(a.id))}>
-                    Remove
-                  </Button>
-                </TableCell>
-              </TableRow>
+                  </Pill>
+                </Td>
+                <Td actions>
+                  <Tooltip content="Remove" relationship="description" withArrow>
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      icon={<Delete16Regular />}
+                      aria-label={`Remove ${a.name}`}
+                      disabled={busy}
+                      onClick={() => void run(() => api.removeAccount(a.id))}
+                    />
+                  </Tooltip>
+                </Td>
+              </Tr>
             ))}
-            {scoping.accounts.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={4}>No client accounts yet.</TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </Card>
-      <Card>
-        <CardHeader header={<Text weight="semibold">Add a client</Text>} />
+          </DataTable>
+        )}
+      </Section>
+
+      <Section title="Add a client">
         <div className={styles.form}>
           <Field label="Client name" required>
             <Input value={name} onChange={(_, d) => setName(d.value)} maxLength={120} />
@@ -282,20 +272,116 @@ export function ClientScoping() {
           <Field label="Email domains" required hint="Comma-separated. Subdomains are included.">
             <Input value={domains} onChange={(_, d) => setDomains(d.value)} placeholder="client.com, client.co.in" />
           </Field>
-          <RadioGroup layout="horizontal" value={mode} onChange={(_, d) => setMode(d.value as ClientAccount["mode"])}>
+          <RadioGroup
+            className={styles.full}
+            aria-label="Rule"
+            layout="horizontal"
+            value={mode}
+            onChange={(_, d) => setMode(d.value as ClientAccount["mode"])}
+          >
             <Radio value="excluded" label="Exclude (never learn from or draft with this client)" />
             <Radio value="approved" label="Approve" />
           </RadioGroup>
-          <Field label="Company-sensitive words for this client (optional)" hint="Codenames, pricing terms. Masked before any AI model sees them.">
-            <Textarea value={words} onChange={(_, d) => setWords(d.value)} />
+          <Field
+            className={styles.full}
+            label="Company-sensitive words for this client (optional)"
+            hint="Codenames, pricing terms. Masked before any AI model sees them."
+          >
+            <Textarea value={words} onChange={(_, d) => setWords(d.value)} resize="vertical" />
           </Field>
-          <div className={styles.row}>
+          <div className={styles.formActions}>
             <Button appearance="primary" disabled={busy || !name.trim() || !domains.trim()} onClick={() => void add()}>
               Add client
             </Button>
           </div>
         </div>
-      </Card>
-    </div>
+      </Section>
+
+      <Section title="Organisation settings" description="Each applies to everyone in your organisation.">
+        <SettingList>
+          <SettingRow
+            label="Allow drafts in people's Outlook Drafts folder"
+            description="Lets people choose to have reply drafts put in their Outlook Drafts folder (each person opts in; Vanimo never sends). Turning it off stops new ones; drafts already there stay until people delete them."
+          >
+            <Switch
+              checked={scoping.serverDrafts}
+              aria-label="Allow drafts in people's Outlook Drafts folder"
+              onChange={(_, d) => void run(() => api.setServerDrafts(d.checked))}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Open Teams chats with the draft typed in"
+            description="Teams has no way for an app to type into the message box. Vanimo can open a chat with the draft already typed in (never sent), which Microsoft documents for new chats only: turn it on once the Teams prefill test (week-1 spike 1) shows it works in existing chats on your Teams clients. Until then people copy the draft."
+          >
+            <Switch
+              checked={scoping.teamsPrefill}
+              aria-label="Open Teams chats with the draft typed in"
+              onChange={(_, d) => void run(() => api.setTeamsPolicy(d.checked, scoping.teamsNotifications))}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Send reminders to people's Teams activity feed"
+            description="Notifications carry counts only, never content."
+          >
+            <Switch
+              checked={scoping.teamsNotifications}
+              aria-label="Send reminders to people's Teams activity feed"
+              onChange={(_, d) => void run(() => api.setTeamsPolicy(scoping.teamsPrefill, d.checked))}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Remember Teams meetings"
+            description="Vanimo reads the Teams transcripts of internal meetings people were invited to (as them, with their own permission) and keeps their decisions, requirements and promises so they can ask about them. Each person's exclusions still apply. Nothing is read until a Teams admin allows Microsoft Graph access to transcripts; with speaker attribution off, notes have no names."
+          >
+            <Switch
+              checked={scoping.meetingMemory}
+              aria-label="Remember Teams meetings"
+              onChange={(_, d) => void run(() => api.setMeetingsPolicy(d.checked))}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Transcript access"
+            description={
+              health ? (
+                <span className={styles.checkedAt}>
+                  Checked <Time iso={health.checkedAt} />
+                </span>
+              ) : (
+                "Checks that Teams lets Vanimo read meeting transcripts, using your own recent meetings."
+              )
+            }
+          >
+            <Button
+              disabled={busy || checking}
+              icon={checking ? <Spinner size="extra-tiny" aria-hidden /> : undefined}
+              onClick={() => {
+                setChecking(true);
+                api
+                  .meetingHealth()
+                  .then(setHealth, (e) => setError(errorText(e)))
+                  .finally(() => setChecking(false));
+              }}
+            >
+              Check transcript access
+            </Button>
+          </SettingRow>
+        </SettingList>
+        {health && (
+          <Rise visible appear>
+            <ul className={styles.health} aria-label="Transcript health">
+              {health.checks.map((c) => {
+                const [tone, word] = HEALTH[c.state];
+                return (
+                  <li key={c.key} className={styles.healthRow}>
+                    <StatusDot tone={tone}>{word}</StatusDot>
+                    <span className={styles.healthText}>{healthText(c)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </Rise>
+        )}
+      </Section>
+    </Page>
   );
 }

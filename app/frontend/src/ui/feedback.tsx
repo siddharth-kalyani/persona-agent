@@ -92,17 +92,21 @@ export function EmptyState({
   title,
   children,
   action,
+  headingLevel = 3,
 }: {
   icon?: ReactNode;
   title: ReactNode;
   children?: ReactNode;
   action?: ReactNode;
+  /** 2 when the empty state sits directly under the page title, 3 inside a section. */
+  headingLevel?: 2 | 3;
 }) {
   const s = useStyles();
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
     <div className={s.empty}>
       {icon && <div className={s.emptyIcon} aria-hidden>{icon}</div>}
-      <h3 className={s.emptyTitle}>{title}</h3>
+      <Heading className={s.emptyTitle}>{title}</Heading>
       {children && <p className={s.emptyBody}>{children}</p>}
       {action && <div className={s.emptyAction}>{action}</div>}
     </div>

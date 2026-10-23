@@ -1,38 +1,235 @@
 /** Meetings (M6): what your Teams meetings decided, asked for and promised, read from Microsoft's own
  * transcripts, and questions about them answered with citations. Shown in the web app and as a tab in
  * Teams. Only internal Teams meetings with transcription on; your exclusions apply before anything is
- * read. Answers quote your notes and say where they come from, or say they found nothing. */
+ * read. Answers quote your notes and say where they come from, or say they found nothing.
+ * Layout: the ask bar first; the answer in reading type with numbered citation chips and a sources
+ * list; then the meetings (grouped by day) beside the open meeting's notes and transcript.
+ * No router hooks: the Teams tab renders this without a router. */
 import {
-  Badge,
   Button,
-  Caption1,
-  Card,
   Field,
   Input,
   makeStyles,
+  mergeClasses,
+  shorthands,
   MessageBar,
   MessageBarBody,
   Select,
   Spinner,
-  Text,
-  Title3,
   tokens,
+  Tooltip,
 } from "@fluentui/react-components";
-import { useCallback, useEffect, useState } from "react";
-import type { MeetingAnswer, MeetingDetail, MeetingList, MeetingNote, MeetingScan, NoteKind } from "../../api/client";
+import { CalendarLtr20Regular, Delete16Regular, Dismiss20Regular, Search16Regular } from "@fluentui/react-icons";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type {
+  MeetingAnswer,
+  MeetingCitation,
+  MeetingDetail,
+  MeetingList,
+  MeetingNote,
+  MeetingScan,
+  NoteKind,
+} from "../../api/client";
 import { useApi } from "../../api/context";
 import { draftErrorText } from "../../drafting/DraftView";
+import { EmptyState, hoverTransition, List, ListRow, Page, PageSkeleton, Pill, Rise, StatusDot, Surface, typo, vt } from "../../ui";
 
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: tokens.spacingVerticalL },
-  tight: { display: "grid", gap: tokens.spacingVerticalXS },
-  row: { display: "flex", gap: tokens.spacingHorizontalM, alignItems: "center", flexWrap: "wrap" },
-  muted: { color: tokens.colorNeutralForeground3 },
-  answer: { whiteSpace: "pre-wrap", margin: 0 },
-  quote: { margin: 0, fontStyle: "italic", color: tokens.colorNeutralForeground2 },
-  turn: { margin: 0 },
-  highlight: { margin: 0, backgroundColor: tokens.colorPaletteYellowBackground2 },
-  list: { margin: 0, paddingLeft: tokens.spacingHorizontalL },
+  embedded: { display: "grid", gap: "24px", minWidth: 0 },
+  context: { display: "flex", alignItems: "center", gap: "8px 12px", flexWrap: "wrap" },
+  // Ask
+  ask: { display: "grid", gap: "12px", minWidth: 0 },
+  askForm: { display: "flex", alignItems: "flex-end", gap: "8px", flexWrap: "wrap" },
+  askField: { flex: "1 1 320px", minWidth: 0 },
+  examples: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" },
+  examplesLabel: { ...typo.meta, color: vt.text3, marginRight: "2px" },
+  answer: {
+    display: "grid",
+    gap: "16px",
+    minWidth: 0,
+    padding: "20px 24px",
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    "@media (max-width: 639px)": { padding: "16px" },
+  },
+  answerWhen: { ...typo.meta, color: vt.text3, margin: 0 },
+  answerText: { ...typo.reading, color: vt.text1, margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "72ch" },
+  cite: {
+    display: "inline-grid",
+    placeItems: "center",
+    minWidth: "18px",
+    height: "18px",
+    padding: "0 4px",
+    margin: "0 1px",
+    verticalAlign: "1px",
+    borderRadius: tokens.borderRadiusSmall,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: vt.inset,
+    color: vt.text2,
+    fontFamily: tokens.fontFamilyBase,
+    fontSize: "12px",
+    lineHeight: "16px",
+    fontWeight: 500,
+    ...typo.tabular,
+    cursor: "pointer",
+    ...hoverTransition,
+    "@media (hover: hover)": {
+      ":hover": { backgroundColor: vt.accentTint, color: vt.accentTintText, ...shorthands.borderColor(vt.accent) },
+    },
+    ":focus-visible": { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: "1px" },
+  },
+  sources: { display: "grid", gap: "8px", minWidth: 0 },
+  sourcesTitle: { ...typo.label, color: vt.text2, margin: 0 },
+  sourceList: { display: "grid", margin: 0, padding: 0, listStyle: "none" },
+  source: {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    gap: "4px 12px",
+    alignItems: "start",
+    padding: "10px 0",
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    "@media (max-width: 639px)": { gridTemplateColumns: "auto minmax(0, 1fr)" },
+  },
+  sourceChip: {
+    display: "inline-grid",
+    placeItems: "center",
+    minWidth: "18px",
+    height: "18px",
+    padding: "0 4px",
+    marginTop: "1px",
+    borderRadius: tokens.borderRadiusSmall,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: vt.inset,
+    color: vt.text2,
+    fontSize: "12px",
+    lineHeight: "16px",
+    fontWeight: 500,
+    ...typo.tabular,
+  },
+  sourceBody: { display: "grid", gap: "2px", minWidth: 0 },
+  sourceTitle: { ...typo.itemTitle, color: vt.text1 },
+  sourceMeta: { ...typo.meta, ...typo.tabular, color: vt.text3 },
+  sourceQuote: { ...typo.meta, color: vt.text2, overflowWrap: "anywhere" },
+  sourceAction: { "@media (max-width: 639px)": { gridColumn: "2 / -1", justifySelf: "start" } },
+  candidates: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
+  candidatesLabel: { ...typo.itemTitle, color: vt.text1 },
+  answerLabel: {
+    ...typo.meta,
+    color: vt.text3,
+    margin: 0,
+    paddingTop: "12px",
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  // Meetings and the open meeting
+  split: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr)",
+    gap: "24px",
+    alignItems: "start",
+    "@media (min-width: 1200px)": {
+      gridTemplateColumns: "340px minmax(0, 1fr)",
+      gridTemplateAreas: '"list detail"',
+    },
+  },
+  listPane: { display: "grid", gap: "12px", minWidth: 0, "@media (min-width: 1200px)": { gridArea: "list" } },
+  detailPane: { minWidth: 0, "@media (min-width: 1200px)": { gridArea: "detail" } },
+  placeholder: {
+    display: "none",
+    ...typo.meta,
+    color: vt.text2,
+    margin: 0,
+    "@media (min-width: 1200px)": {
+      display: "flex",
+      alignItems: "center",
+      gap: "10px",
+      gridArea: "detail",
+      padding: "20px 24px",
+      border: `1px solid ${tokens.colorNeutralStroke3}`,
+      borderRadius: tokens.borderRadiusXLarge,
+    },
+  },
+  placeholderIcon: { color: vt.text3, flexShrink: 0 },
+  h2: { ...typo.sectionTitle, color: vt.text1, margin: 0, display: "flex", alignItems: "baseline", gap: "8px" },
+  count: { ...typo.meta, ...typo.tabular, color: vt.text3, fontWeight: 400 },
+  dayHead: {
+    ...typo.label,
+    color: vt.text2,
+    margin: 0,
+    padding: "6px 16px",
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  rowMeta: { display: "inline-flex", alignItems: "center", gap: "6px", flexWrap: "wrap", ...typo.tabular },
+  hidden: { ...typo.meta, color: vt.text2, margin: 0 },
+  // Meeting detail
+  detail: { display: "grid", gap: "24px", minWidth: 0 },
+  detailHead: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "12px", alignItems: "start" },
+  detailTitle: { ...typo.sectionTitle, color: vt.text1, margin: 0, overflowWrap: "anywhere" },
+  detailMeta: { display: "flex", alignItems: "center", gap: "6px 8px", flexWrap: "wrap", ...typo.meta, ...typo.tabular, color: vt.text2, margin: "4px 0 0" },
+  detailNote: { ...typo.meta, color: vt.text2, margin: 0 },
+  block: { display: "grid", gap: "8px", minWidth: 0 },
+  h3: { ...typo.itemTitle, color: vt.text1, margin: 0, display: "flex", alignItems: "baseline", gap: "8px" },
+  notes: { display: "grid", margin: 0, padding: 0, listStyle: "none" },
+  note: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    gap: "4px 12px",
+    alignItems: "start",
+    padding: "8px 0",
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    ":first-child": { borderTop: "none", paddingTop: 0 },
+  },
+  noteBody: { display: "grid", gap: "2px", minWidth: 0 },
+  noteText: { ...typo.body, color: vt.text1, overflowWrap: "anywhere" },
+  noteDismissed: { color: vt.text3, textDecorationLine: "line-through" },
+  noteMeta: { ...typo.meta, ...typo.tabular, color: vt.text3 },
+  transcript: {
+    position: "relative",
+    display: "grid",
+    gap: "2px",
+    margin: 0,
+    padding: "4px",
+    listStyle: "none",
+    maxHeight: "440px",
+    overflowY: "auto",
+    border: `1px solid ${tokens.colorNeutralStroke3}`,
+    borderRadius: tokens.borderRadiusLarge,
+  },
+  turn: {
+    display: "grid",
+    gridTemplateColumns: "72px minmax(0, 1fr)",
+    gap: "12px",
+    padding: "6px 8px",
+    borderRadius: tokens.borderRadiusMedium,
+    "@media (max-width: 639px)": { gridTemplateColumns: "minmax(0, 1fr)", gap: "2px" },
+  },
+  turnFocus: { backgroundColor: vt.accentTint },
+  turnTime: { ...typo.meta, ...typo.tabular, color: vt.text3, paddingTop: "3px" },
+  turnBody: { display: "grid", gap: "2px", minWidth: 0 },
+  turnSpeaker: { ...typo.label, color: vt.text2 },
+  turnText: { ...typo.reading, color: vt.text1, overflowWrap: "anywhere" },
+  footer: {
+    display: "grid",
+    gap: "16px",
+    paddingTop: "16px",
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  fixRow: { display: "flex", alignItems: "flex-end", gap: "8px 12px", flexWrap: "wrap" },
+  fixField: { flex: "1 1 180px", maxWidth: "260px" },
+  forget: { display: "flex", alignItems: "center", gap: "8px 12px", flexWrap: "wrap" },
+  forgetText: { ...typo.meta, color: vt.text1, margin: 0, flex: "1 1 260px" },
+  dangerText: {
+    ":enabled": { color: vt.danger },
+    ":enabled:hover": { color: vt.danger },
+    ":enabled:hover:active": { color: vt.danger },
+  },
+  dangerPrimary: {
+    backgroundColor: tokens.colorStatusDangerBackground3,
+    color: tokens.colorNeutralForegroundOnBrand,
+    ":hover": { backgroundColor: tokens.colorStatusDangerBackground3Hover, color: tokens.colorNeutralForegroundOnBrand },
+    ":hover:active": { backgroundColor: tokens.colorStatusDangerBackground3Pressed, color: tokens.colorNeutralForegroundOnBrand },
+  },
 });
 
 export const NOTE_LABEL: Record<NoteKind, [string, string]> = {
@@ -59,6 +256,25 @@ function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function hm(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/** "Today", "Yesterday", "Tuesday", "13 Oct", "13 Oct 2025": the heading of a day's meetings. */
+function dayLabel(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const start = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((start(now) - start(d)) / 86_400_000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  if (diff > 1 && diff < 7) return d.toLocaleDateString(undefined, { weekday: "long" });
+  return d.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
 /** The notes summary of a meeting: "2 decisions · 1 requirement". */
 export function noteSummary(notes: MeetingList["items"][number]["notes"]): string {
   const parts = ORDER.filter((k) => notes[k]).map((k) => `${notes[k]} ${NOTE_LABEL[k][notes[k] === 1 ? 0 : 1].toLowerCase()}`);
@@ -77,6 +293,28 @@ export function scanText(r: MeetingScan): string | null {
   if (r.waiting) parts.push(`${r.waiting} waiting for a transcript`);
   if (r.leftOut) parts.push(`${r.leftOut} part${r.leftOut > 1 ? "s" : ""} left out (people not on the invite, or text that couldn't be made safe)`);
   return parts.length ? parts.join(" · ") : null;
+}
+
+/** The answer's text with each "[n]" turned into a citation chip that opens the cited moment. */
+function AnswerText({ text, citations, onCite }: { text: string; citations: MeetingCitation[]; onCite: (c: MeetingCitation) => void }) {
+  const s = useStyles();
+  const byN = new Map(citations.map((c) => [c.n, c]));
+  return (
+    <>
+      {text.split(/(\[\d+\])/).map((part, i) => {
+        const m = /^\[(\d+)\]$/.exec(part);
+        const c = m ? byN.get(Number(m[1])) : undefined;
+        if (!c) return part;
+        return (
+          <Tooltip key={i} content={`${c.speaker}, ${clock(c.at)}: “${c.quote}”`} relationship="description" withArrow>
+            <button type="button" className={s.cite} aria-label={`Source ${c.n}: ${c.title}`} onClick={() => onCite(c)}>
+              {c.n}
+            </button>
+          </Tooltip>
+        );
+      })}
+    </>
+  );
 }
 
 export function Meetings({ embedded = false }: { embedded?: boolean }) {
@@ -148,23 +386,41 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
     }
   }
 
-  if (error) return <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>; // prettier-ignore
-  if (!list) return <Spinner label="Loading your meetings…" />;
+  const frame = (children: ReactNode) =>
+    embedded ? (
+      <div className={styles.embedded}>{children}</div>
+    ) : (
+      <Page
+        title="Meetings"
+        width="wide"
+        description="What your Teams meetings decided, asked for and promised, read from Microsoft's own transcripts of internal meetings you were invited to. Ask a question and every answer says which meeting and when it was said."
+      >
+        {children}
+      </Page>
+    );
 
-  return (
-    <div className={styles.stack}>
-      {!embedded && (
-        <div>
-          <Title3 as="h2">Meetings</Title3>
-          <Text as="p">
-            What your Teams meetings decided, asked for and promised, read from Microsoft's own transcripts of internal
-            meetings you were invited to. Ask a question and every answer says which meeting and when it was said.
-          </Text>
-        </div>
-      )}
-      <div className={styles.row}>
-        <Badge appearance="tint" color={list.label.startsWith("Offline") ? "warning" : "brand"}>{list.label}</Badge>
-        {!list.on && <Badge appearance="tint" color="danger">Off for your organisation</Badge>}
+  if (error)
+    return frame(
+      <MessageBar intent="error">
+        <MessageBarBody>{error}</MessageBarBody>
+      </MessageBar>,
+    );
+  if (!list) return <PageSkeleton label="Loading your meetings…" />;
+
+  // Meetings by day, in the order the API gives them (newest first).
+  const days: Array<{ label: string; items: MeetingList["items"] }> = [];
+  for (const m of list.items) {
+    const label = dayLabel(m.startsAt);
+    const last = days[days.length - 1];
+    if (last && last.label === label) last.items.push(m);
+    else days.push({ label, items: [m] });
+  }
+
+  return frame(
+    <>
+      <div className={styles.context}>
+        <StatusDot tone={list.label.startsWith("Offline") ? "warning" : "neutral"}>{list.label}</StatusDot>
+        {!list.on && <Pill tone="danger">Off for your organisation</Pill>}
       </div>
       {scanNote && (
         <MessageBar intent="info">
@@ -177,112 +433,177 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
         </MessageBar>
       )}
 
-      <Card>
+      <div className={styles.ask}>
         <form
-          className={styles.tight}
+          className={styles.askForm}
           onSubmit={(e) => {
             e.preventDefault();
             void ask(question);
           }}
         >
-          <Field label="Ask about your meetings">
+          <Field label="Ask about your meetings" className={styles.askField}>
             <Input
               value={question}
               maxLength={300}
+              contentBefore={<Search16Regular aria-hidden />}
               placeholder="What did the client ask for in Tuesday's meeting?"
               onChange={(_, d) => setQuestion(d.value)}
             />
           </Field>
-          <div className={styles.row}>
-            <Button type="submit" appearance="primary" disabled={asking || !list.on || question.trim().length < 3}>
-              {asking ? "Looking…" : "Ask"}
-            </Button>
-            {EXAMPLES.map((q) => (
-              <Button key={q} size="small" appearance="subtle" disabled={!list.on} onClick={() => { setQuestion(q); void ask(q); }}>
-                {q}
-              </Button>
-            ))}
-          </div>
+          <Button
+            type="submit"
+            appearance="primary"
+            icon={asking ? <Spinner size="extra-tiny" /> : undefined}
+            disabled={asking || !list.on || question.trim().length < 3}
+          >
+            {asking ? "Looking…" : "Ask"}
+          </Button>
         </form>
-        {answer && (
-          <div className={styles.tight} aria-label="Answer">
-            {answer.when && <Caption1 className={styles.muted}>Looked at: {answer.when}</Caption1>}
-            <p className={styles.answer}>{answer.answer}</p>
-            {answer.citations.length > 0 && (
-              <ol className={styles.list} aria-label="Sources">
-                {answer.citations.map((c) => (
-                  <li key={c.n} value={c.n}>
-                    <Caption1>
-                      {c.title}, {when(c.meetingStart)} · {clock(c.at)}–{clock(c.endAt)} · {c.speaker}: “{c.quote}”{" "}
-                    </Caption1>
-                    <Button size="small" appearance="transparent" onClick={() => void open(c.meetingId, c.turn)}>
-                      Show in meeting
-                    </Button>
-                  </li>
-                ))}
-              </ol>
-            )}
-            {answer.candidates.length > 0 && (
-              <div className={styles.row}>
-                <Caption1>{answer.clarify ? "Which meeting?" : "Close matches:"}</Caption1>
-                {answer.candidates.map((m) => (
-                  <Button key={m.id} size="small" onClick={() => void ask(question, m.id)}>
-                    {m.title} ({when(m.startsAt)})
-                  </Button>
-                ))}
-              </div>
-            )}
-            <Caption1 className={styles.muted}>{answer.label}. Check anything important against the meeting.</Caption1>
-          </div>
-        )}
-      </Card>
-
-      {detail && (
-        <MeetingView
-          key={`${detail.id}:${detail.transcript.map((t) => t.speakerId).join(",")}`}
-          detail={detail}
-          focusTurn={focusTurn}
-          onDecide={(n) => void decide(n)}
-          onClose={() => setDetail(null)}
-          onChanged={async (forgotten) => {
-            if (forgotten) setDetail(null);
-            else await open(detail.id, focusTurn);
-            await refresh();
-          }}
-          onError={setNotice}
-        />
-      )}
-
-      {list.items.length === 0 ? (
-        <Caption1>
-          {list.on
-            ? "No meetings yet. Vanimo reads the transcripts of internal Teams meetings that had transcription on, after they end, each time you open this page."
-            : "Your organisation turned meeting memory off."}
-        </Caption1>
-      ) : (
-        <div className={styles.stack}>
-          {list.items.map((m) => (
-            <Card key={m.id}>
-              <div className={styles.row}>
-                <Text weight="semibold">{m.title}</Text>
-                {m.external && <Badge appearance="tint" color="informative">With people outside</Badge>}
-                {m.attribution === "unattributed" && <Badge appearance="tint" color="warning">No speaker names</Badge>}
-              </div>
-              <Caption1 className={styles.muted}>
-                {when(m.startsAt)} · {noteSummary(m.notes)}
-                {m.transcriptUntil ? ` · transcript kept until ${new Date(m.transcriptUntil).toLocaleDateString()}` : ""}
-              </Caption1>
-              <div className={styles.row}>
-                <Button size="small" onClick={() => void open(m.id)}>Open</Button>
-              </div>
-            </Card>
+        <div className={styles.examples}>
+          <span className={styles.examplesLabel}>Try</span>
+          {EXAMPLES.map((q) => (
+            <Button key={q} size="small" shape="circular" disabled={!list.on} onClick={() => { setQuestion(q); void ask(q); }}>
+              {q}
+            </Button>
           ))}
         </div>
-      )}
-      {list.hidden > 0 && (
-        <Caption1 className={styles.muted}>{list.hidden} hidden because of a rule you added; they're being deleted.</Caption1>
-      )}
-    </div>
+
+        {answer && (
+          <Rise visible appear>
+            <div className={styles.answer} role="region" aria-label="Answer">
+              {answer.when && <p className={styles.answerWhen}>Looked at: {answer.when}</p>}
+              <p className={styles.answerText}>
+                <AnswerText text={answer.answer} citations={answer.citations} onCite={(c) => void open(c.meetingId, c.turn)} />
+              </p>
+              {answer.citations.length > 0 && (
+                <div className={styles.sources}>
+                  <h2 className={styles.sourcesTitle}>Sources</h2>
+                  <ol className={styles.sourceList} aria-label="Sources">
+                    {answer.citations.map((c) => (
+                      <li key={c.n} value={c.n} className={styles.source}>
+                        <span className={styles.sourceChip} aria-hidden>
+                          {c.n}
+                        </span>
+                        <span className={styles.sourceBody}>
+                          <span className={styles.sourceTitle}>{c.title}</span>
+                          <span className={styles.sourceMeta}>
+                            {when(c.meetingStart)} · {clock(c.at)}–{clock(c.endAt)}
+                          </span>
+                          <span className={styles.sourceQuote}>
+                            {c.speaker}: “{c.quote}”
+                          </span>
+                        </span>
+                        <Button
+                          size="small"
+                          appearance="subtle"
+                          className={styles.sourceAction}
+                          onClick={() => void open(c.meetingId, c.turn)}
+                        >
+                          Show in meeting
+                        </Button>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+              {answer.candidates.length > 0 && (
+                <div className={styles.candidates}>
+                  <span className={styles.candidatesLabel}>{answer.clarify ? "Which meeting?" : "Close matches:"}</span>
+                  {answer.candidates.map((m) => (
+                    <Button key={m.id} size="small" onClick={() => void ask(question, m.id)}>
+                      {m.title} ({when(m.startsAt)})
+                    </Button>
+                  ))}
+                </div>
+              )}
+              <p className={styles.answerLabel}>{answer.label}. Check anything important against the meeting.</p>
+            </div>
+          </Rise>
+        )}
+      </div>
+
+      <div className={styles.split}>
+        {detail ? (
+          <div className={styles.detailPane}>
+            <MeetingView
+              key={`${detail.id}:${detail.transcript.map((t) => t.speakerId).join(",")}`}
+              detail={detail}
+              focusTurn={focusTurn}
+              onDecide={(n) => void decide(n)}
+              onClose={() => setDetail(null)}
+              onChanged={async (forgotten) => {
+                if (forgotten) setDetail(null);
+                else await open(detail.id, focusTurn);
+                await refresh();
+              }}
+              onError={setNotice}
+            />
+          </div>
+        ) : (
+          list.items.length > 0 && (
+            <p className={styles.placeholder}>
+              <CalendarLtr20Regular className={styles.placeholderIcon} aria-hidden />
+              Pick a meeting to read its notes and transcript, or ask a question above.
+            </p>
+          )
+        )}
+
+        <section className={styles.listPane} aria-labelledby="meetings-list-title">
+          <h2 id="meetings-list-title" className={styles.h2}>
+            Remembered meetings
+            <span className={styles.count}>{list.items.length}</span>
+          </h2>
+          {list.items.length === 0 ? (
+            <EmptyState icon={<CalendarLtr20Regular />} title={list.on ? "No meetings yet" : "Meeting memory is off"}>
+              {list.on
+                ? "No meetings yet. Vanimo reads the transcripts of internal Teams meetings that had transcription on, after they end, each time you open this page."
+                : "Your organisation turned meeting memory off."}
+            </EmptyState>
+          ) : (
+            <List bordered label="Remembered meetings">
+              {days.map((d, i) => (
+                <MeetingDay key={`${i}-${d.label}`} label={d.label}>
+                  {d.items.map((m) => (
+                    <ListRow
+                      key={m.id}
+                      wrap
+                      selected={detail?.id === m.id}
+                      onClick={() => void open(m.id)}
+                      title={m.title}
+                      meta={
+                        <span className={styles.rowMeta}>
+                          <span>
+                            {hm(m.startsAt)}–{hm(m.endsAt)} · {noteSummary(m.notes)}
+                          </span>
+                          {m.external && <Pill>With people outside</Pill>}
+                          {m.attribution === "unattributed" && <Pill tone="warning">No speaker names</Pill>}
+                        </span>
+                      }
+                    />
+                  ))}
+                </MeetingDay>
+              ))}
+            </List>
+          )}
+          {list.hidden > 0 && (
+            <p className={styles.hidden}>{list.hidden} hidden because of a rule you added; they're being deleted.</p>
+          )}
+        </section>
+      </div>
+    </>,
+  );
+}
+
+/** A day's heading inside the meetings list, followed by that day's rows. */
+function MeetingDay({ label, children }: { label: string; children: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <>
+      <li>
+        <h3 className={styles.dayHead}>{label}</h3>
+      </li>
+      {children}
+    </>
   );
 }
 
@@ -307,6 +628,15 @@ function MeetingView({
   const [from, setFrom] = useState(speakers[0]?.id ?? "");
   const [to, setTo] = useState("");
   const [confirmForget, setConfirmForget] = useState(false);
+  const transcriptRef = useRef<HTMLOListElement>(null);
+
+  // Bring the cited moment into view inside the transcript (no page jump, no animation).
+  useEffect(() => {
+    const box = transcriptRef.current;
+    if (!box || focusTurn === null) return;
+    const turn = box.querySelector<HTMLElement>(`[data-turn="${focusTurn}"]`);
+    if (turn) box.scrollTop = Math.max(0, turn.offsetTop - 8);
+  }, [focusTurn, detail]);
 
   async function fixSpeaker() {
     try {
@@ -327,87 +657,121 @@ function MeetingView({
   }
 
   return (
-    <Card aria-label="Meeting">
-      <div className={styles.row}>
-        <Title3 as="h3">{detail.title}</Title3>
-        <Caption1 className={styles.muted}>{when(detail.startsAt)}</Caption1>
-        <Button size="small" appearance="subtle" onClick={onClose}>Close</Button>
+    <Surface as="section" padding="l" aria-label="Meeting" className={styles.detail}>
+      <div className={styles.detailHead}>
+        <div>
+          <h2 className={styles.detailTitle}>{detail.title}</h2>
+          <p className={styles.detailMeta}>
+            <span>
+              {when(detail.startsAt)}–{hm(detail.endsAt)}
+            </span>
+            {detail.external && <Pill>With people outside</Pill>}
+          </p>
+        </div>
+        <Tooltip content="Close" relationship="label">
+          <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={onClose} />
+        </Tooltip>
       </div>
       {detail.attribution === "unattributed" && (
-        <Caption1>Speaker names were off for this meeting, so notes don't say who said what.</Caption1>
+        <p className={styles.detailNote}>Speaker names were off for this meeting, so notes don't say who said what.</p>
       )}
       {ORDER.map((kind) => {
         const notes = detail.notesList.filter((n) => n.kind === kind);
         return notes.length ? (
-          <div key={kind} className={styles.tight}>
-            <Text weight="semibold">{NOTE_LABEL[kind][1]}</Text>
-            {notes.map((n) => (
-              <div key={n.id} className={styles.row}>
-                <Text strikethrough={n.status === "dismissed"}>
-                  {n.text}
-                  {n.owner ? ` — for ${n.owner}` : ""}
-                  {n.dueAt ? ` (due ${when(n.dueAt)})` : ""}
-                </Text>
-                <Caption1 className={styles.muted}>
-                  {n.speaker}, {clock(n.saidAt)}
-                </Caption1>
-                <Button size="small" appearance="subtle" onClick={() => onDecide(n)}>
-                  {n.status === "active" ? "Not right" : "Restore"}
-                </Button>
-              </div>
-            ))}
+          <div key={kind} className={styles.block}>
+            <h3 className={styles.h3}>
+              {NOTE_LABEL[kind][1]}
+              <span className={styles.count}>{notes.length}</span>
+            </h3>
+            <ul className={styles.notes}>
+              {notes.map((n) => (
+                <li key={n.id} className={styles.note}>
+                  <span className={styles.noteBody}>
+                    <span className={mergeClasses(styles.noteText, n.status === "dismissed" && styles.noteDismissed)}>
+                      {n.text}
+                      {n.owner ? ` — for ${n.owner}` : ""}
+                      {n.dueAt ? ` (due ${when(n.dueAt)})` : ""}
+                    </span>
+                    <span className={styles.noteMeta}>
+                      {n.speaker}, {clock(n.saidAt)}
+                      {n.status === "dismissed" ? " · marked not right" : ""}
+                    </span>
+                  </span>
+                  <Button size="small" appearance="subtle" onClick={() => onDecide(n)}>
+                    {n.status === "active" ? "Not right" : "Restore"}
+                  </Button>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null;
       })}
       {detail.transcript.length > 0 ? (
-        <div className={styles.tight}>
-          <Text weight="semibold">Transcript</Text>
-          <Caption1 className={styles.muted}>
+        <div className={styles.block}>
+          <h3 className={styles.h3}>Transcript</h3>
+          <p className={styles.detailNote}>
             Kept until {detail.transcriptUntil ? new Date(detail.transcriptUntil).toLocaleDateString() : "—"}; then only the
             notes stay. Names you excluded and never-send words are never stored.
-          </Caption1>
-          {detail.transcript.map((t) => (
-            <p key={t.turn} className={t.turn === focusTurn ? styles.highlight : styles.turn}>
-              <Caption1 className={styles.muted}>{clock(t.at)}</Caption1> <b>{t.speaker}:</b> {t.text}
-            </p>
-          ))}
+          </p>
+          <ol className={styles.transcript} ref={transcriptRef} aria-label="Transcript">
+            {detail.transcript.map((t, i) => (
+              <li
+                key={t.turn}
+                data-turn={t.turn}
+                className={mergeClasses(styles.turn, t.turn === focusTurn && styles.turnFocus)}
+                aria-current={t.turn === focusTurn ? "true" : undefined}
+              >
+                <span className={styles.turnTime}>{clock(t.at)}</span>
+                <span className={styles.turnBody}>
+                  {(i === 0 || detail.transcript[i - 1]?.speaker !== t.speaker) && (
+                    <span className={styles.turnSpeaker}>{t.speaker}</span>
+                  )}
+                  <span className={styles.turnText}>{t.text}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
         </div>
       ) : (
-        <Caption1 className={styles.muted}>The transcript is no longer kept; the notes stay.</Caption1>
+        <p className={styles.detailNote}>The transcript is no longer kept; the notes stay.</p>
       )}
-      {speakers.length > 0 && (
-        <div className={styles.row}>
-          <Field label="Wrong speaker?">
-            <Select value={from} onChange={(_, d) => setFrom(d.value)}>
-              {speakers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="was really">
-            <Select value={to} onChange={(_, d) => setTo(d.value)}>
-              <option value="">I don't know who</option>
-              {detail.people
-                .filter((p) => p.id !== from)
-                .map((p) => (
+      <div className={styles.footer}>
+        {speakers.length > 0 && (
+          <div className={styles.fixRow}>
+            <Field label="Wrong speaker?" className={styles.fixField}>
+              <Select value={from} onChange={(_, d) => setFrom(d.value)}>
+                {speakers.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
-            </Select>
-          </Field>
-          <Button disabled={!from} onClick={() => void fixSpeaker()}>Fix speaker</Button>
-        </div>
-      )}
-      <div className={styles.row}>
-        {confirmForget ? (
-          <>
-            <Caption1>Forget this meeting? Its notes, transcript and promises go, and it's never read again.</Caption1>
-            <Button appearance="primary" onClick={() => void forget()}>Yes, forget it</Button>
-            <Button appearance="subtle" onClick={() => setConfirmForget(false)}>Cancel</Button>
-          </>
-        ) : (
-          <Button appearance="subtle" onClick={() => setConfirmForget(true)}>Forget this meeting</Button>
+              </Select>
+            </Field>
+            <Field label="was really" className={styles.fixField}>
+              <Select value={to} onChange={(_, d) => setTo(d.value)}>
+                <option value="">I don't know who</option>
+                {detail.people
+                  .filter((p) => p.id !== from)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+              </Select>
+            </Field>
+            <Button disabled={!from} onClick={() => void fixSpeaker()}>Fix speaker</Button>
+          </div>
         )}
+        <div className={styles.forget}>
+          {confirmForget ? (
+            <>
+              <p className={styles.forgetText}>Forget this meeting? Its notes, transcript and promises go, and it's never read again.</p>
+              <Button appearance="primary" className={styles.dangerPrimary} onClick={() => void forget()}>Yes, forget it</Button>
+              <Button appearance="subtle" onClick={() => setConfirmForget(false)}>Cancel</Button>
+            </>
+          ) : (
+            <Button appearance="subtle" icon={<Delete16Regular />} className={styles.dangerText} onClick={() => setConfirmForget(true)}>
+              Forget this meeting
+            </Button>
+          )}
+        </div>
       </div>
-    </Card>
+    </Surface>
   );
 }

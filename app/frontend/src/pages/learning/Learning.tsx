@@ -1,8 +1,9 @@
+/** Learning: Vanimo learns how you write from your own sent emails and chat messages (only from the
+ * sources you allowed), redacting each one before it is stored. The header starts or repeats a run,
+ * a strip says what's stored, the last run reads as a receipt, "What's stored" shows every kept item
+ * exactly as stored (tokens in mono) or as shown to you, and deleting sits at the end. */
 import {
   Button,
-  Caption1,
-  Card,
-  CardHeader,
   Dialog,
   DialogActions,
   DialogBody,
@@ -14,31 +15,124 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
-  Switch,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
-  Text,
-  Title3,
+  Tab,
+  TabList,
   tokens,
+  Tooltip,
 } from "@fluentui/react-components";
-import { useCallback, useEffect, useState } from "react";
+import { BookOpen20Regular, CheckmarkCircle16Filled, Delete16Regular } from "@fluentui/react-icons";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, type LearningStatus, type StoredItem } from "../../api/client";
+import { ApiError, type LearningRun, type LearningStatus, type StoredItem } from "../../api/client";
 import { useApi } from "../../api/context";
+import {
+  absoluteTime,
+  EmptyState,
+  Page,
+  PageSkeleton,
+  Pill,
+  relativeTime,
+  Rise,
+  Section,
+  SettingList,
+  SettingRow,
+  Stat,
+  StatStrip,
+  StatusDot,
+  Time,
+  typo,
+  vt,
+} from "../../ui";
 import { errorText } from "../Home";
 
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: tokens.spacingVerticalL },
-  row: { display: "flex", gap: tokens.spacingHorizontalM, alignItems: "center", flexWrap: "wrap" },
-  stats: { display: "grid", gap: tokens.spacingHorizontalL, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" },
-  stat: { display: "grid" },
-  big: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold },
-  muted: { color: tokens.colorNeutralForeground3 },
-  text: { whiteSpace: "pre-wrap", fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, margin: 0 },
+  runHead: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px 16px", ...typo.meta, color: vt.text2 },
+  runHeadItem: { ...typo.tabular },
+  runNote: { ...typo.meta, color: vt.text2, margin: 0, maxWidth: "72ch" },
+  receipt: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+    columnGap: "32px",
+    margin: 0,
+    padding: 0,
+    listStyle: "none",
+  },
+  receiptRow: {
+    display: "grid",
+    gridTemplateColumns: "48px minmax(0, 1fr)",
+    gap: "12px",
+    alignItems: "baseline",
+    padding: "6px 0",
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  receiptNumber: { ...typo.itemTitle, ...typo.tabular, color: vt.text1, textAlign: "right" },
+  receiptLabel: { ...typo.meta, color: vt.text2 },
+  code: {
+    ...typo.mono,
+    padding: "0 4px",
+    borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: vt.inset,
+    border: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  items: {
+    display: "grid",
+    margin: 0,
+    padding: 0,
+    listStyle: "none",
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: "hidden",
+  },
+  item: {
+    display: "grid",
+    gap: "6px",
+    padding: "14px 16px",
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    ":first-child": { borderTop: "none" },
+  },
+  itemMeta: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    columnGap: "6px",
+    rowGap: "2px",
+    ...typo.meta,
+    ...typo.tabular,
+    color: vt.text2,
+  },
+  sep: { color: vt.text3 },
+  itemText: {
+    ...typo.body,
+    color: vt.text1,
+    margin: 0,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
+  },
+  token: {
+    ...typo.mono,
+    padding: "0 3px",
+    borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: vt.inset,
+    border: `1px solid ${tokens.colorNeutralStroke3}`,
+    color: vt.text2,
+  },
+  segmented: { flexWrap: "wrap" },
+  zone: { borderTop: `1px solid ${tokens.colorNeutralStroke3}`, paddingTop: "24px" },
+  // Only while enabled: a disabled delete keeps Fluent's disabled grey.
+  dangerButton: {
+    ":enabled": { color: vt.danger },
+    ":enabled:hover": { color: vt.danger },
+    ":enabled:hover:active": { color: vt.danger },
+  },
+  dangerPrimary: {
+    backgroundColor: tokens.colorStatusDangerBackground3,
+    color: tokens.colorNeutralForegroundOnBrand,
+    ":hover": { backgroundColor: tokens.colorStatusDangerBackground3Hover, color: tokens.colorNeutralForegroundOnBrand },
+    ":hover:active": { backgroundColor: tokens.colorStatusDangerBackground3Pressed, color: tokens.colorNeutralForegroundOnBrand },
+  },
+  done: { display: "inline-flex", alignItems: "center", gap: "6px", ...typo.meta, color: vt.text2, margin: 0 },
+  doneIcon: { color: vt.success, flexShrink: 0 },
 });
 
 const COUNT_LABELS: Record<string, string> = {
@@ -63,6 +157,108 @@ export function runSummary(counts: Record<string, number>): string[] {
     else if (COUNT_LABELS[k]) out.push(`${v} ${COUNT_LABELS[k]}`);
   }
   return out;
+}
+
+const AUDIENCE: Record<string, string> = {
+  manager: "to your manager",
+  report: "to your team",
+  peer: "to colleagues",
+  external: "to clients and partners",
+  personal: "personal",
+};
+
+/** "1 min 20 s", "12 min", "1 h 5 min". */
+function took(fromIso: string, toIso: string): string {
+  const s = Math.max(0, Math.round((new Date(toIso).getTime() - new Date(fromIso).getTime()) / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 10) return s % 60 ? `${m} min ${s % 60} s` : `${m} min`;
+  if (m < 60) return `${m} min`;
+  return m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${Math.floor(m / 60)} h`;
+}
+
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/** A relative time inside a phrase ("started yesterday"), exact time on hover. */
+function When({ iso }: { iso: string }) {
+  const r = relativeTime(iso);
+  return (
+    <Tooltip content={absoluteTime(iso)} relationship="description" withArrow>
+      <time dateTime={iso}>{r === "Yesterday" || r === "Tomorrow" ? r.toLowerCase() : r}</time>
+    </Tooltip>
+  );
+}
+
+/** Stored text with the name tokens (⟦…⟧) set in mono, so they read as placeholders, not words. */
+function Redacted({ text, tokenClass }: { text: string; tokenClass: string }) {
+  const parts = text.split(/(⟦[^⟧]*⟧)/);
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <span key={i} className={tokenClass}>
+            {p}
+          </span>
+        ) : (
+          p
+        ),
+      )}
+    </>
+  );
+}
+
+function RunStatus({ run }: { run: LearningRun }) {
+  const s = useStyles();
+  const running = run.status === "running";
+  const summary = runSummary(run.counts);
+  return (
+    <>
+      <div className={s.runHead}>
+        {running ? (
+          <StatusDot tone="accent">Running</StatusDot>
+        ) : run.status === "done" ? (
+          <StatusDot tone="success">Finished</StatusDot>
+        ) : (
+          <StatusDot tone="danger">Didn't finish</StatusDot>
+        )}
+        <span className={s.runHeadItem}>
+          Started <When iso={run.startedAt} />
+        </span>
+        {run.finishedAt && <span className={s.runHeadItem}>Took {took(run.startedAt, run.finishedAt)}</span>}
+      </div>
+      {running && (
+        <p className={s.runNote}>
+          Reading your sent emails and chats from the sources you allowed and redacting each one before it's stored,
+          then rebuilding your style cards. This page updates by itself.
+        </p>
+      )}
+      {run.status === "failed" && (
+        <p className={s.runNote}>
+          This run stopped before it finished
+          {run.errorCode ? (
+            <>
+              {" "}
+              (<code className={s.code}>{run.errorCode}</code>)
+            </>
+          ) : null}
+          . Try learning again.
+        </p>
+      )}
+      {!running && summary.length > 0 && (
+        <ul className={s.receipt} aria-label="What the last run did">
+          {summary.map((line, i) => {
+            const m = /^(\d+) (.+)$/.exec(line);
+            return (
+              <li key={i} className={s.receiptRow}>
+                <span className={s.receiptNumber}>{m ? m[1] : ""}</span>
+                <span className={s.receiptLabel}>{m ? m[2] : line}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
+  );
 }
 
 export function Learning() {
@@ -134,18 +330,72 @@ export function Learning() {
 
   if (!status)
     return error ? (
-      <MessageBar intent="error">
-        <MessageBarBody>{error}</MessageBarBody>
-      </MessageBar>
+      <Page title="Learning">
+        <MessageBar intent="error">
+          <MessageBarBody>{error}</MessageBarBody>
+        </MessageBar>
+      </Page>
     ) : (
-      <Spinner label="Loading…" />
+      <PageSkeleton label="Loading what Vanimo has learned…" />
     );
 
   const run = status.run;
+  const running = run?.status === "running";
   const gated = status.onboardingState !== "review_done";
+  const total = status.stored.total;
+
+  let storedBody: ReactNode;
+  if (items.length > 0) {
+    storedBody = (
+      <ul className={styles.items} aria-label="Stored items">
+        {items.map((i) => (
+          <li key={i.id} className={styles.item}>
+            <div className={styles.itemMeta}>
+              <span>{i.channel === "email" ? "Email" : "Chat"}</span>
+              <span className={styles.sep} aria-hidden>·</span>
+              <span>{AUDIENCE[i.relationship] ?? i.relationship}</span>
+              <span className={styles.sep} aria-hidden>·</span>
+              <span>{cap(i.intent)}</span>
+              <span className={styles.sep} aria-hidden>·</span>
+              <span>{cap(i.language)}</span>
+              <span className={styles.sep} aria-hidden>·</span>
+              <span>{i.wordCount} words</span>
+              <span className={styles.sep} aria-hidden>·</span>
+              <Time iso={i.sentAt} />
+            </div>
+            <p className={styles.itemText}>
+              {asStored ? <Redacted text={i.stored} tokenClass={styles.token} /> : i.display}
+            </p>
+          </li>
+        ))}
+      </ul>
+    );
+  } else {
+    storedBody = (
+      <EmptyState icon={<BookOpen20Regular />} title="Nothing stored yet">
+        {gated
+          ? "Once you've reviewed your sources, start learning: each message Vanimo keeps appears here exactly as stored."
+          : "Start learning and each message Vanimo keeps appears here exactly as stored, so you can check what it holds."}
+      </EmptyState>
+    );
+  }
+
   return (
-    <div className={styles.stack}>
-      <Title3 as="h2">Learning</Title3>
+    <Page
+      title="Learning"
+      eyebrow={<Pill>{status.sourceKind === "sample" ? "Sample workspace" : "Microsoft 365"}</Pill>}
+      description="Vanimo learns how you write from your own sent emails and chat messages, only from the sources you allowed."
+      actions={
+        <Button
+          appearance="primary"
+          icon={running ? <Spinner size="extra-tiny" /> : undefined}
+          disabled={gated || busy || running}
+          onClick={() => void start()}
+        >
+          {running ? "Learning…" : run ? "Learn again" : "Start learning"}
+        </Button>
+      }
+    >
       {gated && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -161,93 +411,74 @@ export function Learning() {
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
-      {notice && (
-        <MessageBar intent="success">
-          <MessageBarBody>{notice}</MessageBarBody>
-        </MessageBar>
+
+      <StatStrip label="Totals">
+        <Stat value={status.stored.email} label="Emails stored" />
+        <Stat value={status.stored.chat} label="Chat messages stored" />
+        <Stat value={status.styleCards} label="Style cards" hint="See your persona" onClick={() => navigate("/persona")} />
+      </StatStrip>
+
+      {run && (
+        <Section title={running ? "Learning now" : "Last run"}>
+          <RunStatus run={run} />
+        </Section>
       )}
-      <Card>
-        <CardHeader
-          header={<Text weight="semibold">Learn from your sent messages</Text>}
-          description={
-            <Caption1>
-              Only your own sent emails and chat messages from sources you allowed. Each one is redacted before it is
-              stored: ID numbers, card and bank details and secrets are removed for good, names become tokens, and your
-              never-send words become placeholders.
-            </Caption1>
-          }
-        />
-        <div className={styles.row}>
-          <Button appearance="primary" disabled={gated || busy || run?.status === "running"} onClick={() => void start()}>
-            {run?.status === "running" ? "Learning…" : run ? "Learn again" : "Start learning"}
-          </Button>
-          <Button disabled={busy || status.stored.total === 0} onClick={() => setConfirm(true)}>
-            Delete what Vanimo learned
-          </Button>
-          {run && (
-            <Caption1 className={styles.muted}>
-              Last run {run.status} · {new Date(run.startedAt).toLocaleString()}
-              {run.errorCode ? ` · ${run.errorCode}` : ""}
-            </Caption1>
-          )}
-        </div>
-        <div className={styles.stats}>
-          <div className={styles.stat}>
-            <span className={styles.big}>{status.stored.email}</span>
-            <Caption1>emails stored</Caption1>
-          </div>
-          <div className={styles.stat}>
-            <span className={styles.big}>{status.stored.chat}</span>
-            <Caption1>chat messages stored</Caption1>
-          </div>
-          <div className={styles.stat}>
-            <span className={styles.big}>{status.styleCards}</span>
-            <Caption1>style cards</Caption1>
-          </div>
-        </div>
-        {run && runSummary(run.counts).length > 0 && (
-          <Caption1 className={styles.muted}>{runSummary(run.counts).join(" · ")}</Caption1>
+
+      <Section
+        title="What's stored"
+        description={
+          <>
+            {items.length > 0 && items.length < total && `The ${items.length} most recent of ${total} items. `}
+            {items.length > 0 && "Only you can read these. "}
+            Each message is redacted before it's stored: ID numbers, card and bank details and secrets are removed for
+            good, names become tokens, and your never-send words become placeholders.
+          </>
+        }
+        actions={
+          items.length > 0 ? (
+            <TabList
+              size="small"
+              appearance="subtle-circular"
+              className={styles.segmented}
+              aria-label="How to show stored items"
+              selectedValue={asStored ? "stored" : "shown"}
+              onTabSelect={(_, d) => setAsStored(d.value === "stored")}
+            >
+              <Tab value="stored">Exactly as stored</Tab>
+              <Tab value="shown">As shown to you</Tab>
+            </TabList>
+          ) : undefined
+        }
+      >
+        {storedBody}
+      </Section>
+
+      <Section title="Start over" className={styles.zone}>
+        <SettingList>
+          <SettingRow
+            label="Delete what's stored"
+            description="Every stored message, name token, style card and evaluation goes now, and you get a receipt. Your persona settings and data controls stay."
+          >
+            <Button
+              icon={<Delete16Regular />}
+              className={styles.dangerButton}
+              disabled={busy || total === 0}
+              onClick={() => setConfirm(true)}
+            >
+              Delete what Vanimo learned
+            </Button>
+          </SettingRow>
+        </SettingList>
+        {notice && (
+          <Rise visible appear>
+            <p className={styles.done} role="status">
+              <CheckmarkCircle16Filled className={styles.doneIcon} aria-hidden />
+              {notice}
+            </p>
+          </Rise>
         )}
-      </Card>
-      {items.length > 0 && (
-        <Card>
-          <CardHeader
-            header={<Text weight="semibold">What's stored</Text>}
-            description={<Caption1>The 50 most recent items. Only you can read these.</Caption1>}
-            action={
-              <Switch
-                checked={asStored}
-                onChange={(_, d) => setAsStored(d.checked)}
-                label={asStored ? "Exactly as stored" : "As shown to you"}
-              />
-            }
-          />
-          <Table size="small" aria-label="Stored items">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Text</TableHeaderCell>
-                <TableHeaderCell>Audience</TableHeaderCell>
-                <TableHeaderCell>Intent</TableHeaderCell>
-                <TableHeaderCell>Language</TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((i) => (
-                <TableRow key={i.id}>
-                  <TableCell>
-                    <pre className={styles.text}>{asStored ? i.stored : i.display}</pre>
-                  </TableCell>
-                  <TableCell>
-                    {i.relationship} · {i.channel}
-                  </TableCell>
-                  <TableCell>{i.intent}</TableCell>
-                  <TableCell>{i.language}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      )}
+      </Section>
+
       <Dialog open={confirm} onOpenChange={(_, d) => setConfirm(d.open)}>
         <DialogSurface>
           <DialogBody>
@@ -258,13 +489,13 @@ export function Learning() {
             </DialogContent>
             <DialogActions>
               <Button onClick={() => setConfirm(false)}>Cancel</Button>
-              <Button appearance="primary" onClick={() => void remove()}>
+              <Button appearance="primary" className={styles.dangerPrimary} onClick={() => void remove()}>
                 Delete
               </Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </div>
+    </Page>
   );
 }

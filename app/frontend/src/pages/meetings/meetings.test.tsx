@@ -121,7 +121,8 @@ describe("Meetings", () => {
     const note = vi.spyOn(a, "decideNote").mockResolvedValue(undefined);
     const forget = vi.spyOn(a, "forgetMeeting").mockResolvedValue(undefined);
     wrap(a, <Meetings />);
-    await userEvent.click((await screen.findAllByRole("button", { name: "Open" }))[0]!);
+    // Each meeting row is itself the button that opens it (was: a separate "Open" button per meeting).
+    await userEvent.click(await screen.findByRole("button", { name: /Acme weekly sync/ }));
     const meeting = await screen.findByLabelText("Meeting");
     await userEvent.click(within(meeting).getByRole("button", { name: "Not right" }));
     expect(note).toHaveBeenCalledWith("a1", "dismiss");

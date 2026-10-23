@@ -1,7 +1,5 @@
 import {
-  Badge,
   Button,
-  Caption1,
   Checkbox,
   Dialog,
   DialogActions,
@@ -11,33 +9,68 @@ import {
   DialogTitle,
   Input,
   makeStyles,
+  mergeClasses,
   MessageBar,
   MessageBarBody,
   Spinner,
-  Tab,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
-  TabList,
-  Text,
   tokens,
 } from "@fluentui/react-components";
+import { LockClosed16Regular, Search16Regular } from "@fluentui/react-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Impact, SourceItem, SourceKind } from "../../api/client";
 import { useApi } from "../../api/context";
+import {
+  DataTable,
+  EmptyRow,
+  Pill,
+  RowsSkeleton,
+  type Segment,
+  Segmented,
+  StatusDot,
+  Td,
+  Time,
+  Tr,
+  typo,
+  vt,
+} from "../../ui";
 import { errorText } from "../Home";
 import { NeverSendPanel } from "./NeverSendPanel";
 
+const PHONE = "@media (max-width: 639px)";
+
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: tokens.spacingVerticalM },
-  toolbar: { display: "flex", gap: tokens.spacingHorizontalM, alignItems: "center", flexWrap: "wrap" },
-  flags: { display: "flex", gap: tokens.spacingHorizontalXS, flexWrap: "wrap" },
-  muted: { color: tokens.colorNeutralForeground3 },
-  excludedRow: { backgroundColor: tokens.colorNeutralBackground3 },
-  chatList: { display: "grid", gap: tokens.spacingVerticalXS, maxHeight: "240px", overflowY: "auto" },
+  stack: { display: "grid", gap: "16px", minWidth: 0 },
+  toolbar: {
+    display: "flex",
+    gap: "8px 16px",
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  search: { flex: "0 1 320px", minWidth: "200px", "@media (max-width: 479px)": { flex: "1 1 100%" } },
+  hint: { ...typo.meta, color: vt.text2, margin: 0, flex: "1 1 280px" },
+  matches: { ...typo.meta, ...typo.tabular, color: vt.text3 },
+  label: { ...typo.itemTitle, color: vt.text1 },
+  labelExcluded: { color: vt.text2 },
+  detail: { ...typo.meta, ...typo.address, color: vt.text2, display: "block" },
+  flags: { display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "6px" },
+  counts: { ...typo.tabular, color: vt.text2, display: "block", [PHONE]: { display: "inline" } },
+  last: { ...typo.tabular, color: vt.text3, display: "block", [PHONE]: { display: "inline", marginLeft: "8px" } },
+  quiet: { color: vt.text3 },
+  locked: { display: "inline-flex", alignItems: "center", gap: "6px", ...typo.meta, color: vt.text2 },
+  lockIcon: { color: vt.text3, flexShrink: 0 },
+  dialogBody: { display: "grid", gap: "12px" },
+  impact: { ...typo.body, color: vt.text1, margin: 0 },
+  chatsLabel: { ...typo.meta, color: vt.text2, margin: 0 },
+  chatList: {
+    display: "grid",
+    gap: "2px",
+    maxHeight: "240px",
+    overflowY: "auto",
+    padding: "4px",
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: vt.inset,
+  },
 });
 
 const TABS: { value: SourceKind | "words"; label: string }[] = [
@@ -49,6 +82,14 @@ const TABS: { value: SourceKind | "words"; label: string }[] = [
   { value: "words", label: "Never-send words" },
 ];
 
+const NOUN: Record<SourceKind, string> = {
+  people: "people",
+  domains: "domains",
+  chats: "chats",
+  threads: "email threads",
+  meetings: "meetings",
+};
+
 export function impactSentence(i: Impact): string {
   const parts: string[] = [];
   const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
@@ -59,10 +100,11 @@ export function impactSentence(i: Impact): string {
   return parts.length ? parts.join(", ") : "Nothing stored yet";
 }
 
+/** "6 emails · 1 chat": singular where the count is one. */
 function countsText(item: SourceItem): string {
   return Object.entries(item.counts)
     .filter(([, v]) => v > 0)
-    .map(([k, v]) => `${v} ${k}`)
+    .map(([k, v]) => `${v} ${v === 1 ? (k === "people" ? "person" : k.replace(/s$/, "")) : k}`)
     .join(" · ");
 }
 
@@ -73,8 +115,9 @@ function statusText(item: SourceItem): string {
   return `Excluded via ${item.via.join(", ")}`;
 }
 
-/** "Choose what Vanimo learns from": the Sources index with search, flags and exclusions. */
-export function SourcesReview({ onChange }: { onChange?: () => void }) {
+/** "Choose what Vanimo learns from": the Sources index with search, flags and exclusions.
+ * `counts` (the header scan's totals) appear inside the kind switcher when given. */
+export function SourcesReview({ onChange, counts }: { onChange?: () => void; counts?: Record<string, unknown> }) {
   const styles = useStyles();
   const api = useApi();
   const [tab, setTab] = useState<SourceKind | "words">("people");
@@ -114,15 +157,14 @@ export function SourcesReview({ onChange }: { onChange?: () => void }) {
     }
   }
 
+  const segments: Segment<SourceKind | "words">[] = TABS.map((t) => {
+    const n = t.value === "words" ? undefined : counts?.[t.value];
+    return { ...t, count: typeof n === "number" ? n : undefined, dividerBefore: t.value === "words" };
+  });
+
   return (
     <div className={styles.stack}>
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as SourceKind | "words")}>
-        {TABS.map((t) => (
-          <Tab key={t.value} value={t.value}>
-            {t.label}
-          </Tab>
-        ))}
-      </TabList>
+      <Segmented value={tab} onChange={setTab} segments={segments} label="What to review" />
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
@@ -134,69 +176,90 @@ export function SourcesReview({ onChange }: { onChange?: () => void }) {
         <>
           <div className={styles.toolbar}>
             <Input
+              className={styles.search}
+              contentBefore={<Search16Regular aria-hidden />}
               placeholder="Search names, addresses, subjects…"
               value={query}
               onChange={(_, d) => setQuery(d.value)}
               aria-label="Search sources"
             />
-            <Caption1 className={styles.muted}>
+            {items && query.trim() && (
+              <span className={styles.matches} aria-live="polite">
+                {shown.length} of {items.length}
+              </span>
+            )}
+            <p className={styles.hint}>
               Excluded means not used at all: no style learning, no memory, never as context for a draft.
-            </Caption1>
+            </p>
           </div>
           {!items ? (
-            <Spinner label="Loading…" />
+            <RowsSkeleton rows={5} label="Loading sources…" />
           ) : (
-            <Table size="small" aria-label="Sources">
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Source</TableHeaderCell>
-                  <TableHeaderCell>Activity</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
-                  <TableHeaderCell />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {shown.map((item) => (
-                  <TableRow key={item.id} className={item.excluded ? styles.excludedRow : undefined}>
-                    <TableCell>
-                      <Text weight="semibold">{item.label}</Text>
-                      {item.detail && <Caption1 className={styles.muted}> · {item.detail}</Caption1>}
-                      {item.flags.length > 0 && (
-                        <div className={styles.flags}>
-                          {item.flags.map((f) => (
-                            <Badge key={f} appearance="tint" color={f === "your organisation" ? "brand" : "warning"} size="small">
-                              {f}
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Caption1>{countsText(item)}</Caption1>
-                    </TableCell>
-                    <TableCell>
-                      <Caption1>{statusText(item)}</Caption1>
-                    </TableCell>
-                    <TableCell>
-                      {item.ruleId ? (
-                        <Button size="small" onClick={() => void include(item)}>
-                          Use again
-                        </Button>
-                      ) : !item.excluded ? (
-                        <Button size="small" appearance="primary" onClick={() => setPending(item)}>
-                          Exclude
-                        </Button>
-                      ) : null}
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {shown.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={4}>Nothing matches.</TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+            <DataTable
+              label="Sources"
+              columns={[
+                { label: "Source" },
+                { label: "Activity" },
+                { label: "Status" },
+                { hiddenLabel: "Actions" },
+              ]}
+            >
+              {shown.map((item) => (
+                <Tr key={item.id}>
+                  <Td primary>
+                    <span className={mergeClasses(styles.label, item.excluded && styles.labelExcluded)}>
+                      {item.label}
+                    </span>
+                    {item.detail && <span className={styles.detail}>{item.detail}</span>}
+                    {item.flags.length > 0 && (
+                      <span className={styles.flags}>
+                        {item.flags.map((f) => (
+                          <Pill key={f} tone={f === "personal email" ? "warning" : "neutral"}>
+                            {f}
+                          </Pill>
+                        ))}
+                      </span>
+                    )}
+                  </Td>
+                  <Td label="Activity">
+                    <span className={styles.counts}>{countsText(item) || <span className={styles.quiet}>—</span>}</span>
+                    {item.lastActivity && (
+                      <span className={styles.last}>
+                        Last <Time iso={item.lastActivity} />
+                      </span>
+                    )}
+                  </Td>
+                  <Td label="Status">
+                    {item.locked ? (
+                      <span className={styles.locked}>
+                        <LockClosed16Regular className={styles.lockIcon} aria-label="Locked" />
+                        <span>{statusText(item)}</span>
+                      </span>
+                    ) : (
+                      <StatusDot tone={item.excluded ? "neutral" : "success"}>{statusText(item)}</StatusDot>
+                    )}
+                  </Td>
+                  <Td actions>
+                    {item.ruleId ? (
+                      <Button size="small" onClick={() => void include(item)}>
+                        Use again
+                      </Button>
+                    ) : !item.excluded ? (
+                      <Button size="small" onClick={() => setPending(item)}>
+                        Exclude
+                      </Button>
+                    ) : null}
+                  </Td>
+                </Tr>
+              ))}
+              {shown.length === 0 && (
+                <EmptyRow colSpan={4}>
+                  {items.length === 0
+                    ? `No ${NOUN[tab]} were found in the header scan.`
+                    : `Nothing matches “${query.trim()}”.`}
+                </EmptyRow>
+              )}
+            </DataTable>
           )}
         </>
       )}
@@ -265,20 +328,22 @@ function ExcludeDialog({
       <DialogSurface>
         <DialogBody>
           <DialogTitle>Exclude {item.label}?</DialogTitle>
-          <DialogContent className={styles.stack}>
+          <DialogContent className={styles.dialogBody}>
             {error && (
               <MessageBar intent="error">
                 <MessageBarBody>{error}</MessageBarBody>
               </MessageBar>
             )}
             {!impact ? (
-              <Spinner size="tiny" label="Working out what this removes…" />
+              <Spinner size="tiny" labelPosition="after" label="Working out what this removes…" />
             ) : (
               <>
-                <Text>Vanimo will stop using: {impactSentence(impact)}.</Text>
+                <p className={styles.impact}>Vanimo will stop using: {impactSentence(impact)}.</p>
                 {impact.chatList.length > 0 && (
                   <>
-                    <Caption1>Chats {item.kind === "person" ? "they're" : "people from this domain are"} in. Untick a chat to keep using it:</Caption1>
+                    <p className={styles.chatsLabel}>
+                      Chats {item.kind === "person" ? "they're" : "people from this domain are"} in. Untick a chat to keep using it:
+                    </p>
                     <div className={styles.chatList}>
                       {impact.chatList.map((c) => (
                         <Checkbox

@@ -72,8 +72,10 @@ describe("Learning", () => {
     expect(start).toHaveBeenCalled();
     expect(await screen.findByText(/Our GSTIN is \[GSTIN\]/)).toBeInTheDocument();
     expect(screen.getByText(/⟦ME.full⟧/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("switch"));
+    // The stored/shown view is a segmented control (tabs), no longer a switch.
+    await userEvent.click(screen.getByRole("tab", { name: "As shown to you" }));
     expect(screen.getByText(/Siddharth Kalyani/)).toBeInTheDocument();
+    expect(screen.queryByText(/⟦ME.full⟧/)).toBeNull();
     expect(learning).toHaveBeenCalledTimes(2);
   });
 
@@ -114,8 +116,12 @@ describe("Persona", () => {
       .spyOn(api, "savePersonaSettings")
       .mockImplementation(async (s) => ({ ...s, phrases_do: ["Project ⟦NS_ab12cd34⟧ update"] }));
     wrap(api, <Persona />);
-    expect(await screen.findByText("With clients and partners")).toBeInTheDocument();
-    expect(screen.getAllByText("Dear ‹first name›,").length).toBe(2);
+    // One audience at a time behind a segmented control (was: every audience's card at once).
+    const clients = await screen.findByRole("tab", { name: /Clients and partners/ });
+    expect(screen.getByText("Dear ‹first name›,")).toBeInTheDocument(); // overall
+    await userEvent.click(clients);
+    expect(screen.getByText("With clients and partners")).toBeInTheDocument();
+    expect(screen.getByText("Dear ‹first name›,")).toBeInTheDocument(); // the audience's own card
     expect(screen.getByText(/greeting match 67%/)).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Phrases to use (one per line)"), "Project Falcon update");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));

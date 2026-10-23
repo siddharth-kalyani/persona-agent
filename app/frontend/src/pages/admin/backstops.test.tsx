@@ -2,9 +2,11 @@ import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
+import { App } from "../../App";
 import { Api, ApiError, type BackstopStatus, type Me } from "../../api/client";
 import { ApiTestProvider } from "../../api/context";
-import { errorText, Home } from "../Home";
+import { AuthTestProvider, type AuthState } from "../../auth/session";
+import { errorText } from "../Home";
 import { Backstops, kindsText, probeText } from "./Backstops";
 
 const PAUSED: BackstopStatus = {
@@ -94,7 +96,8 @@ describe("Redaction checks (admin)", () => {
 });
 
 describe("paused organisation", () => {
-  it("tells users on Home and in errors", async () => {
+  // The notice moved from Home into the app shell (it now shows above every page, Home included).
+  it("tells users above every page and in errors", async () => {
     const api = new Api("", async () => "t");
     const me: Me = {
       user: { displayName: "Asha Rao", jobTitle: null },
@@ -108,8 +111,35 @@ describe("paused organisation", () => {
       pipelinePaused: true,
     };
     vi.spyOn(api, "me").mockResolvedValue(me);
-    renderWith(api, <Home />);
-    expect(await screen.findByText(/Vanimo is paused for your organisation/)).toBeInTheDocument();
+    const auth: AuthState = {
+      options: { microsoft: false, password: true },
+      signedIn: true,
+      method: "password",
+      email: "asha@example.com",
+      roles: me.roles,
+      isAdmin: false,
+      mustChangePassword: false,
+      token: async () => "t",
+      signInWithPassword: vi.fn(async () => undefined),
+      changePassword: vi.fn(async () => undefined),
+      signInWithMicrosoft: vi.fn(async () => undefined),
+      signOut: vi.fn(async () => undefined),
+      expire: vi.fn(),
+      requirePasswordChange: vi.fn(),
+    };
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <AuthTestProvider value={auth}>
+          <ApiTestProvider api={api}>
+            <MemoryRouter>
+              <App />
+            </MemoryRouter>
+          </ApiTestProvider>
+        </AuthTestProvider>
+      </FluentProvider>,
+    );
+    expect(await screen.findByText("Paused for your organisation")).toBeInTheDocument();
+    expect(screen.getByText(/Nothing new is read, learned or drafted\s+until it's resumed/)).toBeInTheDocument();
     expect(errorText(new ApiError(423, "pipeline_paused"))).toMatch(/paused/);
     expect(errorText(new ApiError(503, "redaction_unavailable"))).toMatch(/unreachable/);
     expect(errorText(new ApiError(422, "model_check_blocked", { stage: "output" }))).toMatch(/stopped/);

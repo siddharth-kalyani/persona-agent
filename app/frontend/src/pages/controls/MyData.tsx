@@ -1,33 +1,35 @@
-import {
-  Button,
-  Caption1,
-  Card,
-  CardHeader,
-  makeStyles,
-  MessageBar,
-  MessageBarBody,
-  Spinner,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
-  Text,
-  Title3,
-  tokens,
-} from "@fluentui/react-components";
+import { Button, makeStyles, MessageBar, MessageBarBody, Spinner } from "@fluentui/react-components";
+import { ArrowClockwise16Regular, ArrowRight16Regular, Receipt20Regular } from "@fluentui/react-icons";
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { ControlsStatus, Receipt } from "../../api/client";
 import { useApi } from "../../api/context";
+import {
+  EmptyState,
+  List,
+  ListRow,
+  Page,
+  PageSkeleton,
+  Pill,
+  Section,
+  SettingList,
+  SettingRow,
+  StatusDot,
+  Time,
+  typo,
+  vt,
+  type Tone,
+} from "../../ui";
 import { errorText } from "../Home";
 import { scanSummary } from "./Setup";
 import { SourcesReview } from "./SourcesReview";
 
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: tokens.spacingVerticalL },
-  row: { display: "flex", gap: tokens.spacingHorizontalM, alignItems: "center", flexWrap: "wrap" },
-  muted: { color: tokens.colorNeutralForeground3 },
+  status: { display: "flex", alignItems: "center", gap: "6px 12px", flexWrap: "wrap", ...typo.meta, color: vt.text2 },
+  running: { display: "inline-flex", alignItems: "center", gap: "8px" },
+  statusTime: { color: vt.text3 },
+  receiptMeta: { display: "inline-flex", gap: "6px", alignItems: "baseline", flexWrap: "wrap" },
+  receiptTrailing: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" },
 });
 
 const REASONS: Record<string, string> = {
@@ -37,6 +39,15 @@ const REASONS: Record<string, string> = {
   term_removed: "Never-send word removed",
   tenant_policy_changed: "Your organisation changed its rules",
   learning_deleted: "You deleted what Vanimo learned",
+};
+
+/** A receipt's job state in words, with a dot that is never the only signal. */
+const RECEIPT_STATE: Record<string, [Tone, string]> = {
+  done: ["success", "Done"],
+  running: ["accent", "In progress"],
+  pending: ["neutral", "Waiting"],
+  queued: ["neutral", "Waiting"],
+  failed: ["danger", "Failed"],
 };
 
 export function receiptDetail(r: Receipt): string {
@@ -50,6 +61,7 @@ export function receiptDetail(r: Receipt): string {
 export function MyData() {
   const styles = useStyles();
   const api = useApi();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<ControlsStatus | null>(null);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
 
@@ -78,80 +90,122 @@ export function MyData() {
 
   if (!status)
     return error ? (
-      <MessageBar intent="error">
-        <MessageBarBody>{error}</MessageBarBody>
-      </MessageBar>
+      <Page title="My data">
+        <MessageBar intent="error">
+          <MessageBarBody>{error}</MessageBarBody>
+        </MessageBar>
+      </Page>
     ) : (
-      <Spinner label="Loading…" />
+      <PageSkeleton label="Loading…" />
     );
 
+  const scan = status.scan;
+  const scanning = scan?.status === "running";
+
   return (
-    <div className={styles.stack}>
-      <Title3 as="h2">My data controls</Title3>
-      <div className={styles.row}>
-        <Caption1 className={styles.muted}>
-          {status.scan ? `Sources: ${scanSummary(status.scan)}.` : "No sources listed yet."}
-        </Caption1>
+    <Page
+      title="My data"
+      eyebrow={scan ? <Pill>{scan.sourceKind === "sample" ? "Sample workspace" : "Microsoft 365"}</Pill> : undefined}
+      description="What Vanimo may learn from, the words it must never send to an AI model, and a receipt for every change. Change any of it at any time."
+      actions={
         <Button
-          size="small"
-          disabled={status.scan?.status === "running"}
+          icon={scanning ? <Spinner size="extra-tiny" aria-hidden /> : <ArrowClockwise16Regular />}
+          disabled={scanning}
           onClick={() => void api.startScan().then(setStatus, (e) => setError(errorText(e)))}
         >
-          {status.scan?.status === "running" ? "Refreshing…" : "Refresh sources"}
+          {scanning ? "Refreshing…" : "Refresh sources"}
         </Button>
-      </div>
+      }
+    >
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
-      <SourcesReview onChange={() => setTimeout(() => void refresh(), 500)} />
-      <Card>
-        <CardHeader
-          header={<Text weight="semibold">Receipts</Text>}
-          description={<Caption1>Exclusions apply within a minute; deleting what was learned takes up to 24 hours.</Caption1>}
-        />
-        <Table size="small" aria-label="Receipts">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>When</TableHeaderCell>
-              <TableHeaderCell>What</TableHeaderCell>
-              <TableHeaderCell>Status</TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {receipts.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell>{new Date(r.requestedAt).toLocaleString()}</TableCell>
-                <TableCell>
-                  {REASONS[r.reason] ?? r.reason}
-                  {receiptDetail(r) && <Caption1 className={styles.muted}> · {receiptDetail(r)}</Caption1>}
-                </TableCell>
-                <TableCell>
-                  {r.needsAttention ? (
-                    <div className={styles.row}>
-                      <Text weight="semibold">Needs attention</Text>
-                      <Button
-                        size="small"
-                        onClick={() => void api.retryReceipt(r.id).then(refresh, (e) => setError(errorText(e)))}
-                      >
-                        Retry
-                      </Button>
-                    </div>
-                  ) : (
-                    r.status
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-            {receipts.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={3}>No changes yet.</TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </Card>
-    </div>
+
+      <Section title="Sources and never-send words">
+        <div className={styles.status} role="status">
+          {!scan ? (
+            <StatusDot>No sources listed yet.</StatusDot>
+          ) : scanning ? (
+            <span className={styles.running}>
+              <Spinner size="extra-tiny" aria-hidden />
+              Listing your sources again (headers only)…
+            </span>
+          ) : scan.status === "failed" ? (
+            <StatusDot tone="danger">The last refresh didn't finish. Refresh sources to try again.</StatusDot>
+          ) : (
+            <>
+              <StatusDot tone="success">Sources: {scanSummary(scan)}.</StatusDot>
+              {scan.finishedAt && (
+                <span className={styles.statusTime}>
+                  Headers listed <Time iso={scan.finishedAt} />
+                </span>
+              )}
+            </>
+          )}
+        </div>
+        <SourcesReview onChange={() => setTimeout(() => void refresh(), 500)} counts={scan?.counts} />
+      </Section>
+
+      <Section
+        title="Receipts"
+        description="Exclusions apply within a minute; deleting what was learned takes up to 24 hours."
+      >
+        {receipts.length === 0 ? (
+          <EmptyState icon={<Receipt20Regular />} title="No changes yet">
+            When you exclude a source or add a never-send word, a receipt appears here with what was deleted or re-masked.
+          </EmptyState>
+        ) : (
+          <List bordered label="Receipts">
+            {receipts.map((r) => {
+              const [tone, word] = RECEIPT_STATE[r.status] ?? (["neutral", r.status] as [Tone, string]);
+              const detail = receiptDetail(r);
+              return (
+                <ListRow
+                  key={r.id}
+                  wrap
+                  title={REASONS[r.reason] ?? r.reason}
+                  meta={
+                    <span className={styles.receiptMeta}>
+                      <Time iso={r.requestedAt} />
+                      {detail && <span>· {detail}</span>}
+                    </span>
+                  }
+                  trailing={
+                    r.needsAttention ? (
+                      <span className={styles.receiptTrailing}>
+                        <Pill tone="warning">Needs attention</Pill>
+                        <Button
+                          size="small"
+                          onClick={() => void api.retryReceipt(r.id).then(refresh, (e) => setError(errorText(e)))}
+                        >
+                          Retry
+                        </Button>
+                      </span>
+                    ) : (
+                      <StatusDot tone={tone}>{word}</StatusDot>
+                    )
+                  }
+                />
+              );
+            })}
+          </List>
+        )}
+      </Section>
+
+      <Section title="Delete what Vanimo learned">
+        <SettingList>
+          <SettingRow
+            label="Delete everything learned from your messages"
+            description="Every stored message, name token, style card and evaluation is deleted, and you get a receipt here. Your persona settings and these controls stay. You confirm on the Learning page."
+          >
+            <Button appearance="subtle" icon={<ArrowRight16Regular />} iconPosition="after" onClick={() => navigate("/learning")}>
+              Go to Learning
+            </Button>
+          </SettingRow>
+        </SettingList>
+      </Section>
+    </Page>
   );
 }

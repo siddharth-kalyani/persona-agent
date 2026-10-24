@@ -46,13 +46,13 @@ import { CommandPalette, type Command } from "./shell/CommandPalette";
 import { activePath, visibleDestinations } from "./shell/nav";
 import { AccountMenu, Mark, Sidebar } from "./shell/Sidebar";
 import { useThemePreference } from "./theme/ThemeProvider";
-import { isMod, typo, vt } from "./ui";
+import { isMod, PageIconContext, typo, vt } from "./ui";
 import { ME_CHANGED } from "./shell/events";
 
 const useStyles = makeStyles({
   shell: {
     display: "grid",
-    gridTemplateColumns: "240px minmax(0, 1fr)",
+    gridTemplateColumns: "248px minmax(0, 1fr)",
     minHeight: "100vh",
     backgroundColor: vt.frame,
     "@media (max-width: 1023px)": { gridTemplateColumns: "minmax(0, 1fr)" },
@@ -69,30 +69,34 @@ const useStyles = makeStyles({
       display: "flex",
       alignItems: "center",
       gap: "8px",
-      height: "48px",
+      height: "52px",
       padding: "0 8px",
       position: "sticky",
       top: 0,
       zIndex: 10,
       backgroundColor: vt.frame,
-      borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+      borderBottom: `1px solid ${vt.border}`,
     },
   },
-  topTitle: { ...typo.itemTitle, fontSize: "15px", fontWeight: 600, flexGrow: 1, display: "flex", alignItems: "center", gap: "8px" },
+  topTitle: { ...typo.cardTitle, fontSize: "15px", flexGrow: 1, display: "flex", alignItems: "center", gap: "10px" },
   panel: {
     margin: "8px 8px 8px 0",
     backgroundColor: vt.surface,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    border: `1px solid ${vt.border}`,
     borderRadius: tokens.borderRadiusXLarge,
+    boxShadow: vt.shadowCard,
     minHeight: "calc(100vh - 16px)",
     minWidth: 0,
-    "@media (max-width: 1023px)": { margin: 0, border: "none", borderRadius: 0, minHeight: "calc(100vh - 48px)" },
+    "@media (max-width: 1023px)": { margin: 0, border: "none", borderRadius: 0, boxShadow: "none", minHeight: "calc(100vh - 52px)" },
   },
   content: {
-    padding: "28px 32px 64px",
+    padding: "32px 40px 72px",
+    "@media (max-width: 1279px)": { padding: "28px 32px 64px" },
     "@media (max-width: 1023px)": { padding: "20px 24px 48px" },
     "@media (max-width: 639px)": { padding: "16px 16px 40px" },
   },
+  // One centred column: every page starts at the same left edge, whatever its own width.
+  column: { maxWidth: "1280px", marginInline: "auto" },
   banner: { marginBottom: "24px" },
   skip: {
     position: "absolute",
@@ -106,7 +110,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     ":focus": { top: "8px" },
   },
-  drawer: { width: "280px", backgroundColor: vt.frame },
+  drawer: { width: "288px", backgroundColor: vt.frame },
   drawerBody: { padding: 0 },
   auth: { minHeight: "100vh", backgroundColor: vt.frame, display: "grid", placeItems: "start center", padding: "12vh 16px 48px" },
 });
@@ -216,12 +220,14 @@ export function App() {
         setPalette(true);
       }}
       onNavigate={onNavigate}
+      workspace={me ? (me.dataSource === "sample" ? "Sample workspace" : "Microsoft 365") : undefined}
       notifications={bell ? <NotificationBell /> : undefined}
       account={<AccountMenu name={name} email={auth.email} badge={badge} onSignOut={() => void auth.signOut()} />}
     />
   );
   // Animate between sections only (not between a page's own states).
   const section = location.pathname.split("/").slice(0, active.startsWith("/admin") ? 3 : 2).join("/") || "/";
+  const ActiveIcon = destinations.find((d) => d.path === active)?.icon;
 
   return (
     <div className={styles.shell}>
@@ -235,7 +241,7 @@ export function App() {
         <div className={styles.topbar}>
           <Button appearance="subtle" icon={<Navigation20Regular />} aria-label="Open navigation" onClick={() => setDrawer(true)} />
           <span className={styles.topTitle}>
-            <Mark size={18} />
+            <Mark size={24} />
             Vanimo
           </span>
           {narrow && <NotificationBell />}
@@ -252,6 +258,7 @@ export function App() {
         </OverlayDrawer>
         <main id="main" className={styles.panel} tabIndex={-1}>
           <div className={styles.content}>
+            <div className={styles.column}>
             {me?.pipelinePaused && (
               <MessageBar intent="warning" className={styles.banner}>
                 <MessageBarBody>
@@ -262,7 +269,8 @@ export function App() {
               </MessageBar>
             )}
             <ViewTransition key={section} default="none" enter="vt-page-in" exit="vt-page-out">
-              <div>
+              <PageIconContext value={ActiveIcon ? <ActiveIcon /> : null}>
+                <div>
                 <Routes>
                   <Route path="/" element={<Home />} />
                   <Route path="/setup" element={<Setup />} />
@@ -280,8 +288,10 @@ export function App() {
                   <Route path="/spikes/teams" element={auth.isAdmin ? <TeamsPrefill /> : <Navigate to="/" />} />
                   <Route path="*" element={<Navigate to="/" />} />
                 </Routes>
-              </div>
+                </div>
+              </PageIconContext>
             </ViewTransition>
+            </div>
           </div>
         </main>
       </div>

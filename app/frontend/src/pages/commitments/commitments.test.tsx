@@ -76,7 +76,8 @@ describe("Commitments", () => {
     expect(screen.getByText("Looks done")).toBeInTheDocument();
     expect(await screen.findByText("1 new promise found")).toBeInTheDocument();
     expect(screen.getByText(/80% of the 5 you decided on were real promises/)).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Done" })[0]!);
+    // Row actions are icon buttons; the tooltip is the accessible name (was: a "Done" text button).
+    await user.click(screen.getAllByRole("button", { name: "Mark done" })[0]!);
     await waitFor(() => expect(decide).toHaveBeenCalledWith("c1", "done"));
   });
 

@@ -3,65 +3,131 @@
  * first, shown at once, never animated) and, for a blocking check, the confirmation that unlocks
  * insert. Uses Fluent tokens and fallback-safe Vanimo tokens, so it also looks right under
  * Microsoft's own themes in Outlook and Teams. */
+import { Checkbox, makeStyles, mergeClasses, shorthands, Textarea, tokens, useAnnounce } from "@fluentui/react-components";
 import {
-  Button,
-  Checkbox,
-  makeStyles,
-  MessageBar,
-  MessageBarBody,
-  MessageBarTitle,
-  Textarea,
-  tokens,
-} from "@fluentui/react-components";
-import type { ReactNode } from "react";
+  Compose16Regular,
+  Info16Regular,
+  People16Regular,
+  ShieldError16Filled,
+  ThumbDislike16Filled,
+  ThumbDislike16Regular,
+  ThumbLike16Filled,
+  ThumbLike16Regular,
+  Warning16Filled,
+} from "@fluentui/react-icons";
+import { useEffect, useId, type ReactNode } from "react";
 import { ApiError, type Draft, type DraftCheck } from "../api/client";
 import { Pill } from "../ui/feedback";
+import { IconAction, IconTile } from "../ui/visual";
 import { vt } from "../theme/theme";
 import { typo } from "../theme/typography";
 
 const useStyles = makeStyles({
   card: {
-    position: "relative",
     display: "grid",
-    gap: "12px",
-    padding: "16px",
     backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    border: `1px solid ${vt.border}`,
     borderRadius: tokens.borderRadiusXLarge,
+    boxShadow: vt.shadowCard,
     minWidth: 0,
-    // A thin accent rule marks text Vanimo wrote (no glow, no sparkle).
-    "::before": {
-      content: '""',
-      position: "absolute",
-      left: "-1px",
-      top: "16px",
-      bottom: "16px",
-      width: "2px",
-      borderRadius: "2px",
-      backgroundColor: vt.accent,
-    },
   },
-  head: { display: "grid", gap: "6px" },
-  row: { display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" },
-  kicker: { ...typo.label, color: vt.text3, marginRight: "2px" },
-  provenance: { ...typo.meta, color: vt.text2, margin: 0 },
+  /** Inside another card (a commitment row): no frame of its own, just the parts. */
+  flat: { backgroundColor: "transparent", border: "none", boxShadow: "none", borderRadius: 0 },
+  flatHead: { padding: "0 0 12px" },
+  flatBody: { padding: "12px 0" },
+  flatActions: { padding: "12px 0 0", backgroundColor: "transparent" },
+  head: {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr)",
+    gap: "4px 12px",
+    alignItems: "center",
+    padding: "14px 16px 12px",
+    borderBottom: `1px solid ${vt.borderSubtle}`,
+  },
+  row: { display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap", minWidth: 0 },
+  kicker: { ...typo.cardTitle, color: vt.text1, marginRight: "4px" },
+  provenance: { ...typo.meta, color: vt.text2, margin: 0, gridColumn: "2" },
+  body: { display: "grid", gap: "12px", padding: "16px", minWidth: 0 },
   textarea: { width: "100%" },
-  text: { ...typo.reading, minHeight: "220px", padding: "10px 12px" },
-  checks: { display: "grid", gap: "8px" },
-  confirm: { marginTop: "-2px" },
+  text: { ...typo.reading, minHeight: "220px", maxHeight: "60vh", padding: "12px 14px", fieldSizing: "content" },
+  checks: { display: "grid", gap: "10px" },
+  // Pre-send checks, grouped by severity: one tinted panel per kind, never animated.
+  group: {
+    display: "grid",
+    gap: "8px",
+    padding: "12px 14px",
+    borderRadius: tokens.borderRadiusLarge,
+    ...shorthands.border("1px", "solid", "transparent"),
+  },
+  block: {
+    backgroundColor: vt.inset,
+    ...shorthands.borderColor(tokens.colorStatusDangerBorder1),
+    boxShadow: `inset 3px 0 0 ${vt.danger}`,
+  },
+  warn: {
+    backgroundColor: vt.inset,
+    ...shorthands.borderColor(tokens.colorStatusWarningBorder1),
+    boxShadow: `inset 3px 0 0 ${vt.warning}`,
+  },
+  groupHead: { display: "flex", alignItems: "center", gap: "8px" },
+  blockIcon: { color: vt.danger, flexShrink: 0 },
+  warnIcon: { color: vt.warning, flexShrink: 0 },
+  groupTitle: { ...typo.cardTitle, color: vt.text1 },
+  items: {
+    margin: 0,
+    paddingLeft: "42px",
+    display: "grid",
+    gap: "6px",
+    ...typo.body,
+    color: vt.text1,
+    "& li::marker": { color: vt.text3 },
+  },
+  confirm: {
+    marginTop: "2px",
+    paddingTop: "6px",
+    marginLeft: "-6px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+  },
+  confirmLabel: { ...typo.body, fontWeight: 500, color: vt.text1 },
+  note: { display: "flex", gap: "8px", alignItems: "flex-start", margin: 0, padding: "0 2px", ...typo.meta, color: vt.text2 },
+  noteIcon: { color: vt.info, flexShrink: 0, marginTop: "1px" },
+  noteTitle: { fontWeight: 600, color: vt.text1 },
   actions: {
     display: "flex",
     gap: "8px",
     alignItems: "center",
     flexWrap: "wrap",
-    paddingTop: "12px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    padding: "12px 16px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    backgroundColor: vt.inset,
+    borderBottomLeftRadius: tokens.borderRadiusXLarge,
+    borderBottomRightRadius: tokens.borderRadiusXLarge,
   },
-  rate: { display: "inline-flex", gap: "2px", marginLeft: "auto" },
+  rate: { display: "inline-flex", gap: "2px", marginLeft: "auto", alignItems: "center" },
+  rateLabel: { ...typo.meta, color: vt.text3, marginRight: "4px", "@media (max-width: 479px)": { display: "none" } },
+  rated: { color: vt.accent },
 });
 
-const SEVERITY_INTENT = { block: "error", warn: "warning", info: "info" } as const;
 const SEVERITY_TITLE = { block: "Check before sending", warn: "Have a look", info: "Note" } as const;
+
+/** Text areas that grow with their content where the browser supports it; elsewhere they keep a
+ * resize grip (Firefox, older Safari: OWA and Outlook for Mac). */
+export const AUTOSIZE = typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("field-sizing", "content");
+
+/** Says the checks out loud when they appear or change: blocking checks and warnings at once, notes
+ * politely. */
+function useAnnounceChecks(checks: DraftCheck[]) {
+  const { announce } = useAnnounce();
+  const key = checks.map((c) => c.code).join(",");
+  useEffect(() => {
+    const urgent = sortChecks(checks).filter((c) => c.severity !== "info");
+    const notes = checks.filter((c) => c.severity === "info");
+    if (urgent.length) announce(`${SEVERITY_TITLE[urgent[0]!.severity]}: ${urgent.map((c) => c.message).join(" ")}`, { alert: true });
+    if (notes.length) announce(`Note: ${notes.map((c) => c.message).join(" ")}`, { polite: true });
+    // Only when the set of checks changes, not on every keystroke in the draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+}
 
 /** Blocking checks first, then warnings, then notes. */
 export function sortChecks(checks: DraftCheck[]): DraftCheck[] {
@@ -151,6 +217,7 @@ export function DraftView({
   confirmed,
   onConfirm,
   actions,
+  flat,
 }: {
   draft: Draft;
   text: string;
@@ -159,72 +226,116 @@ export function DraftView({
   confirmed: boolean;
   onConfirm: (value: boolean) => void;
   actions: ReactNode;
+  /** No card frame: for a draft shown inside another card. */
+  flat?: boolean;
 }) {
   const styles = useStyles();
+  const titleId = useId();
+  useAnnounceChecks(checks);
   const offline = draft.generator === "offline";
   return (
-    <section className={styles.card} aria-label="Vanimo draft">
-      <div className={styles.head}>
+    <section className={mergeClasses(styles.card, flat && styles.flat)} aria-label="Vanimo draft">
+      <div className={mergeClasses(styles.head, flat && styles.flatHead)}>
+        <IconTile icon={<Compose16Regular />} tone="accent" size={32} />
         <div className={styles.row}>
           <span className={styles.kicker}>Vanimo draft</span>
-          <Pill tone="accent" wrap>
+          <Pill tone="accent" icon={<People16Regular />} wrap>
             Writing to: {draft.audience.label}
           </Pill>
-          {offline ? (
-            <Pill tone="warning">Offline stand-in, no AI model</Pill>
-          ) : (
-            <Pill>{draft.tier === "premium" ? "Higher quality" : "Standard"}</Pill>
-          )}
-          {draft.oneOff && <Pill>One-off, not saved</Pill>}
+          {!offline && <Pill>{draft.tier === "premium" ? "Higher quality" : "Standard"}</Pill>}
+          {draft.oneOff && <Pill tone="warning">One-off, not saved</Pill>}
         </div>
         <p className={styles.provenance}>
           {offline ? draft.label : `Written by ${draft.modelId}`}
           {draft.learned ? ` · in your style from ${draft.basedOn} of your messages` : " · your style isn't learned yet"}
         </p>
       </div>
-      <Textarea
-        aria-label="Draft"
-        className={styles.textarea}
-        textarea={{ className: styles.text }}
-        resize="vertical"
-        value={text}
-        onChange={(_, d) => onTextChange(d.value)}
-      />
-      {checks.length > 0 && (
-        <div className={styles.checks}>
-          {sortChecks(checks).map((c) => (
-            <MessageBar key={c.code} intent={SEVERITY_INTENT[c.severity]} layout="multiline">
-              <MessageBarBody>
-                <MessageBarTitle>{SEVERITY_TITLE[c.severity]}</MessageBarTitle>
-                {c.message}
-              </MessageBarBody>
-            </MessageBar>
-          ))}
-          {hasBlock(checks) && (
-            <Checkbox
-              className={styles.confirm}
-              checked={confirmed}
-              onChange={(_, d) => onConfirm(Boolean(d.checked))}
-              label="I've checked this another way (for example, by phone on a number I already had)"
-            />
-          )}
-        </div>
-      )}
-      <div className={styles.actions}>{actions}</div>
+      <div className={mergeClasses(styles.body, flat && styles.flatBody)}>
+        <Textarea
+          aria-label="Draft"
+          className={styles.textarea}
+          textarea={{ className: styles.text }}
+          resize={AUTOSIZE ? "none" : "vertical"}
+          value={text}
+          onChange={(_, d) => onTextChange(d.value)}
+        />
+        {checks.length > 0 && (
+          <div className={styles.checks}>
+            {(["block", "warn"] as const).map((severity) => {
+              const items = checks.filter((c) => c.severity === severity);
+              if (!items.length) return null;
+              const id = `${titleId}-${severity}`;
+              return (
+                <div key={severity} className={mergeClasses(styles.group, styles[severity])} role="group" aria-labelledby={id}>
+                  <div className={styles.groupHead}>
+                    {severity === "block" ? (
+                      <ShieldError16Filled className={styles.blockIcon} aria-hidden />
+                    ) : (
+                      <Warning16Filled className={styles.warnIcon} aria-hidden />
+                    )}
+                    <span id={id} className={styles.groupTitle}>
+                      {SEVERITY_TITLE[severity]}
+                    </span>
+                  </div>
+                  <ul className={styles.items}>
+                    {items.map((c) => (
+                      <li key={c.code}>{c.message}</li>
+                    ))}
+                  </ul>
+                  {severity === "block" && (
+                    <Checkbox
+                      className={styles.confirm}
+                      checked={confirmed}
+                      onChange={(_, d) => onConfirm(Boolean(d.checked))}
+                      label={{
+                        className: styles.confirmLabel,
+                        children: "I've checked this another way (for example, by phone on a number I already had)",
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+            {checks
+              .filter((c) => c.severity === "info")
+              .map((c) => (
+                <p key={c.code} className={styles.note}>
+                  <Info16Regular className={styles.noteIcon} aria-hidden />
+                  <span>
+                    <strong className={styles.noteTitle}>{SEVERITY_TITLE.info}</strong> {c.message}
+                  </span>
+                </p>
+              ))}
+          </div>
+        )}
+      </div>
+      <div className={mergeClasses(styles.actions, flat && styles.flatActions)}>{actions}</div>
     </section>
   );
 }
 
+/** "Does this sound like you?": thumbs up or down, remembered per draft. */
 export function RateButtons({ onRate, rated }: { onRate: (rating: "good" | "bad") => void; rated: string | null }) {
   const styles = useStyles();
   return (
     <span className={styles.rate} role="group" aria-label="Does this sound like you?">
-      <Button size="small" appearance={rated === "good" ? "secondary" : "subtle"} aria-pressed={rated === "good"} onClick={() => onRate("good")}>
-        Sounds like me
-      </Button>
-      <Button size="small" appearance={rated === "bad" ? "secondary" : "subtle"} aria-pressed={rated === "bad"} onClick={() => onRate("bad")}>
-        Doesn't sound like me
-      </Button>
+      <span className={styles.rateLabel} aria-hidden>
+        Sounds like you?
+      </span>
+      <IconAction
+        icon={rated === "good" ? <ThumbLike16Filled /> : <ThumbLike16Regular />}
+        label="Sounds like me"
+        aria-pressed={rated === "good"}
+        className={rated === "good" ? styles.rated : undefined}
+        onClick={() => onRate("good")}
+      />
+      <IconAction
+        icon={rated === "bad" ? <ThumbDislike16Filled /> : <ThumbDislike16Regular />}
+        label="Doesn't sound like me"
+        aria-pressed={rated === "bad"}
+        className={rated === "bad" ? styles.rated : undefined}
+        onClick={() => onRate("bad")}
+      />
     </span>
   );
 }

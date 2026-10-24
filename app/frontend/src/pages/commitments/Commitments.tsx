@@ -2,15 +2,17 @@
  * meetings), with follow-ups drafted in your voice. Shown in the web app and as the Vanimo tab in Teams.
  * Vanimo never sends: you copy or open the follow-up and send it yourself. A promise made in a meeting
  * has no conversation to follow up in.
- * Layout: a segmented filter (Open · Done · Not promises), a ledger grouped by when things are due,
- * hairline rows with the due date and row actions on the right, and the follow-up drafted in place.
- * No router hooks: the Teams tab renders this without a router. */
+ * Layout: a segmented filter (Open · Done · Not promises), the ledger grouped by when things are due
+ * (a section header per group above a card of rows), each row led by its channel tile with the due
+ * pill and icon actions on the right, and the follow-up drafted in place. A quiet footer says what the
+ * promise finder runs on and how it's doing.
+ * No router hooks: the Teams tab renders this without a router. Only `vt`/`tokens` colours (with light
+ * fallbacks), so it also renders under Microsoft's Teams theme. */
 import {
   Button,
   Field,
   Input,
   makeStyles,
-  mergeClasses,
   Menu,
   MenuButton,
   MenuItem,
@@ -19,20 +21,27 @@ import {
   MenuTrigger,
   MessageBar,
   MessageBarBody,
-  Tab,
-  TabList,
-  tokens,
   Tooltip,
 } from "@fluentui/react-components";
 import {
   ArrowUndo16Regular,
+  CalendarClock16Regular,
   CalendarLtr16Regular,
-  Chat16Regular,
   Checkmark16Regular,
+  CheckmarkCircle16Regular,
+  Clock16Regular,
+  CalendarArrowRight16Regular,
+  ClockAlarm16Regular,
+  Compose16Regular,
   Dismiss16Regular,
-  Mail16Regular,
+  EyeOff16Regular,
+  History16Regular,
+  MailCheckmark16Regular,
+  People16Regular,
+  Search16Regular,
   Snooze16Regular,
   TaskListSquareLtr20Regular,
+  Target16Regular,
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { Commitment, Draft, DraftCheck, FollowUpKind, Ledger } from "../../api/client";
@@ -40,97 +49,135 @@ import { useApi } from "../../api/context";
 import { DraftView, draftErrorText, hasBlock, recheck } from "../../drafting/DraftView";
 import {
   absoluteTime,
+  CHANNELS,
   EmptyState,
+  EngineBadge,
+  IconAction,
+  IconTile,
+  List,
   Page,
   PageSkeleton,
   Pill,
   relativeTime,
   Rise,
+  Section,
+  Segmented,
   StatusDot,
+  Surface,
   typo,
   vt,
 } from "../../ui";
 import { newChatLink } from "../TeamsPrefill";
 
+const PHONE = "@media (max-width: 639px)";
+
 const useStyles = makeStyles({
   embedded: { display: "grid", gap: "24px", minWidth: 0 },
-  toolbar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px 16px", flexWrap: "wrap" },
-  segmented: { flexWrap: "wrap" },
-  tabCount: { ...typo.tabular, color: vt.text3, marginLeft: "2px", fontWeight: 400 },
+  toolbar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px 16px", flexWrap: "wrap", minWidth: 0 },
   groups: { display: "grid", gap: "28px", minWidth: 0 },
-  group: { display: "grid", gap: "8px", minWidth: 0 },
-  groupTitle: { ...typo.itemTitle, color: vt.text1, margin: 0, display: "flex", alignItems: "baseline", gap: "8px" },
-  groupCount: { ...typo.meta, ...typo.tabular, color: vt.text3, fontWeight: 400 },
-  list: {
-    display: "grid",
-    margin: 0,
-    padding: 0,
-    listStyle: "none",
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    overflow: "hidden",
-  },
+  overdueIcon: { color: vt.danger },
+  // One promise: channel tile · what, the sentence and its facts · due pill over the actions.
   row: {
     display: "grid",
-    gridTemplateColumns: "16px minmax(0, 1fr) auto",
-    columnGap: "12px",
-    rowGap: "8px",
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    columnGap: "14px",
+    rowGap: "12px",
     padding: "14px 16px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
-    ":first-child": { borderTop: "none" },
-    "@media (max-width: 639px)": { gridTemplateColumns: "16px minmax(0, 1fr)" },
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    ":first-child": { borderTopColor: "transparent" },
+    [PHONE]: { gridTemplateColumns: "auto minmax(0, 1fr)", columnGap: "12px" },
   },
-  icon: { color: vt.text3, height: "20px", display: "grid", placeItems: "center" },
-  main: { display: "grid", gap: "4px", minWidth: 0 },
-  titleLine: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", minWidth: 0 },
+  tile: { alignSelf: "start" },
+  main: { display: "grid", gap: "6px", minWidth: 0 },
+  titleLine: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", minWidth: 0, minHeight: "22px" },
   what: { ...typo.itemTitle, color: vt.text1, overflowWrap: "anywhere" },
-  quote: { ...typo.meta, color: vt.text1, margin: 0, overflowWrap: "anywhere" },
-  meta: { ...typo.meta, ...typo.tabular, color: vt.text2, overflowWrap: "anywhere" },
+  // What you actually wrote: set off by a hairline rule, like a quotation.
+  quote: {
+    ...typo.meta,
+    color: vt.text2,
+    margin: 0,
+    paddingLeft: "10px",
+    borderLeft: `2px solid ${vt.border}`,
+    overflowWrap: "anywhere",
+  },
+  meta: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "4px 14px",
+    ...typo.meta,
+    color: vt.text2,
+    minWidth: 0,
+  },
+  metaItem: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "5px",
+    minWidth: 0,
+    overflowWrap: "anywhere",
+    "& > svg": { color: vt.text3, flexShrink: 0 },
+  },
   side: {
     display: "flex",
     flexDirection: "column",
     alignItems: "flex-end",
     justifyContent: "space-between",
-    gap: "10px",
-    "@media (max-width: 639px)": {
+    gap: "12px",
+    [PHONE]: {
       gridColumn: "2 / -1",
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
       flexWrap: "wrap",
+      gap: "8px",
     },
   },
-  due: { ...typo.meta, ...typo.tabular, color: vt.text2, whiteSpace: "nowrap" },
-  dueSoon: { color: vt.text1, fontWeight: 500 },
-  actions: { display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap", justifyContent: "flex-end" },
+  actions: { display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap", justifyContent: "flex-end", [PHONE]: { marginLeft: "auto" } },
+  followUp: { marginRight: "6px" },
+  // The follow-up form sits in a well inside the card (never a card in a card).
   extra: {
     gridColumn: "2 / -1",
     display: "grid",
     gap: "12px",
     minWidth: 0,
-    padding: "16px",
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
-    border: `1px solid ${tokens.colorNeutralStroke3}`,
-    "@media (max-width: 639px)": { gridColumn: "1 / -1" },
+    padding: "14px 16px",
+    borderRadius: "8px",
+    backgroundColor: vt.inset,
+    border: `1px solid ${vt.borderSubtle}`,
+    [PHONE]: { gridColumn: "1 / -1" },
   },
-  // The draft card has its own border: no box around it (never a card inside a card).
-  extraPlain: { gridColumn: "2 / -1", display: "grid", gap: "8px", minWidth: 0, "@media (max-width: 639px)": { gridColumn: "1 / -1" } },
-  extraTitle: { ...typo.itemTitle, color: vt.text1, margin: 0 },
+  // The drafted follow-up: a well inside the row, the draft's own parts without a second card frame.
+  extraWell: {
+    gridColumn: "2 / -1",
+    minWidth: 0,
+    padding: "14px 16px",
+    borderRadius: "10px",
+    backgroundColor: vt.inset,
+    border: `1px solid ${vt.borderSubtle}`,
+    [PHONE]: { gridColumn: "1 / -1", padding: "12px" },
+  },
+  extraTitle: { ...typo.cardTitle, color: vt.text1, margin: 0, display: "flex", alignItems: "center", gap: "8px", "& > svg": { color: vt.accent } },
   form: { display: "flex", alignItems: "flex-end", gap: "8px", flexWrap: "wrap" },
   field: { flex: "1 1 220px", maxWidth: "320px" },
+  overdueText: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    ...typo.label,
+    color: vt.danger,
+    whiteSpace: "nowrap",
+    paddingTop: "2px",
+  },
   footer: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: "4px 12px",
+    gap: "8px 18px",
     ...typo.meta,
-    ...typo.tabular,
     color: vt.text2,
     margin: 0,
-    paddingTop: "12px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    paddingTop: "16px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
   },
 });
 
@@ -141,8 +188,6 @@ export const AUDIENCE: Record<string, string> = {
   external: "a client or partner",
   personal: "a personal contact",
 };
-
-const CHANNEL: Record<Commitment["channel"], string> = { email: "Email", chat: "Teams", meeting: "Meeting" };
 
 const FOLLOW_UP: Record<FollowUpKind, string> = {
   done: "It's done: send it",
@@ -173,6 +218,13 @@ const GROUPS = [
 function rel(iso: string): string {
   const r = relativeTime(iso);
   return r === "Tomorrow" || r === "Yesterday" ? r.toLowerCase() : r;
+}
+
+/** Who the promise was made to, and where: "Email to your team", "In a meeting with your manager". */
+function where(c: Commitment): string {
+  const who = AUDIENCE[c.relationship] ?? c.relationship;
+  if (c.channel === "meeting") return `In a meeting with ${who}`;
+  return c.channel === "chat" ? `Teams chat with ${who}` : `Email to ${who}`;
 }
 
 /** A relative date in a phrase, with the exact date and time on hover. */
@@ -301,7 +353,8 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
     ) : (
       <Page
         title="Commitments"
-        description="What you promised people in your emails, Teams chats and meetings, found in what Vanimo is allowed to learn from. Mark them done, or let Vanimo draft the follow-up in your voice. Vanimo never sends."
+        description="What you promised people in your emails, Teams chats and meetings, with follow-ups drafted in your voice. Vanimo never sends."
+        info="Found in what Vanimo is allowed to learn from. Mark a promise done, snooze it, or let Vanimo draft the follow-up in your voice: you copy it or put it in your Drafts folder and send it yourself. Promises made in meetings have no conversation to follow up in."
       >
         {children}
       </Page>
@@ -325,54 +378,79 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
 
   const row = (c: Commitment) => {
     const open = c.status === "open";
-    const Icon = c.channel === "email" ? Mail16Regular : c.channel === "chat" ? Chat16Regular : CalendarLtr16Regular;
+    const channel = CHANNELS[c.channel];
     const snoozed = Boolean(c.snoozedUntil && new Date(c.snoozedUntil) > new Date());
     const when = bucket(c);
     return (
       <li key={c.id} className={styles.row}>
-        <span className={styles.icon}>
-          <Icon aria-hidden />
-        </span>
+        <IconTile icon={channel.icon} tone={channel.tone} size={32} className={styles.tile} />
         <div className={styles.main}>
           <div className={styles.titleLine}>
             <span className={styles.what}>{c.what}</span>
-            {c.looksDoneAt && open && <Pill tone="success">Looks done</Pill>}
-            {snoozed && open && <Pill>Snoozed</Pill>}
+            {c.looksDoneAt && open && (
+              <Pill tone="success" icon={<CheckmarkCircle16Regular />}>
+                Looks done
+              </Pill>
+            )}
+            {snoozed && open && <Pill icon={<Snooze16Regular />}>Snoozed</Pill>}
           </div>
           <p className={styles.quote}>“{c.sentence}”</p>
           <div className={styles.meta}>
-            {c.channel === "meeting"
-              ? `In a meeting with ${AUDIENCE[c.relationship] ?? c.relationship}`
-              : `${CHANNEL[c.channel]} · to ${AUDIENCE[c.relationship] ?? c.relationship}`}
-            {" · made "}
-            <When iso={c.madeAt}>{rel(c.madeAt)}</When>
-            {c.duePhrase ? ` · “${c.duePhrase}”` : ""}
-            {snoozed && c.snoozedUntil ? ` · snoozed until ${day(c.snoozedUntil)}` : ""}
-            {c.looksDoneAt && open ? ` · you wrote in the same thread on ${day(c.looksDoneAt)}` : ""}
+            <span className={styles.metaItem}>
+              <People16Regular aria-hidden />
+              {where(c)}
+            </span>
+            <span className={styles.metaItem}>
+              <History16Regular aria-hidden />
+              <span>
+                Made <When iso={c.madeAt}>{rel(c.madeAt)}</When>
+              </span>
+            </span>
+            {snoozed && c.snoozedUntil && (
+              <span className={styles.metaItem}>
+                <Snooze16Regular aria-hidden />
+                Snoozed until {day(c.snoozedUntil)}
+              </span>
+            )}
+            {c.looksDoneAt && open && (
+              <span className={styles.metaItem}>
+                <MailCheckmark16Regular aria-hidden />
+                You wrote in the same thread on {day(c.looksDoneAt)}
+              </span>
+            )}
             {!open && c.statusAt && (
-              <>
-                {" · "}
-                {c.status === "done" ? "marked done" : "marked not a promise"} <When iso={c.statusAt}>{rel(c.statusAt)}</When>
-              </>
+              <span className={styles.metaItem}>
+                {c.status === "done" ? <Checkmark16Regular aria-hidden /> : <Dismiss16Regular aria-hidden />}
+                <span>
+                  {c.status === "done" ? "Marked done" : "Marked not a promise"} <When iso={c.statusAt}>{rel(c.statusAt)}</When>
+                </span>
+              </span>
             )}
           </div>
         </div>
         <div className={styles.side}>
-          {open && c.dueAt && (
+          {open && c.dueAt ? (
             <When iso={c.dueAt}>
               {when === "overdue" ? (
-                <Pill tone="danger">Was due {rel(c.dueAt)}</Pill>
+                <span className={styles.overdueText}>
+                  <ClockAlarm16Regular aria-hidden />
+                  Was due {rel(c.dueAt)}
+                </span>
               ) : (
-                <span className={mergeClasses(styles.due, when === "soon" && styles.dueSoon)}>Due {rel(c.dueAt)}</span>
+                <Pill tone={when === "soon" ? "warning" : "neutral"} icon={<Clock16Regular />}>
+                  Due {rel(c.dueAt)}
+                </Pill>
               )}
             </When>
+          ) : (
+            <span aria-hidden />
           )}
           {open ? (
             <div className={styles.actions}>
               {c.channel !== "meeting" && (
                 <Menu>
                   <MenuTrigger disableButtonEnhancement>
-                    <MenuButton size="small" disabled={busy}>
+                    <MenuButton size="small" icon={<Compose16Regular />} disabled={busy} className={styles.followUp}>
                       Draft a follow-up
                     </MenuButton>
                   </MenuTrigger>
@@ -387,31 +465,32 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
                   </MenuPopover>
                 </Menu>
               )}
-              <Button size="small" appearance="subtle" icon={<Checkmark16Regular />} onClick={() => void decide(c, "done")}>
-                Done
-              </Button>
-              <Tooltip content="Remind me tomorrow" relationship="label">
-                <Button size="small" appearance="subtle" icon={<Snooze16Regular />} onClick={() => void decide(c, "snooze")} />
-              </Tooltip>
-              <Tooltip content="Not a promise" relationship="label">
-                <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => void decide(c, "dismiss")} />
-              </Tooltip>
+              <IconAction icon={<Checkmark16Regular />} label="Mark done" onClick={() => void decide(c, "done")} />
+              <IconAction icon={<CalendarArrowRight16Regular />} label="Remind me tomorrow" onClick={() => void decide(c, "snooze")} />
+              <IconAction icon={<Dismiss16Regular />} label="Not a promise" onClick={() => void decide(c, "dismiss")} />
             </div>
           ) : (
             <div className={styles.actions}>
-              <Button size="small" appearance="subtle" icon={<ArrowUndo16Regular />} onClick={() => void decide(c, "reopen")}>
-                Reopen
-              </Button>
+              <IconAction icon={<ArrowUndo16Regular />} label="Reopen" onClick={() => void decide(c, "reopen")} />
             </div>
           )}
         </div>
         {active?.id === c.id && (
           <Rise visible appear>
             <div className={styles.extra}>
-              <p className={styles.extraTitle}>{FOLLOW_UP[active.kind]}</p>
+              <p className={styles.extraTitle}>
+                <Compose16Regular aria-hidden />
+                {FOLLOW_UP[active.kind]}
+              </p>
               <div className={styles.form}>
                 <Field label={active.kind === "late" ? "New date (optional)" : "Next update by (optional)"} className={styles.field}>
-                  <Input value={newDate} maxLength={40} placeholder="Monday, 21 Oct…" onChange={(_, d) => setNewDate(d.value)} />
+                  <Input
+                    value={newDate}
+                    maxLength={40}
+                    placeholder="Monday, 21 Oct…"
+                    contentBefore={<CalendarLtr16Regular aria-hidden />}
+                    onChange={(_, d) => setNewDate(d.value)}
+                  />
                 </Field>
                 <Button
                   appearance={draft?.id === c.id ? "secondary" : "primary"}
@@ -427,9 +506,9 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
         )}
         {draft?.id === c.id && (
           <Rise visible appear>
-            <div className={styles.extraPlain} role="group" aria-label="Follow-up draft">
-              <p className={styles.extraTitle}>Follow-up draft</p>
+            <div className={styles.extraWell} role="group" aria-label="Follow-up draft">
               <DraftView
+                flat
                 draft={draft.draft}
                 text={text}
                 onTextChange={setText}
@@ -471,72 +550,95 @@ export function Commitments({ embedded = false, prefill = false }: { embedded?: 
   let body: ReactNode;
   if (ledger.items.length === 0) {
     body = (
-      <EmptyState
-        headingLevel={2}
-        icon={<TaskListSquareLtr20Regular />}
-        title={status === "open" ? "No open promises" : status === "done" ? "Nothing marked done yet" : "Nothing marked as not a promise"}
-      >
-        {status === "open"
-          ? "Vanimo looks in what you sent: run Learning first, then new mail and chats are checked each time you open this page."
-          : "Nothing here yet."}
-      </EmptyState>
+      <Surface padding="l">
+        <EmptyState
+          center
+          headingLevel={2}
+          icon={<TaskListSquareLtr20Regular />}
+          title={status === "open" ? "No open promises" : status === "done" ? "Nothing marked done yet" : "Nothing marked as not a promise"}
+        >
+          {status === "open"
+            ? "Vanimo looks in what you sent: run Learning first, then new mail and chats are checked each time you open this page."
+            : "Nothing here yet."}
+        </EmptyState>
+      </Surface>
     );
   } else if (status === "open") {
     body = (
       <div className={styles.groups}>
         {GROUPS.map(([key, title]) => {
           const items = ledger.items.filter((c) => bucket(c) === key);
-          return items.length ? (
-            <section key={key} className={styles.group} aria-labelledby={`commitments-${key}`}>
-              <h2 id={`commitments-${key}`} className={styles.groupTitle}>
-                {title}
-                <span className={styles.groupCount}>{items.length}</span>
-              </h2>
-              <ul className={styles.list}>{items.map(row)}</ul>
-            </section>
-          ) : null;
+          if (!items.length) return null;
+          const icon =
+            key === "overdue" ? (
+              <ClockAlarm16Regular className={styles.overdueIcon} />
+            ) : key === "undated" ? (
+              <CalendarLtr16Regular />
+            ) : (
+              <CalendarClock16Regular />
+            );
+          return (
+            <Section key={key} title={title} count={items.length} icon={icon} aria-label={title}>
+              <List bordered label={title}>
+                {items.map(row)}
+              </List>
+            </Section>
+          );
         })}
       </div>
     );
   } else {
     body = (
-      <ul className={styles.list} aria-label={status === "done" ? "Done" : "Not promises"}>
+      <List bordered label={status === "done" ? "Done" : "Not promises"}>
         {ledger.items.map(row)}
-      </ul>
+      </List>
     );
   }
 
   return frame(
     <>
       <div className={styles.toolbar}>
-        <TabList
-          size="small"
-          appearance="subtle-circular"
-          className={styles.segmented}
-          aria-label="Show"
-          selectedValue={status}
-          onTabSelect={(_, d) => setStatus(d.value as typeof status)}
-        >
-          <Tab value="open">
-            Open <span className={styles.tabCount}>{ledger.open}</span>
-          </Tab>
-          <Tab value="done">Done</Tab>
-          <Tab value="dismissed">Not promises</Tab>
-        </TabList>
+        <Segmented
+          label="Show"
+          value={status}
+          onChange={setStatus}
+          segments={[
+            { value: "open", label: "Open", count: ledger.open },
+            { value: "done", label: "Done" },
+            { value: "dismissed", label: "Not promises" },
+          ]}
+        />
         {scanNote && <StatusDot tone="success">{scanNote}</StatusDot>}
       </div>
       {!noticeInDraft && noticeBar}
       {body}
-      <p className={styles.footer}>
-        <StatusDot tone={offline ? "warning" : "neutral"}>{ledger.label}</StatusDot>
-        <span>
-          {ledger.overdue} overdue · {ledger.dueSoon} due in the next day · {ledger.capturedThisWeek} found this week
+      <div className={styles.footer}>
+        <EngineBadge offline={offline} detail={ledger.label} />
+        <span className={styles.metaItem}>
+          <ClockAlarm16Regular aria-hidden />
+          {`${ledger.overdue} overdue`}
+        </span>
+        <span className={styles.metaItem}>
+          <Clock16Regular aria-hidden />
+          {`${ledger.dueSoon} due in the next day`}
+        </span>
+        <span className={styles.metaItem}>
+          <Search16Regular aria-hidden />
+          {`${ledger.capturedThisWeek} found this week`}
         </span>
         {ledger.precision !== null && (
-          <span>{`${Math.round(ledger.precision * 100)}% of the ${ledger.decided} you decided on were real promises`}</span>
+          <span className={styles.metaItem}>
+            <Target16Regular aria-hidden />
+            {`${Math.round(ledger.precision * 100)}% of the ${ledger.decided} you decided on were real promises`}
+          </span>
         )}
-        {ledger.hidden > 0 && <span>{ledger.hidden} hidden because of a rule you added; they're being deleted.</span>}
-      </p>
+        {ledger.hidden > 0 && (
+          <span className={styles.metaItem}>
+            <EyeOff16Regular aria-hidden />
+            {`${ledger.hidden} hidden because of a rule you added; they're being deleted.`}
+          </span>
+        )}
+      </div>
     </>,
   );
 }

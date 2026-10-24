@@ -99,7 +99,7 @@ describe("sign-in", () => {
     expect(within(nav).getByRole("link", { name: "Diagnostics" })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: "Home" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Super-admin")).toBeInTheDocument();
-    expect(await screen.findByText(/You're seeing the sample workspace/)).toBeInTheDocument();
+    expect(await screen.findByText(/You're in the sample workspace/)).toBeInTheDocument();
     expect(screen.getByText("Meera Iyer")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Choose what Vanimo learns from/ })).toBeInTheDocument();
   });

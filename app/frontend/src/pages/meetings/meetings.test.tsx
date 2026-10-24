@@ -80,10 +80,12 @@ describe("Meetings", () => {
   it("lists remembered meetings and what the last look found", async () => {
     wrap(api(), <Meetings />);
     expect(await screen.findByText("Acme weekly sync")).toBeInTheDocument();
-    expect(screen.getByText("With people outside")).toBeInTheDocument();
+    // People from outside the organisation were invited: a Globe pill (was: "With people outside").
+    expect(screen.getByText("External")).toBeInTheDocument();
     expect(screen.getByText("No speaker names")).toBeInTheDocument();
     expect(await screen.findByText(/2 new meetings remembered/)).toBeInTheDocument();
-    expect(screen.getByText(/Offline stand-in/)).toBeInTheDocument();
+    // The engine badge; its tooltip (the list's label) also says "Offline stand-in", so match the badge exactly.
+    expect(screen.getByText("Offline stand-in")).toBeInTheDocument();
   });
 
   it("answers with sources that open the meeting at the cited turn", async () => {
@@ -127,7 +129,7 @@ describe("Meetings", () => {
     await userEvent.click(within(meeting).getByRole("button", { name: "Not right" }));
     expect(note).toHaveBeenCalledWith("a1", "dismiss");
     await userEvent.selectOptions(within(meeting).getByLabelText("Wrong speaker?"), "⟦PERSON_aaaaaaaa.full⟧");
-    await userEvent.selectOptions(within(meeting).getByLabelText("was really"), "⟦PERSON_bbbbbbbb.full⟧");
+    await userEvent.selectOptions(within(meeting).getByLabelText("Was really"), "⟦PERSON_bbbbbbbb.full⟧");
     await userEvent.click(within(meeting).getByRole("button", { name: "Fix speaker" }));
     expect(fix).toHaveBeenCalledWith("m1", "⟦PERSON_aaaaaaaa.full⟧", "⟦PERSON_bbbbbbbb.full⟧");
     await userEvent.click(within(meeting).getByRole("button", { name: "Forget this meeting" }));

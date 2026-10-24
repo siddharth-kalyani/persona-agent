@@ -81,7 +81,7 @@ describe("Draft page", () => {
     vi.spyOn(a, "draftFeedback").mockResolvedValue(undefined);
     const user = userEvent.setup();
     wrap(a);
-    expect(await screen.findByText("Offline stand-in, no AI model")).toBeInTheDocument();
+    expect(await screen.findByText("Offline stand-in")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Updated bank details/ }));
     expect(await screen.findByText("Our bank details have changed.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Draft" }));
@@ -145,6 +145,7 @@ describe("Draft page: Teams chats (M5)", () => {
     }); // prettier-ignore
     const user = userEvent.setup();
     wrap(a);
+    await user.click(await screen.findByRole("tab", { name: /Teams/ }));
     await user.click(await screen.findByText("Rahul Verma"));
     expect(await screen.findByText("Done, it's on UAT now.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Draft" }));

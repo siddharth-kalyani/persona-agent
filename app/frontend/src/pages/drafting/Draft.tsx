@@ -3,26 +3,50 @@
  * also the persona test bench. M5: Teams chats too (the same service as Teams' "Draft reply").
  * Nothing is ever sent from here.
  *
- * Layout: conversations on the left (two-line rows), the conversation and composer on the right,
- * the draft below it in reading type. Ctrl/⌘ Enter drafts from the instruction box. */
+ * Layout: a conversation list on the left (email or Teams, people as avatars), the conversation and
+ * a composer card on the right, the draft card below it. Ctrl/⌘ Enter drafts from the instruction box. */
 import {
   Button,
   Field,
   Input,
   Link,
   makeStyles,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   MessageBar,
   MessageBarActions,
   MessageBarBody,
   Spinner,
   Switch,
   Textarea,
-  tokens,
   Tooltip,
   useAnnounce,
 } from "@fluentui/react-components";
-import { Chat16Regular, Compose16Regular, Mail16Regular } from "@fluentui/react-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ArrowReply16Regular,
+  CalendarLtr16Regular,
+  Chat16Regular,
+  ChevronDown16Regular,
+  ChevronUp16Regular,
+  Compose16Regular,
+  Compose20Regular,
+  Copy16Regular,
+  Delete16Regular,
+  EyeOff16Regular,
+  FolderArrowRight16Regular,
+  LockClosed16Regular,
+  Mail16Regular,
+  MoreHorizontal16Regular,
+  Open16Regular,
+  People16Regular,
+  Send16Regular,
+  ShieldTask16Regular,
+  Warning16Regular,
+} from "@fluentui/react-icons";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ApiError,
@@ -38,75 +62,127 @@ import {
   type ThreadView,
 } from "../../api/client";
 import { useApi } from "../../api/context";
-import { DraftView, draftErrorText, hasBlock, RateButtons, recheck } from "../../drafting/DraftView";
+import { AUTOSIZE, DraftView, draftErrorText, hasBlock, RateButtons, recheck } from "../../drafting/DraftView";
 import {
   absoluteTime,
   EmptyState,
+  EngineBadge,
+  IconTile,
   isMod,
+  Kbd,
   List,
   ListRow,
   modKey,
   Page,
   PageSkeleton,
+  PersonAvatar,
   Pill,
   relativeTime,
   Rise,
   Section,
-  StatusDot,
+  Segmented,
   Surface,
   Time,
   typo,
   vt,
+  type Tone,
 } from "../../ui";
+import { AUDIENCE } from "../commitments/Commitments";
 import { errorText } from "../Home";
 import { newChatLink } from "../TeamsPrefill";
 
 const useStyles = makeStyles({
   layout: {
     display: "grid",
-    gap: "24px",
-    gridTemplateColumns: "minmax(260px, 340px) minmax(0, 1fr)",
+    gap: "20px",
+    gridTemplateColumns: "minmax(300px, 400px) minmax(0, 1fr)",
     alignItems: "start",
     "@media (max-width: 899px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   listPane: {
-    display: "grid",
+    display: "flex",
+    flexDirection: "column",
     gap: "12px",
-    alignContent: "start",
     position: "sticky",
     top: "16px",
     maxHeight: "calc(100vh - 32px)",
-    overflowY: "auto",
-    // Below 1024px the 48px top bar is sticky too.
-    "@media (max-width: 1023px)": { top: "64px", maxHeight: "calc(100vh - 80px)" },
+    minWidth: 0,
+    // Below 1024px the 52px top bar is sticky too.
+    "@media (max-width: 1023px)": { top: "68px", maxHeight: "calc(100vh - 84px)" },
     "@media (max-width: 899px)": { position: "static", maxHeight: "none" },
   },
-  groupLabel: { ...typo.label, color: vt.text3, padding: "8px 2px 0" },
-  work: { display: "grid", gap: "20px", minWidth: 0, outline: "none", scrollMarginTop: "64px" },
-  engine: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" },
-  engineMeta: { ...typo.meta, color: vt.text3, ...typo.tabular },
-  convoHead: { display: "grid", gap: "2px", paddingBottom: "12px", borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
+  listTools: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flexShrink: 0 },
+  listSwitch: { flex: "1 1 auto", minWidth: 0 },
+  scroll: {
+    flex: "1 1 auto",
+    overflowY: "auto",
+    minHeight: 0,
+    borderRadius: "12px",
+    "@media (max-width: 899px)": { maxHeight: "420px" },
+  },
+  rowTime: { ...typo.label, fontWeight: 400, color: vt.text3, ...typo.tabular, whiteSpace: "nowrap" },
+  work: { display: "grid", gap: "16px", minWidth: 0, outline: "none", scrollMarginTop: "68px" },
+  convoHead: {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr)",
+    gap: "12px",
+    alignItems: "center",
+    padding: "14px 16px",
+    borderBottom: `1px solid ${vt.borderSubtle}`,
+  },
+  convoText: { display: "grid", gap: "2px", minWidth: 0 },
   convoTitle: { ...typo.sectionTitle, color: vt.text1, margin: 0, overflowWrap: "anywhere" },
-  convoMeta: { ...typo.meta, color: vt.text2 },
-  messages: { display: "grid", maxHeight: "420px", overflowY: "auto", marginRight: "-8px", paddingRight: "8px" },
-  message: { display: "grid", gap: "4px", padding: "14px 0", borderTop: `1px solid ${tokens.colorNeutralStroke3}`, ":first-child": { borderTop: "none" } },
-  from: { display: "flex", gap: "8px", alignItems: "baseline", ...typo.meta, color: vt.text2 },
+  convoMeta: { ...typo.meta, color: vt.text2, display: "flex", alignItems: "center", gap: "4px", "& svg": { color: vt.text3 } },
+  messages: { display: "grid", maxHeight: "440px", overflowY: "auto" },
+  message: {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr)",
+    gap: "4px 12px",
+    padding: "16px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    ":first-child": { borderTop: "none" },
+  },
+  from: { display: "flex", gap: "8px", alignItems: "baseline", flexWrap: "wrap", ...typo.meta, color: vt.text3 },
   fromName: { ...typo.itemTitle, color: vt.text1 },
-  body: { whiteSpace: "pre-wrap", margin: 0, fontFamily: tokens.fontFamilyBase, ...typo.reading, color: vt.text1, overflowWrap: "anywhere" },
-  excluded: { ...typo.meta, color: vt.text2, padding: "12px 0 0" },
+  body: {
+    gridColumn: "2",
+    whiteSpace: "pre-wrap",
+    margin: 0,
+    fontFamily: "inherit",
+    ...typo.reading,
+    color: vt.text1,
+    overflowWrap: "anywhere",
+  },
+  excluded: { display: "flex", gap: "8px", alignItems: "center", ...typo.meta, color: vt.text2, padding: "16px" },
   composer: { display: "grid", gap: "16px" },
-  instruction: { ...typo.body, minHeight: "72px" },
+  composerFields: { display: "grid", gap: "12px", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", "@media (max-width: 639px)": { gridTemplateColumns: "1fr" } },
+  instruction: { ...typo.body, minHeight: "84px", maxHeight: "40vh", fieldSizing: "content" },
   controls: {
     display: "flex",
-    gap: "16px",
+    gap: "12px 16px",
     alignItems: "center",
     flexWrap: "wrap",
     justifyContent: "space-between",
+    paddingTop: "14px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
   },
-  switches: { display: "flex", gap: "8px 16px", alignItems: "center", flexWrap: "wrap" },
-  go: { display: "flex", gap: "10px", alignItems: "center", marginLeft: "auto" },
-  hint: { ...typo.meta, color: vt.text3, "@media (pointer: coarse)": { display: "none" } },
+  switches: { display: "flex", gap: "4px 16px", alignItems: "center", flexWrap: "wrap" },
+  go: { display: "flex", gap: "12px", alignItems: "center", marginLeft: "auto" },
+  hint: { display: "inline-flex", gap: "4px", alignItems: "center", ...typo.meta, color: vt.text3, "@media (pointer: coarse)": { display: "none" } },
+  never: { display: "inline-flex", gap: "6px", alignItems: "center", ...typo.meta, color: vt.text3, "& svg": { flexShrink: 0 } },
   working: { display: "flex", gap: "10px", alignItems: "center", ...typo.meta, color: vt.text2 },
+  // Fills the space beside the list; on one column the list is right above it, so it isn't needed.
+  emptyCard: {
+    display: "grid",
+    placeItems: "center",
+    minHeight: "min(560px, calc(100vh - 220px))",
+    padding: "8px 24px",
+    "@media (max-width: 899px)": { display: "none" },
+  },
+  spacer: { flexGrow: 1 },
+  metaIcons: { display: "inline-flex", alignItems: "center", gap: "4px", "& + &": { marginLeft: "10px" } },
+  checksTip: { display: "grid", gap: "2px" },
+  more: { display: "flex", justifyContent: "center" },
 });
 
 /** "a@x.com, Bob <b@y.com>" → people. Invalid entries are returned separately. */
@@ -126,6 +202,27 @@ export function parseRecipients(value: string): { people: PersonRef[]; invalid: 
 type Target = { kind: "reply"; thread: DraftThread } | { kind: "new" } | { kind: "chat"; chat: DraftChat };
 
 const CHAT_TYPES: Record<DraftChat["chatType"], string> = { oneOnOne: "1:1 chat", group: "group chat", meeting: "meeting chat" };
+
+/** A Teams chat's face: the person for a 1:1, a tile for a group or a meeting chat. */
+function ChatLeading({ chat }: { chat: DraftChat }) {
+  if (chat.chatType === "oneOnOne") return <PersonAvatar name={chat.label} size={32} />;
+  return <IconTile icon={chat.chatType === "meeting" ? <CalendarLtr16Regular /> : <People16Regular />} tone="purple" size={32} />;
+}
+
+/** Pre-send checks by name, for the recent drafts list. */
+const CHECK_NAMES: Record<string, string> = {
+  lookalike_sender: "Look-alike sender",
+  lookalike_domain: "Look-alike domain",
+  payment_change: "Payment-details change",
+  fill_in: "Placeholder to fill in",
+};
+
+/** Where a recent draft was made. */
+const SURFACES: Record<string, { icon: ReactElement; tone: Tone; label: string }> = {
+  outlook: { icon: <Mail16Regular />, tone: "blue", label: "Outlook" },
+  teams: { icon: <Chat16Regular />, tone: "purple", label: "Teams" },
+  web: { icon: <Compose16Regular />, tone: "accent", label: "Web" },
+};
 
 export function Draft() {
   const styles = useStyles();
@@ -156,6 +253,8 @@ export function Draft() {
   const [chatView, setChatView] = useState<ChatView | null>(null);
   const [chatNew, setChatNew] = useState(false);
   const [prefill, setPrefill] = useState(false);
+  const [list, setList] = useState<"email" | "chat">("email");
+  const [allRecent, setAllRecent] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -332,25 +431,24 @@ export function Draft() {
     by === "unverifiable" ? unverifiable : `excluded by ${by === "organisation" ? "your organisation" : "you"}`;
   const drafting = target?.kind === "new" || (target?.kind === "chat" && chatNew);
   const conversation = target?.kind === "chat" ? chatView : view;
+  const blocked = hasBlock(checks) && !confirmed;
+  const showing = chats.length > 0 ? list : "email";
 
   return (
     <Page
       title="Draft"
       width="wide"
-      description="Reply or write a new email or Teams message in your voice. Vanimo never sends: you copy the draft into Outlook or Teams, or use the Vanimo button there."
-      eyebrow={
-        <span className={styles.engine}>
-          {status.generator === "offline" ? (
-            <Pill tone="warning">Offline stand-in, no AI model</Pill>
-          ) : (
-            <StatusDot tone="accent">Claude on Amazon Bedrock</StatusDot>
-          )}
-          {status.generator === "bedrock" && (
-            <span className={styles.engineMeta}>
-              Standard: {status.defaultModel} · Higher quality: {status.premiumModel} ({status.premiumLeftToday} left today)
-            </span>
-          )}
-        </span>
+      description="Reply or write in your voice. Vanimo never sends: you do."
+      info="Copy the draft into Outlook or Teams, put a reply in your Outlook Drafts folder, or use the Vanimo button inside Outlook (or “Draft reply” on a Teams message). Names, ID numbers and never-send words are masked before any model sees the conversation."
+      actions={
+        <EngineBadge
+          offline={status.generator === "offline"}
+          detail={
+            status.generator === "offline"
+              ? "Until the AWS account is connected, drafts are built without a model: your greeting, sign-off and register around your instruction."
+              : `Standard: ${status.defaultModel} · Higher quality: ${status.premiumModel} (${status.premiumLeftToday} left today)`
+          }
+        />
       }
     >
       {!status.reviewDone && (
@@ -371,44 +469,66 @@ export function Draft() {
 
       <div className={styles.layout}>
         <nav className={styles.listPane} aria-label="Conversations">
-          <Button
-            icon={<Compose16Regular />}
-            aria-pressed={target?.kind === "new"}
-            onClick={() => reset({ kind: "new" })}
-          >
-            New email
-          </Button>
-          <div className={styles.groupLabel}>Reply to</div>
-          {threads.length === 0 ? (
-            <EmptyState headingLevel={2} title="No received mail">Mail you receive shows up here to reply to.</EmptyState>
-          ) : (
-            <List bordered label="Emails to reply to">
-              {threads.map((t) => (
-                <ListRow
-                  key={t.conversationId}
-                  leading={<Mail16Regular aria-hidden />}
-                  title={t.subject ?? "(no subject)"}
-                  meta={
-                    <>
-                      {t.sender.name ?? t.sender.email}
-                      {t.excluded && ` · ${exclusion(t.excludedBy, "not used (someone can't be checked)")}`}
-                    </>
-                  }
-                  trailing={t.excluded ? <Pill>Excluded</Pill> : <span title={absoluteTime(t.receivedAt)}>{shortTime(t.receivedAt)}</span>}
-                  selected={target?.kind === "reply" && target.thread.conversationId === t.conversationId}
-                  onClick={() => reset({ kind: "reply", thread: t })}
+          <div className={styles.listTools}>
+            {chats.length > 0 && (
+              <div className={styles.listSwitch}>
+                <Segmented
+                  label="Conversations to reply to"
+                  value={list}
+                  onChange={setList}
+                  segments={[
+                    { value: "email", label: "Email", icon: <Mail16Regular />, count: threads.length },
+                    { value: "chat", label: "Teams", icon: <Chat16Regular />, count: chats.length },
+                  ]}
                 />
+              </div>
+            )}
+            <Button icon={<Compose16Regular />} aria-pressed={target?.kind === "new"} onClick={() => reset({ kind: "new" })}>
+              New email
+            </Button>
+          </div>
+          <div className={styles.scroll}>
+            {showing === "email" &&
+              (threads.length === 0 ? (
+                <Surface padding="none">
+                  <EmptyState headingLevel={2} icon={<Mail16Regular />} title="No received mail" center>
+                    Mail you receive shows up here to reply to.
+                  </EmptyState>
+                </Surface>
+              ) : (
+                <List bordered label="Emails to reply to">
+                  {threads.map((t) => (
+                    <ListRow
+                      key={t.conversationId}
+                      leading={<PersonAvatar name={t.sender.name ?? t.sender.email} id={t.sender.email} size={32} />}
+                      title={t.subject ?? "(no subject)"}
+                      meta={
+                        <>
+                          {t.sender.name ?? t.sender.email}
+                          {t.excluded && ` · ${exclusion(t.excludedBy, "not used (someone can't be checked)")}`}
+                        </>
+                      }
+                      trailing={
+                        t.excluded ? (
+                          <Pill icon={<EyeOff16Regular />}>Excluded</Pill>
+                        ) : (
+                          <span className={styles.rowTime} title={absoluteTime(t.receivedAt)}>
+                            {shortTime(t.receivedAt)}
+                          </span>
+                        )
+                      }
+                      selected={target?.kind === "reply" && target.thread.conversationId === t.conversationId}
+                      onClick={() => reset({ kind: "reply", thread: t })}
+                    />
+                  ))}
+                </List>
               ))}
-            </List>
-          )}
-          {chats.length > 0 && (
-            <>
-              <div className={styles.groupLabel}>Teams chats</div>
+            {showing === "chat" && (
               <List bordered label="Teams chats to reply to">
                 {chats.map((c) => (
                   <ListRow
                     key={c.chatId}
-                    leading={<Chat16Regular aria-hidden />}
+                    leading={<ChatLeading chat={c} />}
                     title={c.label}
                     meta={
                       <>
@@ -416,41 +536,67 @@ export function Draft() {
                         {c.excluded && ` · ${exclusion(c.excludedBy, "not used (can't be checked)")}`}
                       </>
                     }
-                    trailing={c.excluded ? <Pill>Excluded</Pill> : undefined}
+                    trailing={
+                      c.excluded ? (
+                        <Pill icon={<EyeOff16Regular />}>Excluded</Pill>
+                      ) : c.lastActivityAt ? (
+                        <span className={styles.rowTime} title={absoluteTime(c.lastActivityAt)}>
+                          {shortTime(c.lastActivityAt)}
+                        </span>
+                      ) : undefined
+                    }
                     selected={target?.kind === "chat" && target.chat.chatId === c.chatId}
                     onClick={() => reset({ kind: "chat", chat: c })}
                   />
                 ))}
               </List>
-            </>
-          )}
+            )}
+          </div>
         </nav>
 
         <div className={styles.work} ref={workRef} tabIndex={-1} aria-label="Conversation and draft">
           {!target && (
-            <EmptyState headingLevel={2} icon={<Compose16Regular />} title="Pick a conversation">
-              Choose an email or a Teams chat to reply to, or start a new email. Vanimo writes in your voice for that
-              audience; you edit and send it yourself.
-            </EmptyState>
+            <Surface padding="none" className={styles.emptyCard}>
+              <EmptyState headingLevel={2} icon={<Compose20Regular />} title="Pick a conversation" center>
+                Choose an email or a Teams chat to reply to, or start a new email. Vanimo writes in your voice for that
+                audience; you edit and send it yourself.
+              </EmptyState>
+            </Surface>
           )}
           {(target?.kind === "reply" || target?.kind === "chat") && (
-            <Surface padding="m" as="article" aria-label="Conversation">
+            <Surface padding="none" as="article" aria-label="Conversation">
               <div className={styles.convoHead}>
-                <h2 className={styles.convoTitle}>
-                  {target.kind === "chat"
-                    ? (chatView?.label ?? target.chat.label)
-                    : (view?.subject ?? target.thread.subject ?? "(no subject)")}
-                </h2>
-                <span className={styles.convoMeta}>
-                  {target.kind === "chat"
-                    ? `${CHAT_TYPES[target.chat.chatType]} · ${target.chat.members} people`
-                    : conversation
-                      ? `${conversation.messages.length} message${conversation.messages.length === 1 ? "" : "s"}`
-                      : "Email"}
-                </span>
+                <IconTile
+                  icon={target.kind === "chat" ? <Chat16Regular /> : <Mail16Regular />}
+                  tone={target.kind === "chat" ? "purple" : "blue"}
+                  size={36}
+                />
+                <div className={styles.convoText}>
+                  <h2 className={styles.convoTitle}>
+                    {target.kind === "chat"
+                      ? (chatView?.label ?? target.chat.label)
+                      : (view?.subject ?? target.thread.subject ?? "(no subject)")}
+                  </h2>
+                  <span className={styles.convoMeta}>
+                    {target.kind === "chat" ? (
+                      <>
+                        <People16Regular aria-hidden />
+                        {`${CHAT_TYPES[target.chat.chatType]} · ${target.chat.members} people`}
+                      </>
+                    ) : conversation ? (
+                      <>
+                        <Mail16Regular aria-hidden />
+                        {`${conversation.messages.length} message${conversation.messages.length === 1 ? "" : "s"}`}
+                      </>
+                    ) : (
+                      "Email"
+                    )}
+                  </span>
+                </div>
               </div>
               {(target.kind === "chat" ? target.chat.excluded : target.thread.excluded) && (
                 <p className={styles.excluded}>
+                  <EyeOff16Regular aria-hidden />
                   You can't view or use this {target.kind === "chat" ? "chat" : "conversation"}: it's excluded.
                 </p>
               )}
@@ -458,6 +604,7 @@ export function Draft() {
                 <div className={styles.messages}>
                   {conversation.messages.map((m, i) => (
                     <div key={i} className={styles.message}>
+                      <PersonAvatar name={m.fromMe ? "You" : (m.sender.name ?? m.sender.email)} id={m.sender.email} size={32} />
                       <div className={styles.from}>
                         <span className={styles.fromName}>{m.fromMe ? "You" : (m.sender.name ?? m.sender.email)}</span>
                         <Time iso={m.sentAt} />
@@ -470,16 +617,16 @@ export function Draft() {
             </Surface>
           )}
           {target && (
-            <div className={styles.composer}>
+            <Surface padding="m" as="section" className={styles.composer} aria-label="Composer">
               {target.kind === "new" && (
-                <>
+                <div className={styles.composerFields}>
                   <Field label="To" hint="Email addresses, separated by commas">
-                    <Input value={to} onChange={(_, d) => setTo(d.value)} />
+                    <Input value={to} contentBefore={<People16Regular />} onChange={(_, d) => setTo(d.value)} />
                   </Field>
                   <Field label="Subject">
                     <Input value={subject} onChange={(_, d) => setSubject(d.value)} />
                   </Field>
-                </>
+                </div>
               )}
               <Field
                 label={drafting ? "What should it say?" : "What should the reply say? (optional)"}
@@ -488,7 +635,7 @@ export function Draft() {
                 <Textarea
                   value={instruction}
                   maxLength={1000}
-                  resize="vertical"
+                  resize={AUTOSIZE ? "none" : "vertical"}
                   textarea={{ className: styles.instruction }}
                   onChange={(_, d) => setInstruction(d.value)}
                   onKeyDown={(e) => {
@@ -518,11 +665,13 @@ export function Draft() {
                 </div>
                 <div className={styles.go}>
                   <span className={styles.hint} aria-hidden>
-                    {modKey} ↵
+                    <Kbd>{modKey}</Kbd>
+                    <Kbd>↵</Kbd>
                   </span>
                   <Tooltip content={`Draft (${modKey}+Enter in the instruction box)`} relationship="description">
                     <Button
                       appearance={draft ? "secondary" : "primary"}
+                      icon={busy ? <Spinner size="extra-tiny" /> : target.kind === "new" || drafting ? <Compose16Regular /> : <ArrowReply16Regular />}
                       disabled={busy || !status.reviewDone}
                       onClick={() => void run()}
                     >
@@ -531,7 +680,7 @@ export function Draft() {
                   </Tooltip>
                 </div>
               </div>
-            </div>
+            </Surface>
           )}
           {busy && (
             <div className={styles.working} role="status">
@@ -566,62 +715,120 @@ export function Draft() {
                   onConfirm={setConfirmed}
                   actions={
                     <>
-                      <Button appearance="primary" disabled={hasBlock(checks) && !confirmed} onClick={() => void copy()}>
+                      <Button appearance="primary" icon={<Copy16Regular />} disabled={blocked} onClick={() => void copy()}>
                         Copy
                       </Button>
-                      {draft.channel === "chat" && prefill && (draft.chatUsers?.length ?? 0) > 0 && (
-                        <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void openInTeams()}>
-                          Open in Teams with this text
-                        </Button>
-                      )}
                       {draft.id && target?.kind === "reply" && (
-                        <Button disabled={hasBlock(checks) && !confirmed} onClick={() => void placeInOutlook()}>
+                        <Button icon={<FolderArrowRight16Regular />} disabled={blocked} onClick={() => void placeInOutlook()}>
                           Put in my Drafts folder
                         </Button>
                       )}
-                      <Button onClick={() => void checkAgain()}>Check my edits</Button>
-                      {draft.id && status.sourceKind === "sample" && (
-                        <Button onClick={() => void markSent()}>Mark as sent (sample)</Button>
+                      {draft.channel === "chat" && prefill && (draft.chatUsers?.length ?? 0) > 0 && (
+                        <Button icon={<Open16Regular />} disabled={blocked} onClick={() => void openInTeams()}>
+                          Open in Teams with this text
+                        </Button>
                       )}
-                      <Button appearance="subtle" onClick={() => void discard()}>
-                        Discard
+                      <Button icon={<ShieldTask16Regular />} onClick={() => void checkAgain()}>
+                        Check my edits
                       </Button>
-                      {draft.id && <RateButtons rated={rated} onRate={(r) => void rate(r)} />}
+                      {draft.id ? <RateButtons rated={rated} onRate={(r) => void rate(r)} /> : <span className={styles.spacer} />}
+                      <Menu positioning="below-end">
+                        <MenuTrigger disableButtonEnhancement>
+                          <Tooltip content="More actions" relationship="label" withArrow>
+                            <Button appearance="subtle" size="small" icon={<MoreHorizontal16Regular />} />
+                          </Tooltip>
+                        </MenuTrigger>
+                        <MenuPopover>
+                          <MenuList>
+                            {draft.id && status.sourceKind === "sample" && (
+                              <MenuItem icon={<Send16Regular />} onClick={() => void markSent()}>
+                                Mark as sent (sample)
+                              </MenuItem>
+                            )}
+                            <MenuItem icon={<Delete16Regular />} onClick={() => void discard()}>
+                              Discard
+                            </MenuItem>
+                          </MenuList>
+                        </MenuPopover>
+                      </Menu>
                     </>
                   }
                 />
               </div>
             </Rise>
           )}
+          {target && (
+            <span className={styles.never}>
+              <LockClosed16Regular aria-hidden />
+              Vanimo never sends. You copy or place the draft and send it yourself.
+            </span>
+          )}
         </div>
       </div>
 
       {recent.length > 0 && (
-        <Section title="Recent drafts" description="What was drafted, never the text.">
+        <Section title="Recent drafts" count={recent.length} description="What was drafted, never the text.">
           <List bordered label="Recent drafts">
-            {recent.map((r) => (
-              <ListRow
-                key={r.id}
-                title={`${r.mode === "reply" ? "Reply" : "New message"} to ${r.relationship}`}
-                meta={[
-                  r.surface,
-                  r.generator === "offline" ? "offline stand-in" : r.modelId,
-                  `${r.wordCount} words`,
-                  r.checks.length ? `checks: ${r.checks.join(", ")}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                trailing={
-                  <>
-                    {r.outcome && (
-                      <Pill tone={r.outcome === "discarded" ? "neutral" : "success"}>{r.outcome.replace("_", " ")}</Pill>
-                    )}
-                    <Time iso={r.createdAt} />
-                  </>
-                }
-              />
-            ))}
+            {(allRecent ? recent : recent.slice(0, 5)).map((r) => {
+              const surface = SURFACES[r.surface] ?? SURFACES.web!;
+              return (
+                <ListRow
+                  key={r.id}
+                  leading={<IconTile icon={surface.icon} tone={surface.tone} size={32} />}
+                  title={`${r.mode === "reply" ? "Reply" : "New message"} to ${AUDIENCE[r.relationship] ?? r.relationship}`}
+                  meta={
+                    <>
+                      <span className={styles.metaIcons}>
+                        {surface.label} · {r.generator === "offline" ? "offline stand-in" : r.modelId} · {r.wordCount} words
+                      </span>
+                      {r.checks.length > 0 && (
+                        <span className={styles.metaIcons}>
+                          <Tooltip
+                            relationship="description"
+                            withArrow
+                            content={
+                              <span className={styles.checksTip}>
+                                {r.checks.map((c) => (
+                                  <span key={c}>{CHECK_NAMES[c] ?? c.replaceAll("_", " ")}</span>
+                                ))}
+                              </span>
+                            }
+                          >
+                            <Pill tabIndex={0} tone="warning" icon={<Warning16Regular />}>
+                              {r.checks.length} {r.checks.length === 1 ? "check" : "checks"}
+                            </Pill>
+                          </Tooltip>
+                        </span>
+                      )}
+                    </>
+                  }
+                  trailing={
+                    <>
+                      {r.outcome && (
+                        <Pill tone={r.outcome === "discarded" ? "neutral" : "success"} dot>
+                          {r.outcome.replace("_", " ")}
+                        </Pill>
+                      )}
+                      <Time iso={r.createdAt} />
+                    </>
+                  }
+                />
+              );
+            })}
           </List>
+          {recent.length > 5 && (
+            <div className={styles.more}>
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={allRecent ? <ChevronUp16Regular /> : <ChevronDown16Regular />}
+                aria-expanded={allRecent}
+                onClick={() => setAllRecent((v) => !v)}
+              >
+                {allRecent ? "Show fewer" : `Show all ${recent.length}`}
+              </Button>
+            </div>
+          )}
         </Section>
       )}
     </Page>

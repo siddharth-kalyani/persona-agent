@@ -37,7 +37,7 @@ async function start() {
     );
   } catch (err) {
     root.render(
-      <p style={{ padding: 24, fontFamily: "'Inter Variable', 'Segoe UI', sans-serif", color: "#21201C" }}>
+      <p style={{ padding: 24, fontFamily: "'Inter Variable', 'Segoe UI', sans-serif", color: "#111318" }}>
         {(err as Error).message}
       </p>,
     );

@@ -61,7 +61,7 @@ describe("SourcesReview", () => {
 
     expect(await screen.findByText("Rahul Verma")).toBeInTheDocument();
     expect(screen.getByText("Your organisation: Bluefin Bank")).toBeInTheDocument();
-    expect(screen.getByText("personal email")).toBeInTheDocument();
+    expect(screen.getByText("Personal email")).toBeInTheDocument(); // the "personal email" flag, as a pill
     // Locked rows can't be changed; the user's own exclusion can be undone.
     const karanRow = screen.getByText("Karan Malhotra").closest("tr")!;
     expect(within(karanRow).queryByRole("button")).not.toBeInTheDocument();

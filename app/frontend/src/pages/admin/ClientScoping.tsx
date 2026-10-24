@@ -10,16 +10,40 @@ import {
   Spinner,
   Switch,
   Textarea,
-  Tooltip,
+  tokens,
 } from "@fluentui/react-components";
-import { BuildingMultiple20Regular, Delete16Regular } from "@fluentui/react-icons";
-import { useEffect, useState } from "react";
+import {
+  Add16Regular,
+  Add20Regular,
+  Alert16Regular,
+  Building16Regular,
+  BuildingMultiple20Regular,
+  CalendarLtr16Regular,
+  CheckmarkCircle16Filled,
+  ClosedCaption16Regular,
+  Delete16Regular,
+  DismissCircle16Filled,
+  Drafts16Regular,
+  Globe16Regular,
+  Globe20Regular,
+  Info16Filled,
+  Settings20Regular,
+  ShieldCheckmark16Regular,
+  Tag16Regular,
+  ChatMultiple16Regular,
+  Warning16Filled,
+} from "@fluentui/react-icons";
+import { useEffect, useState, type ReactElement } from "react";
 import type { ClientAccount, MeetingHealth, Scoping } from "../../api/client";
 import { ApiError } from "../../api/client";
 import { useApi } from "../../api/context";
 import {
-  DataTable,
   EmptyState,
+  IconAction,
+  IconTile,
+  InfoTip,
+  List,
+  ListRow,
   Page,
   PageSkeleton,
   Pill,
@@ -27,11 +51,8 @@ import {
   Section,
   SettingList,
   SettingRow,
-  StatusDot,
-  Td,
   Time,
   type Tone,
-  Tr,
   typo,
   vt,
 } from "../../ui";
@@ -42,28 +63,48 @@ const useStyles = makeStyles({
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: "16px",
-    maxWidth: "720px",
+    alignItems: "start",
     "@media (max-width: 639px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   full: { gridColumn: "1 / -1" },
-  formActions: { gridColumn: "1 / -1", display: "flex", gap: "8px" },
-  clientName: { ...typo.itemTitle, color: vt.text1, display: "block" },
-  clientMeta: { ...typo.meta, ...typo.tabular, color: vt.text2, display: "block" },
-  domains: { display: "flex", gap: "4px", flexWrap: "wrap" },
-  domain: { ...typo.address, fontWeight: 400, height: "auto", minHeight: "20px", whiteSpace: "normal" },
-  check: { display: "grid", gap: "12px" },
+  formActions: {
+    gridColumn: "1 / -1",
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "8px",
+    paddingTop: "16px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+  },
+  radios: { display: "grid", gap: "2px" },
+  metaLine: { display: "inline-flex", alignItems: "center", gap: "4px 14px", flexWrap: "wrap" },
+  metaItem: { display: "inline-flex", alignItems: "flex-start", gap: "4px", minWidth: 0, "& > svg": { flexShrink: 0, marginTop: "1px" } },
+  domains: { ...typo.address, overflowWrap: "anywhere", whiteSpace: "normal" },
+  trailing: { display: "flex", alignItems: "center", gap: "8px" },
+  label: { display: "inline-flex", alignItems: "center", gap: "2px", flexWrap: "wrap" },
   checkedAt: { ...typo.meta, color: vt.text3, display: "inline-flex", gap: "4px" },
-  health: { listStyle: "none", margin: 0, padding: 0, display: "grid", maxWidth: "820px" },
+  // The transcript check's results: a well inside the settings card.
+  health: {
+    listStyle: "none",
+    margin: "4px 0 14px",
+    padding: "4px 14px",
+    display: "grid",
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: vt.inset,
+    border: `1px solid ${vt.borderSubtle}`,
+  },
   healthRow: {
     display: "grid",
-    gridTemplateColumns: "110px minmax(0, 1fr)",
-    gap: "4px 16px",
+    gridTemplateColumns: "16px 88px minmax(0, 1fr)",
+    alignItems: "start",
+    gap: "4px 10px",
     padding: "10px 0",
     borderTop: `1px solid ${vt.borderSubtle}`,
     ":first-child": { borderTopColor: "transparent" },
-    "@media (max-width: 479px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+    "@media (max-width: 479px)": { gridTemplateColumns: "16px minmax(0, 1fr)" },
   },
-  healthText: { ...typo.meta, color: vt.text1 },
+  healthIcon: { marginTop: "1px" },
+  healthWord: { ...typo.meta, fontWeight: 500, "@media (max-width: 479px)": { gridColumn: "2" } },
+  healthText: { ...typo.meta, color: vt.text1, "@media (max-width: 479px)": { gridColumn: "2" } },
 });
 
 export function splitList(value: string): string[] {
@@ -84,6 +125,24 @@ const HEALTH: Record<MeetingHealth["checks"][number]["state"], [Tone, string]> =
   warn: ["warning", "Warning"],
   fail: ["danger", "Problem"],
   info: ["neutral", "Info"],
+};
+
+/** Each state's glyph, in the state's colour (the word beside it says it too). */
+const HEALTH_ICON: Record<MeetingHealth["checks"][number]["state"], ReactElement> = {
+  ok: <CheckmarkCircle16Filled style={{ color: vt.success }} aria-hidden />,
+  warn: <Warning16Filled style={{ color: vt.warning }} aria-hidden />,
+  fail: <DismissCircle16Filled style={{ color: vt.danger }} aria-hidden />,
+  info: <Info16Filled style={{ color: vt.text3 }} aria-hidden />,
+};
+
+const TONE_TEXT: Record<Tone, string> = {
+  neutral: vt.text2,
+  accent: vt.accent,
+  blue: vt.info,
+  purple: vt.purple,
+  success: vt.success,
+  warning: vt.warning,
+  danger: vt.danger,
 };
 
 /** One transcript health check, in plain words with what to do about it. */
@@ -178,7 +237,8 @@ export function ClientScoping() {
   return (
     <Page
       title="Client scoping"
-      description="Rules here apply to everyone in your organisation. Users see them as locked and can't undo them. You never see anyone's emails, chats or personal exclusions here."
+      description="Rules here apply to everyone in your organisation, who see them as locked."
+      info="People can't undo these rules. You never see anyone's emails, chats or personal exclusions here."
     >
       {error && (
         <MessageBar intent="error">
@@ -186,85 +246,90 @@ export function ClientScoping() {
         </MessageBar>
       )}
 
-      <Section title="External people" description="Which conversations with people outside your organisation Vanimo may use.">
-        <RadioGroup
-          aria-label="External people"
-          value={scoping.externalMode}
-          onChange={(_, d) => void run(() => api.setExternalMode(d.value as Scoping["externalMode"]))}
-        >
-          <Radio value="allow_all" label="Use conversations with any external people, except excluded clients" />
-          <Radio value="approved_only" label="Only use conversations with approved clients (everything else external is excluded)" />
-        </RadioGroup>
-        {scoping.externalMode === "approved_only" && approvedCount === 0 && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              No client is approved yet, so every conversation with external people is excluded. Add approved clients
-              below.
-            </MessageBarBody>
-          </MessageBar>
-        )}
+      <Section
+        variant="card"
+        icon={<Globe20Regular />}
+        title="External people"
+        description="Which conversations with people outside your organisation Vanimo may use."
+      >
+        <div className={styles.radios}>
+          <RadioGroup
+            aria-label="External people"
+            value={scoping.externalMode}
+            onChange={(_, d) => void run(() => api.setExternalMode(d.value as Scoping["externalMode"]))}
+          >
+            <Radio value="allow_all" label="Use conversations with any external people, except excluded clients" />
+            <Radio value="approved_only" label="Only use conversations with approved clients (everything else external is excluded)" />
+          </RadioGroup>
+          {scoping.externalMode === "approved_only" && approvedCount === 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                No client is approved yet, so every conversation with external people is excluded. Add approved clients
+                below.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+        </div>
       </Section>
 
       <Section
+        variant="card"
+        flush
+        icon={<BuildingMultiple20Regular />}
         title="Client accounts"
+        count={scoping.accounts.length > 0 ? scoping.accounts.length : undefined}
         description={
-          scoping.accounts.length > 0
-            ? `${scoping.accounts.length} ${scoping.accounts.length === 1 ? "client" : "clients"}, ${approvedCount} approved. Domains include their subdomains.`
-            : undefined
+          scoping.accounts.length > 0 ? `${approvedCount} approved. Domains include their subdomains.` : undefined
         }
       >
         {scoping.accounts.length === 0 ? (
-          <EmptyState icon={<BuildingMultiple20Regular />} title="No client accounts yet">
+          <EmptyState icon={<BuildingMultiple20Regular />} title="No client accounts yet" center>
             Add a client below to exclude it for everyone, or to approve it when only approved clients are used.
           </EmptyState>
         ) : (
-          <DataTable
-            label="Client accounts"
-            columns={[{ label: "Client" }, { label: "Domains" }, { label: "Rule" }, { hiddenLabel: "Actions" }]}
-          >
+          <List label="Client accounts">
             {scoping.accounts.map((a) => (
-              <Tr key={a.id}>
-                <Td primary>
-                  <span className={styles.clientName}>{a.name}</span>
-                  {a.sensitiveWords > 0 && (
-                    <span className={styles.clientMeta}>
-                      {a.sensitiveWords} sensitive {a.sensitiveWords === 1 ? "word" : "words"}
+              <ListRow
+                key={a.id}
+                wrap
+                alignLeading="start"
+                leading={<IconTile icon={<Building16Regular />} tone={a.mode === "approved" ? "success" : "neutral"} size={32} />}
+                title={a.name}
+                meta={
+                  <span className={styles.metaLine}>
+                    <span className={styles.metaItem}>
+                      <Globe16Regular aria-hidden />
+                      <span className={styles.domains}>{a.domains.join(", ")}</span>
                     </span>
-                  )}
-                </Td>
-                <Td label="Domains">
-                  <span className={styles.domains}>
-                    {a.domains.map((d) => (
-                      <Pill key={d} className={styles.domain}>
-                        {d}
-                      </Pill>
-                    ))}
+                    {a.sensitiveWords > 0 && (
+                      <span className={styles.metaItem}>
+                        <Tag16Regular aria-hidden />
+                        {a.sensitiveWords} sensitive {a.sensitiveWords === 1 ? "word" : "words"}
+                      </span>
+                    )}
                   </span>
-                </Td>
-                <Td label="Rule">
-                  <Pill tone={a.mode === "excluded" ? "neutral" : "success"}>
-                    {a.mode === "excluded" ? "Excluded" : "Approved"}
-                  </Pill>
-                </Td>
-                <Td actions>
-                  <Tooltip content="Remove" relationship="description" withArrow>
-                    <Button
-                      size="small"
-                      appearance="subtle"
+                }
+                trailing={
+                  <span className={styles.trailing}>
+                    <Pill tone={a.mode === "excluded" ? "neutral" : "success"} dot>
+                      {a.mode === "excluded" ? "Excluded" : "Approved"}
+                    </Pill>
+                    <IconAction
                       icon={<Delete16Regular />}
-                      aria-label={`Remove ${a.name}`}
+                      label={`Remove ${a.name}`}
+                      danger
                       disabled={busy}
                       onClick={() => void run(() => api.removeAccount(a.id))}
                     />
-                  </Tooltip>
-                </Td>
-              </Tr>
+                  </span>
+                }
+              />
             ))}
-          </DataTable>
+          </List>
         )}
       </Section>
 
-      <Section title="Add a client">
+      <Section variant="card" icon={<Add20Regular />} title="Add a client">
         <div className={styles.form}>
           <Field label="Client name" required>
             <Input value={name} onChange={(_, d) => setName(d.value)} maxLength={120} />
@@ -290,18 +355,36 @@ export function ClientScoping() {
             <Textarea value={words} onChange={(_, d) => setWords(d.value)} resize="vertical" />
           </Field>
           <div className={styles.formActions}>
-            <Button appearance="primary" disabled={busy || !name.trim() || !domains.trim()} onClick={() => void add()}>
+            <Button
+              appearance="primary"
+              icon={<Add16Regular />}
+              disabled={busy || !name.trim() || !domains.trim()}
+              onClick={() => void add()}
+            >
               Add client
             </Button>
           </div>
         </div>
       </Section>
 
-      <Section title="Organisation settings" description="Each applies to everyone in your organisation.">
+      <Section
+        variant="card"
+        icon={<Settings20Regular />}
+        title="Organisation settings"
+        description="Each applies to everyone in your organisation."
+      >
         <SettingList>
           <SettingRow
-            label="Allow drafts in people's Outlook Drafts folder"
-            description="Lets people choose to have reply drafts put in their Outlook Drafts folder (each person opts in; Vanimo never sends). Turning it off stops new ones; drafts already there stay until people delete them."
+            icon={<Drafts16Regular />}
+            label={
+              <span className={styles.label}>
+                Allow drafts in people's Outlook Drafts folder
+                <InfoTip label="About drafts in Outlook">
+                  Each person opts in. Turning it off stops new ones; drafts already there stay until people delete them.
+                </InfoTip>
+              </span>
+            }
+            description="Lets people choose to have reply drafts put in their Outlook Drafts folder. Vanimo never sends."
           >
             <Switch
               checked={scoping.serverDrafts}
@@ -310,8 +393,18 @@ export function ClientScoping() {
             />
           </SettingRow>
           <SettingRow
-            label="Open Teams chats with the draft typed in"
-            description="Teams has no way for an app to type into the message box. Vanimo can open a chat with the draft already typed in (never sent), which Microsoft documents for new chats only: turn it on once the Teams prefill test (week-1 spike 1) shows it works in existing chats on your Teams clients. Until then people copy the draft."
+            icon={<ChatMultiple16Regular />}
+            label={
+              <span className={styles.label}>
+                Open Teams chats with the draft typed in
+                <InfoTip label="About Teams prefill">
+                  Teams has no way for an app to type into the message box. Microsoft documents prefill for new chats
+                  only: turn it on once the Teams prefill test (week-1 spike 1) shows it works in existing chats on your
+                  Teams clients.
+                </InfoTip>
+              </span>
+            }
+            description="Vanimo opens a chat with the draft already typed in (never sent). Until then people copy the draft."
           >
             <Switch
               checked={scoping.teamsPrefill}
@@ -320,6 +413,7 @@ export function ClientScoping() {
             />
           </SettingRow>
           <SettingRow
+            icon={<Alert16Regular />}
             label="Send reminders to people's Teams activity feed"
             description="Notifications carry counts only, never content."
           >
@@ -330,8 +424,18 @@ export function ClientScoping() {
             />
           </SettingRow>
           <SettingRow
-            label="Remember Teams meetings"
-            description="Vanimo reads the Teams transcripts of internal meetings people were invited to (as them, with their own permission) and keeps their decisions, requirements and promises so they can ask about them. Each person's exclusions still apply. Nothing is read until a Teams admin allows Microsoft Graph access to transcripts; with speaker attribution off, notes have no names."
+            icon={<CalendarLtr16Regular />}
+            label={
+              <span className={styles.label}>
+                Remember Teams meetings
+                <InfoTip label="About meeting memory">
+                  Vanimo reads the transcripts as each person, with their own permission. Each person's exclusions still
+                  apply. Nothing is read until a Teams admin allows Microsoft Graph access to transcripts; with speaker
+                  attribution off, notes have no names.
+                </InfoTip>
+              </span>
+            }
+            description="Keeps the decisions, requirements and promises from internal Teams meetings people were invited to, so they can ask about them."
           >
             <Switch
               checked={scoping.meetingMemory}
@@ -340,6 +444,7 @@ export function ClientScoping() {
             />
           </SettingRow>
           <SettingRow
+            icon={<ClosedCaption16Regular />}
             label="Transcript access"
             description={
               health ? (
@@ -353,7 +458,7 @@ export function ClientScoping() {
           >
             <Button
               disabled={busy || checking}
-              icon={checking ? <Spinner size="extra-tiny" aria-hidden /> : undefined}
+              icon={checking ? <Spinner size="extra-tiny" aria-hidden /> : <ShieldCheckmark16Regular />}
               onClick={() => {
                 setChecking(true);
                 api
@@ -373,7 +478,10 @@ export function ClientScoping() {
                 const [tone, word] = HEALTH[c.state];
                 return (
                   <li key={c.key} className={styles.healthRow}>
-                    <StatusDot tone={tone}>{word}</StatusDot>
+                    <span className={styles.healthIcon}>{HEALTH_ICON[c.state]}</span>
+                    <span className={styles.healthWord} style={{ color: TONE_TEXT[tone] }}>
+                      {word}
+                    </span>
                     <span className={styles.healthText}>{healthText(c)}</span>
                   </li>
                 );

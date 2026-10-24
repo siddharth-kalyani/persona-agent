@@ -31,10 +31,9 @@ const useStyles = makeStyles({
     gap: "10px",
     padding: "0 16px",
     height: "52px",
-    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    borderBottom: `1px solid ${vt.borderSubtle}`,
     color: vt.text3,
-    // The input itself has no outline; the row's rule marks focus.
-    ":focus-within": { borderBottomColor: tokens.colorStrokeFocus2 },
+    // The input always has focus while the palette is open; its caret marks it.
   },
   input: {
     flexGrow: 1,
@@ -70,7 +69,8 @@ const useStyles = makeStyles({
     ...typo.body,
   },
   active: { backgroundColor: vt.selected },
-  icon: { display: "grid", placeItems: "center", color: vt.text2, fontSize: "16px", width: "16px" },
+  icon: { display: "grid", placeItems: "center", color: vt.text3, width: "20px" },
+  activeIcon: { color: vt.accent },
   hint: { marginLeft: "auto", ...typo.meta, color: vt.text3 },
   empty: { padding: "24px 16px", ...typo.body, color: vt.text2 },
   footer: {
@@ -185,7 +185,7 @@ export function CommandPalette({ open, onOpenChange, commands }: { open: boolean
                     onMouseMove={() => i !== active && setActive(i)}
                     onClick={() => run(c)}
                   >
-                    <span className={s.icon} aria-hidden>{c.icon}</span>
+                    <span className={mergeClasses(s.icon, i === active && s.activeIcon)} aria-hidden>{c.icon}</span>
                     {c.label}
                     {c.hint && <span className={s.hint}>{c.hint}</span>}
                   </div>

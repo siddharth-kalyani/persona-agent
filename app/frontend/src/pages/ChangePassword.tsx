@@ -1,11 +1,14 @@
 import { Button, Field, Input, Link, makeStyles, MessageBar, MessageBarBody } from "@fluentui/react-components";
+import { Checkmark16Regular, PersonCircle16Regular } from "@fluentui/react-icons";
 import { useState, type FormEvent } from "react";
 import { AuthFailure, useAuth } from "../auth/session";
+import { vt } from "../ui";
 import { AuthPanel } from "./SignIn";
 
 const useStyles = makeStyles({
   form: { display: "grid", gap: "16px" },
-  submit: { marginTop: "4px" },
+  submit: { marginTop: "4px", width: "100%" },
+  person: { color: vt.text3 },
 });
 
 export const MIN_PASSWORD_LENGTH = 12;
@@ -64,6 +67,7 @@ export function ChangePassword() {
       lead="You signed in with a one-time password. Choose your own to continue."
       footer={
         <>
+          <PersonCircle16Regular aria-hidden className={styles.person} />
           Signed in as {auth.email ?? ""} ·{" "}
           <Link as="button" onClick={() => void auth.signOut()}>
             Sign out
@@ -97,6 +101,7 @@ export function ChangePassword() {
           size="large"
           type="submit"
           disabled={busy || !current || next.length < MIN_PASSWORD_LENGTH || next !== confirm}
+          icon={busy ? undefined : <Checkmark16Regular />}
         >
           {busy ? "Saving…" : "Set password"}
         </Button>

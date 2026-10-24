@@ -1,7 +1,7 @@
 /** Your persona: how you write, as Vanimo learned it from your own sent messages, per audience (a
- * segmented switch: everyone, your manager, your team, clients…), as plain label/value traits; the
- * studio that adjusts drafts relative to that; the rules learned from your edits; and the offline
- * style check. */
+ * segmented switch: everyone, your manager, your team, clients…), as label/value traits with
+ * proportion meters; the studio that adjusts drafts relative to that; the rules learned from your
+ * edits; and the offline style check as metric wells. Each block is one card. */
 import {
   Button,
   Field,
@@ -13,16 +13,33 @@ import {
   Slider,
   Switch,
   Textarea,
-  tokens,
 } from "@fluentui/react-components";
-import { CheckmarkCircle16Filled, PersonVoice20Regular } from "@fluentui/react-icons";
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  Briefcase16Regular,
+  CheckmarkCircle16Filled,
+  ClipboardCheckmark20Regular,
+  Emoji16Regular,
+  HandWave16Regular,
+  Heart16Regular,
+  Important16Regular,
+  Options20Regular,
+  PersonVoice16Regular,
+  PersonVoice20Regular,
+  Save16Regular,
+  Signature16Regular,
+  TextExpand16Regular,
+  TextProofingToolsAbc16Regular,
+  TextQuote16Regular,
+} from "@fluentui/react-icons";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import type { PersonaSettings, PersonaSnapshot, StyleCard } from "../../api/client";
 import { useApi } from "../../api/context";
 import {
   EmptyState,
+  EngineBadge,
   KeyValueList,
+  Meter,
   Page,
   PageSkeleton,
   Pill,
@@ -35,36 +52,47 @@ import {
   vt,
 } from "../../ui";
 import { errorText } from "../Home";
-import { EditsCard } from "./EditsCard";
+import { EditsCard, Metric, MetricGrid } from "./EditsCard";
+
+const PHONE = "@media (max-width: 639px)";
 
 const useStyles = makeStyles({
-  panel: { display: "grid", gap: "4px", minWidth: 0 },
-  panelHead: { display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap", paddingBottom: "4px" },
-  panelTitle: { ...typo.itemTitle, color: vt.text1 },
-  panelMeta: { ...typo.meta, ...typo.tabular, color: vt.text3 },
-  forms: { display: "grid", gap: "4px" },
-  formRow: { display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" },
-  form: { ...typo.body, color: vt.text1, whiteSpace: "pre-line" },
+  panel: { display: "grid", gap: "8px", minWidth: 0 },
+  switcher: { paddingBottom: "8px" },
+  panelHead: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
+  panelTitle: { ...typo.cardTitle, color: vt.text1 },
+  term: { display: "inline-flex", alignItems: "center", gap: "8px", "& > svg": { color: vt.text3, flexShrink: 0 } },
+  forms: { display: "grid", gap: "6px" },
+  // A form and its share: the words, a meter, the percentage.
+  share: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) 120px 40px",
+    alignItems: "center",
+    gap: "12px",
+    maxWidth: "520px",
+    [PHONE]: { gridTemplateColumns: "minmax(0, 1fr) 56px 36px", gap: "8px" },
+  },
+  form: { ...typo.body, color: vt.text1, whiteSpace: "pre-line", overflowWrap: "anywhere" },
   formNone: { ...typo.body, color: vt.text2 },
-  share: { ...typo.meta, ...typo.tabular, color: vt.text3 },
+  pct: { ...typo.meta, ...typo.tabular, color: vt.text2, textAlign: "right" },
   value: { ...typo.body, color: vt.text1 },
-  valueMeta: { ...typo.meta, ...typo.tabular, color: vt.text3, marginLeft: "6px" },
+  valueMeta: { ...typo.meta, ...typo.tabular, color: vt.text3, marginLeft: "8px" },
   pills: { display: "flex", gap: "6px", flexWrap: "wrap" },
-  slider: { width: "240px", maxWidth: "100%", "@media (max-width: 639px)": { width: "100%" } },
+  slider: { width: "240px", maxWidth: "100%", [PHONE]: { width: "100%" } },
   radios: { flexWrap: "wrap" },
   phrases: {
     display: "grid",
     gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     gap: "16px",
-    paddingTop: "14px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    paddingTop: "16px",
+    marginTop: "2px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
     "@media (max-width: 759px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   textarea: { minHeight: "96px" },
-  saveRow: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" },
+  saveRow: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", marginTop: "16px" },
   saved: { display: "inline-flex", alignItems: "center", gap: "6px", ...typo.meta, color: vt.text2, margin: 0 },
   savedIcon: { color: vt.success, flexShrink: 0 },
-  check: { ...typo.meta, ...typo.tabular, color: vt.text2, margin: 0 },
 });
 
 const AUDIENCE: Record<string, string> = {
@@ -86,6 +114,13 @@ const SHORT: Record<string, string> = {
 
 const SLIDER_LABELS = ["Much less", "Less", "As learned", "More", "Much more"];
 
+/** The studio's settings and the traits they adjust share icons. */
+const SETTING_ICON: Record<"formality" | "length" | "warmth", ReactElement> = {
+  formality: <Briefcase16Regular />,
+  length: <TextExpand16Regular />,
+  warmth: <Heart16Regular />,
+};
+
 /** "Hi {first}," → "Hi <first name>," for display. */
 export function formLabel(form: string): string {
   return form
@@ -96,20 +131,31 @@ export function formLabel(form: string): string {
     .replaceAll("{me}", "‹your name›");
 }
 
+/** A share as a meter row: what, how often (bar), the percentage. */
+function Share({ share, children }: { share: number; children: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.share}>
+      {children}
+      <Meter value={share} />
+      <span className={styles.pct}>{Math.round(share * 100)}%</span>
+    </div>
+  );
+}
+
 function Forms({ dist, none }: { dist: [string, number][]; none: string }) {
   const styles = useStyles();
   if (dist.length === 0) return <span className={styles.formNone}>{none}</span>;
   return (
     <div className={styles.forms}>
       {dist.map(([form, share]) => (
-        <div key={form} className={styles.formRow}>
+        <Share key={form} share={share}>
           {form === "(none)" ? (
             <span className={styles.formNone}>{none}</span>
           ) : (
             <span className={styles.form}>{formLabel(form)}</span>
           )}
-          <span className={styles.share}>{Math.round(share * 100)}%</span>
-        </div>
+        </Share>
       ))}
     </div>
   );
@@ -119,32 +165,45 @@ function formality(f: number): string {
   return f >= 0.67 ? "Formal" : f <= 0.33 ? "Casual" : "Balanced";
 }
 
+/** A trait's label with its icon. */
+function Term({ icon, children }: { icon: ReactElement; children: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <span className={styles.term}>
+      {icon}
+      {children}
+    </span>
+  );
+}
+
 /** One audience's style, as label/value traits. */
 export function StyleCardView({ card, title }: { card: StyleCard; title: string }) {
   const styles = useStyles();
-  const items: Array<[string, ReactNode]> = [
-    ["Greeting", <Forms dist={card.greetings} none="No greeting" />],
-    ["Sign-off", <Forms dist={card.sign_offs} none="No sign-off" />],
+  const items: Array<[ReactNode, ReactNode]> = [
+    [<Term icon={<HandWave16Regular />}>Greeting</Term>, <Forms dist={card.greetings} none="No greeting" />],
+    [<Term icon={<Signature16Regular />}>Sign-off</Term>, <Forms dist={card.sign_offs} none="No sign-off" />],
     [
-      "Length",
+      <Term icon={SETTING_ICON.length}>Length</Term>,
       <span className={styles.value}>
         Usually {card.length.p25}–{card.length.p75} words
         <span className={styles.valueMeta}>median {card.length.median}</span>
       </span>,
     ],
     [
-      "Formality",
-      <span className={styles.value}>
-        {formality(card.formality)}
-        <span className={styles.valueMeta}>{Math.round(card.formality * 100)}%</span>
-      </span>,
+      <Term icon={SETTING_ICON.formality}>Formality</Term>,
+      <Share share={card.formality}>
+        <span className={styles.value}>{formality(card.formality)}</span>
+      </Share>,
     ],
-    ["Exclamation marks", <span className={styles.value}>{card.exclamation_rate > 0.2 ? "Often" : "Rarely or never"}</span>],
-    ["Emoji", <span className={styles.value}>{card.emoji_rate > 0.1 ? "Often" : "Rarely or never"}</span>],
+    [
+      <Term icon={<Important16Regular />}>Exclamation marks</Term>,
+      <span className={styles.value}>{card.exclamation_rate > 0.2 ? "Often" : "Rarely or never"}</span>,
+    ],
+    [<Term icon={<Emoji16Regular />}>Emoji</Term>, <span className={styles.value}>{card.emoji_rate > 0.1 ? "Often" : "Rarely or never"}</span>],
   ];
   if (card.phrases.length > 0)
     items.push([
-      "Phrases you use often",
+      <Term icon={<TextQuote16Regular />}>Phrases you use often</Term>,
       <span className={styles.pills}>
         {card.phrases.map((p) => (
           <Pill key={p}>{p}</Pill>
@@ -152,14 +211,23 @@ export function StyleCardView({ card, title }: { card: StyleCard; title: string 
       </span>,
     ]);
   if (card.keep_list.length > 0)
-    items.push(["Kept as your voice", <span className={styles.value}>{card.keep_list.join(", ")}</span>]);
+    items.push([
+      <Term icon={<PersonVoice16Regular />}>Kept as your voice</Term>,
+      <span className={styles.pills}>
+        {card.keep_list.map((w) => (
+          <Pill key={w} tone="accent">
+            {w}
+          </Pill>
+        ))}
+      </span>,
+    ]);
   return (
     <div className={styles.panel}>
       <div className={styles.panelHead}>
         <span className={styles.panelTitle}>{title}</span>
-        <span className={styles.panelMeta}>
+        <Pill>
           {card.n} message{card.n === 1 ? "" : "s"}
-        </span>
+        </Pill>
       </div>
       <KeyValueList items={items} />
     </div>
@@ -232,11 +300,11 @@ export function Persona() {
   const languages = Object.entries(snap.by.language)
     .map(([k, v]) => `${k.charAt(0).toUpperCase()}${k.slice(1)} (${v})`)
     .join(", ");
+  const num = (v: number | string | undefined) => (typeof v === "number" ? v : undefined);
 
   return (
     <Page
       title="Your persona"
-      eyebrow={<Pill>{snap.source === "sample" ? "Sample workspace" : "Microsoft 365"}</Pill>}
       description={
         snap.overall
           ? `Learned from ${snap.learned_items} of your messages: ${snap.by.channel.email ?? 0} emails and ${
@@ -246,8 +314,9 @@ export function Persona() {
       }
     >
       {!snap.overall ? (
-        <Section title="How you write">
+        <Section variant="card" icon={<PersonVoice20Regular />} title="How you write">
           <EmptyState
+            center
             icon={<PersonVoice20Regular />}
             title="Nothing learned yet"
             action={<Button onClick={() => navigate("/learning")}>Go to Learning</Button>}
@@ -258,10 +327,13 @@ export function Persona() {
         </Section>
       ) : (
         <Section
+          variant="card"
+          icon={<PersonVoice20Regular />}
           title="How you write"
           description="Read from your sent messages. Drafts follow the audience they're for."
-          actions={
-            snap.audiences.length > 0 ? (
+        >
+          {snap.audiences.length > 0 && (
+            <div className={styles.switcher}>
               <Segmented
                 label="Audience"
                 value={selected ? audience : "overall"}
@@ -275,9 +347,8 @@ export function Persona() {
                   })),
                 ]}
               />
-            ) : undefined
-          }
-        >
+            </div>
+          )}
           {selected ? (
             <StyleCardView card={selected.card} title={AUDIENCE[selected.relationship] ?? selected.relationship} />
           ) : (
@@ -286,10 +357,20 @@ export function Persona() {
         </Section>
       )}
 
-      <Section title="Persona studio" description="Adjust how drafts sound, relative to what Vanimo learned.">
+      <Section
+        variant="card"
+        icon={<Options20Regular />}
+        title="Persona studio"
+        description="Adjust how drafts sound, relative to what Vanimo learned."
+      >
         <SettingList>
           {(["formality", "length", "warmth"] as const).map((k) => (
-            <SettingRow key={k} label={`${k.charAt(0).toUpperCase()}${k.slice(1)}`} description={SLIDER_LABELS[settings[k] + 2]}>
+            <SettingRow
+              key={k}
+              icon={SETTING_ICON[k]}
+              label={`${k.charAt(0).toUpperCase()}${k.slice(1)}`}
+              description={SLIDER_LABELS[settings[k] + 2]}
+            >
               <Slider
                 className={styles.slider}
                 aria-label={`${k.charAt(0).toUpperCase()}${k.slice(1)}`}
@@ -302,10 +383,14 @@ export function Persona() {
               />
             </SettingRow>
           ))}
-          <SettingRow label="Emoji" description="Let drafts use emoji.">
+          <SettingRow icon={<Emoji16Regular />} label="Emoji" description="Let drafts use emoji.">
             <Switch checked={settings.emoji} onChange={(_, d) => set({ emoji: d.checked })} aria-label="Emoji allowed" />
           </SettingRow>
-          <SettingRow label="Corrections" description="Fix your typos while keeping your voice, or keep drafts exactly in your style.">
+          <SettingRow
+            icon={<TextProofingToolsAbc16Regular />}
+            label="Corrections"
+            description="Fix your typos while keeping your voice, or keep drafts exactly in your style."
+          >
             <RadioGroup
               layout="horizontal"
               aria-label="Corrections"
@@ -337,7 +422,7 @@ export function Persona() {
           </Field>
         </div>
         <div className={styles.saveRow}>
-          <Button appearance="primary" onClick={() => void save()}>
+          <Button appearance="primary" icon={<Save16Regular />} onClick={() => void save()}>
             Save
           </Button>
           {saved && (
@@ -355,14 +440,24 @@ export function Persona() {
 
       {metrics && (
         <Section
-          title="Style check (offline baseline)"
-          description="Offline stand-in, no AI model: held-out replies re-drafted from your style cards and closest past reply. The Claude drafter must beat these numbers."
+          variant="card"
+          icon={<ClipboardCheckmark20Regular />}
+          title="Style check"
+          description="Held-out replies re-drafted from your style cards and closest past reply. The Claude drafter must beat these numbers."
+          actions={
+            <EngineBadge
+              offline
+              detail="Offline stand-in, no AI model: this baseline re-drafts held-out replies from your style cards and closest past reply."
+            />
+          }
         >
-          <p className={styles.check}>
-            {metrics.n_eval} replies checked · greeting match {pct(metrics.greeting_match)} · sign-off match{" "}
-            {pct(metrics.sign_off_match)} · length match {pct(metrics.length_ratio)} · wording overlap{" "}
-            {pct(metrics.bigram_overlap)}
-          </p>
+          <MetricGrid label="Style check results">
+            <Metric label="Replies checked" value={metrics.n_eval ?? "—"} />
+            <Metric label="Greeting match" value={pct(metrics.greeting_match)} meter={num(metrics.greeting_match)} />
+            <Metric label="Sign-off match" value={pct(metrics.sign_off_match)} meter={num(metrics.sign_off_match)} />
+            <Metric label="Length match" value={pct(metrics.length_ratio)} meter={num(metrics.length_ratio)} />
+            <Metric label="Wording overlap" value={pct(metrics.bigram_overlap)} meter={num(metrics.bigram_overlap)} />
+          </MetricGrid>
         </Section>
       )}
     </Page>

@@ -2,25 +2,54 @@
  * transcripts, and questions about them answered with citations. Shown in the web app and as a tab in
  * Teams. Only internal Teams meetings with transcription on; your exclusions apply before anything is
  * read. Answers quote your notes and say where they come from, or say they found nothing.
- * Layout: the ask bar first; the answer in reading type with numbered citation chips and a sources
- * list; then the meetings (grouped by day) beside the open meeting's notes and transcript.
- * No router hooks: the Teams tab renders this without a router. */
+ * Layout: the ask card first (a large field, suggestions, and the answer in reading type with
+ * numbered citation chips and its sources in a well); then the meetings (grouped by day, each row
+ * with its notes as icon counts) beside the open meeting: notes by kind, the transcript in a well,
+ * and the corrections at the foot.
+ * No router hooks: the Teams tab renders this without a router. Only `vt`/`tokens` colours (with light
+ * fallbacks), so it also renders under Microsoft's Teams theme. */
 import {
   Button,
   Field,
   Input,
   makeStyles,
   mergeClasses,
-  shorthands,
   MessageBar,
   MessageBarBody,
   Select,
   Spinner,
   tokens,
   Tooltip,
+  useId,
 } from "@fluentui/react-components";
-import { CalendarLtr20Regular, Delete16Regular, Dismiss20Regular, Search16Regular } from "@fluentui/react-icons";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowUndo16Regular,
+  CalendarClock16Regular,
+  CalendarLtr16Regular,
+  CalendarLtr20Regular,
+  CheckmarkCircle16Regular,
+  ClipboardTask16Regular,
+  Clock16Regular,
+  Delete16Regular,
+  Dismiss16Regular,
+  DocumentText16Regular,
+  EyeOff16Regular,
+  Globe16Regular,
+  Handshake16Regular,
+  Info16Regular,
+  Lightbulb16Regular,
+  Open16Regular,
+  PersonEdit16Regular,
+  PersonQuestionMark16Regular,
+  QuestionCircle16Regular,
+  Search20Regular,
+  Send16Regular,
+  ShieldCheckmark16Regular,
+  TaskListSquareLtr16Regular,
+  ThumbDislike16Regular,
+  Warning16Regular,
+} from "@fluentui/react-icons";
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import type {
   MeetingAnswer,
   MeetingCitation,
@@ -32,193 +61,262 @@ import type {
 } from "../../api/client";
 import { useApi } from "../../api/context";
 import { draftErrorText } from "../../drafting/DraftView";
-import { EmptyState, hoverTransition, List, ListRow, Page, PageSkeleton, Pill, Rise, StatusDot, Surface, typo, vt } from "../../ui";
+import {
+  CHANNELS,
+  EmptyState,
+  EngineBadge,
+  hoverTransition,
+  IconAction,
+  IconTile,
+  List,
+  ListRow,
+  Page,
+  PageSkeleton,
+  PersonAvatar,
+  Pill,
+  Rise,
+  Section,
+  Surface,
+  typo,
+  vt,
+  type Tone,
+} from "../../ui";
+
+const PHONE = "@media (max-width: 639px)";
+const WIDE = "@media (min-width: 1200px)";
+
+const srOnly = {
+  position: "absolute",
+  width: "1px",
+  height: "1px",
+  padding: 0,
+  margin: "-1px",
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+} as const;
+
+/** A numbered citation chip, in the text and in the sources list. */
+const chip = {
+  display: "inline-grid",
+  placeItems: "center",
+  minWidth: "20px",
+  height: "20px",
+  padding: "0 5px",
+  borderRadius: "6px",
+  backgroundColor: vt.accentTint,
+  color: vt.accentTintText,
+  fontFamily: tokens.fontFamilyBase,
+  fontSize: "12px",
+  lineHeight: "16px",
+  fontWeight: 600,
+  ...typo.tabular,
+} as const;
 
 const useStyles = makeStyles({
   embedded: { display: "grid", gap: "24px", minWidth: 0 },
-  context: { display: "flex", alignItems: "center", gap: "8px 12px", flexWrap: "wrap" },
   // Ask
-  ask: { display: "grid", gap: "12px", minWidth: 0 },
-  askForm: { display: "flex", alignItems: "flex-end", gap: "8px", flexWrap: "wrap" },
-  askField: { flex: "1 1 320px", minWidth: 0 },
+  askCard: { display: "grid", gap: "14px", minWidth: 0, padding: "20px", [PHONE]: { padding: "16px" } },
+  askHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px 12px", flexWrap: "wrap" },
+  askLabel: { ...typo.cardTitle, color: vt.text1, display: "inline-flex", alignItems: "center", gap: "10px" },
+  askForm: { display: "flex", alignItems: "stretch", gap: "8px", flexWrap: "wrap" },
+  askInput: { flex: "1 1 200px", minWidth: 0 },
+  askIcon: { color: vt.text3 },
   examples: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" },
-  examplesLabel: { ...typo.meta, color: vt.text3, marginRight: "2px" },
+  examplesLabel: { ...typo.meta, color: vt.text3, marginRight: "4px" },
+  // Answer (inside the ask card, under a hairline)
   answer: {
     display: "grid",
     gap: "16px",
     minWidth: 0,
-    padding: "20px 24px",
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    "@media (max-width: 639px)": { padding: "16px" },
+    paddingTop: "18px",
+    marginTop: "4px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
   },
-  answerWhen: { ...typo.meta, color: vt.text3, margin: 0 },
-  answerText: { ...typo.reading, color: vt.text1, margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "72ch" },
+  answerWhen: { ...typo.meta, color: vt.text2, margin: 0, display: "inline-flex", alignItems: "center", gap: "6px", "& > svg": { color: vt.text3 } },
+  answerText: { ...typo.reading, color: vt.text1, margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "76ch" },
   cite: {
-    display: "inline-grid",
-    placeItems: "center",
-    minWidth: "18px",
-    height: "18px",
-    padding: "0 4px",
-    margin: "0 1px",
+    ...chip,
+    margin: "0 2px",
     verticalAlign: "1px",
-    borderRadius: tokens.borderRadiusSmall,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: vt.inset,
-    color: vt.text2,
-    fontFamily: tokens.fontFamilyBase,
-    fontSize: "12px",
-    lineHeight: "16px",
-    fontWeight: 500,
-    ...typo.tabular,
+    border: "none",
     cursor: "pointer",
     ...hoverTransition,
-    "@media (hover: hover)": {
-      ":hover": { backgroundColor: vt.accentTint, color: vt.accentTintText, ...shorthands.borderColor(vt.accent) },
-    },
+    "@media (hover: hover)": { ":hover": { backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand } },
     ":focus-visible": { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: "1px" },
   },
   sources: { display: "grid", gap: "8px", minWidth: 0 },
   sourcesTitle: { ...typo.label, color: vt.text2, margin: 0 },
-  sourceList: { display: "grid", margin: 0, padding: 0, listStyle: "none" },
+  // The sources sit in a well (never a card in a card).
+  sourceList: {
+    display: "grid",
+    margin: 0,
+    padding: "0 14px",
+    listStyle: "none",
+    borderRadius: "8px",
+    backgroundColor: vt.inset,
+    border: `1px solid ${vt.borderSubtle}`,
+  },
   source: {
     display: "grid",
     gridTemplateColumns: "auto minmax(0, 1fr) auto",
     gap: "4px 12px",
     alignItems: "start",
-    padding: "10px 0",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
-    "@media (max-width: 639px)": { gridTemplateColumns: "auto minmax(0, 1fr)" },
+    padding: "12px 0",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    ":first-child": { borderTopColor: "transparent" },
   },
-  sourceChip: {
-    display: "inline-grid",
-    placeItems: "center",
-    minWidth: "18px",
-    height: "18px",
-    padding: "0 4px",
-    marginTop: "1px",
-    borderRadius: tokens.borderRadiusSmall,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: vt.inset,
-    color: vt.text2,
-    fontSize: "12px",
-    lineHeight: "16px",
-    fontWeight: 500,
+  sourceChip: { ...chip, marginTop: "1px" },
+  sourceBody: { display: "grid", gap: "4px", minWidth: 0 },
+  sourceTitle: { ...typo.itemTitle, color: vt.text1, overflowWrap: "anywhere" },
+  sourceMeta: {
+    ...typo.meta,
     ...typo.tabular,
+    color: vt.text2,
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "5px",
+    "& > svg": { color: vt.text3, flexShrink: 0, marginTop: "1px" },
   },
-  sourceBody: { display: "grid", gap: "2px", minWidth: 0 },
-  sourceTitle: { ...typo.itemTitle, color: vt.text1 },
-  sourceMeta: { ...typo.meta, ...typo.tabular, color: vt.text3 },
-  sourceQuote: { ...typo.meta, color: vt.text2, overflowWrap: "anywhere" },
-  sourceAction: { "@media (max-width: 639px)": { gridColumn: "2 / -1", justifySelf: "start" } },
+  sourceQuote: { ...typo.meta, color: vt.text2, overflowWrap: "anywhere", display: "flex", alignItems: "flex-start", gap: "8px" },
   candidates: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
   candidatesLabel: { ...typo.itemTitle, color: vt.text1 },
-  answerLabel: {
-    ...typo.meta,
-    color: vt.text3,
-    margin: 0,
-    paddingTop: "12px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
-  },
+  answerFoot: { display: "flex", alignItems: "center", gap: "8px 12px", flexWrap: "wrap", ...typo.meta, color: vt.text2 },
+  footNote: { display: "inline-flex", alignItems: "center", gap: "6px", "& > svg": { color: vt.text3, flexShrink: 0 } },
   // Meetings and the open meeting
   split: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr)",
     gap: "24px",
     alignItems: "start",
-    "@media (min-width: 1200px)": {
-      gridTemplateColumns: "340px minmax(0, 1fr)",
-      gridTemplateAreas: '"list detail"',
-    },
+    [WIDE]: { gridTemplateColumns: "360px minmax(0, 1fr)", gridTemplateAreas: '"list detail"' },
   },
-  listPane: { display: "grid", gap: "12px", minWidth: 0, "@media (min-width: 1200px)": { gridArea: "list" } },
-  detailPane: { minWidth: 0, "@media (min-width: 1200px)": { gridArea: "detail" } },
-  placeholder: {
-    display: "none",
-    ...typo.meta,
-    color: vt.text2,
-    margin: 0,
-    "@media (min-width: 1200px)": {
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      gridArea: "detail",
-      padding: "20px 24px",
-      border: `1px solid ${tokens.colorNeutralStroke3}`,
-      borderRadius: tokens.borderRadiusXLarge,
-    },
-  },
-  placeholderIcon: { color: vt.text3, flexShrink: 0 },
-  h2: { ...typo.sectionTitle, color: vt.text1, margin: 0, display: "flex", alignItems: "baseline", gap: "8px" },
-  count: { ...typo.meta, ...typo.tabular, color: vt.text3, fontWeight: 400 },
+  listPane: { minWidth: 0, [WIDE]: { gridArea: "list" } },
+  detailPane: { minWidth: 0, [WIDE]: { gridArea: "detail" } },
+  // Beside the list, the empty pane runs as tall as the list (no dead space under a short card).
+  placeholder: { display: "none", [WIDE]: { display: "grid", gridArea: "detail", minHeight: "320px", alignContent: "center", alignSelf: "stretch" } },
   dayHead: {
     ...typo.label,
     color: vt.text2,
     margin: 0,
-    padding: "6px 16px",
-    backgroundColor: tokens.colorNeutralBackground2,
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    padding: "7px 16px",
+    backgroundColor: vt.inset,
+    borderTop: `1px solid ${vt.borderSubtle}`,
   },
-  rowMeta: { display: "inline-flex", alignItems: "center", gap: "6px", flexWrap: "wrap", ...typo.tabular },
-  hidden: { ...typo.meta, color: vt.text2, margin: 0 },
+  rowMeta: { display: "grid", gap: "6px", whiteSpace: "normal" },
+  rowTime: { display: "inline-flex", alignItems: "center", gap: "5px", ...typo.tabular },
+  // Pills keep their own icon colour (the row's meta greys plain icons).
+  pills: { display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap", "& span > svg": { color: "currentColor", verticalAlign: "0" } },
+  countWrap: { display: "inline-flex" },
+  hidden: { ...typo.meta, color: vt.text2, margin: "12px 0 0", display: "flex", alignItems: "center", gap: "6px", "& > svg": { color: vt.text3, flexShrink: 0 } },
   // Meeting detail
-  detail: { display: "grid", gap: "24px", minWidth: 0 },
-  detailHead: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "12px", alignItems: "start" },
-  detailTitle: { ...typo.sectionTitle, color: vt.text1, margin: 0, overflowWrap: "anywhere" },
-  detailMeta: { display: "flex", alignItems: "center", gap: "6px 8px", flexWrap: "wrap", ...typo.meta, ...typo.tabular, color: vt.text2, margin: "4px 0 0" },
-  detailNote: { ...typo.meta, color: vt.text2, margin: 0 },
-  block: { display: "grid", gap: "8px", minWidth: 0 },
-  h3: { ...typo.itemTitle, color: vt.text1, margin: 0, display: "flex", alignItems: "baseline", gap: "8px" },
+  detail: { display: "grid", minWidth: 0, overflow: "hidden" },
+  detailHead: {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    gap: "14px",
+    alignItems: "start",
+    padding: "18px 20px",
+    borderBottom: `1px solid ${vt.borderSubtle}`,
+    [PHONE]: { gridTemplateColumns: "minmax(0, 1fr) auto", padding: "16px" },
+  },
+  detailTile: { [PHONE]: { display: "none" } },
+  // Focus lands here when a meeting opens: an accent ring, not the browser's default.
+  detailTitle: {
+    ...typo.sectionTitle,
+    color: vt.text1,
+    margin: 0,
+    overflowWrap: "anywhere",
+    borderRadius: "4px",
+    ":focus-visible": { outline: `2px solid ${vt.accent}`, outlineOffset: "2px" },
+  },
+  detailMeta: { display: "flex", alignItems: "center", gap: "6px 10px", flexWrap: "wrap", ...typo.meta, ...typo.tabular, color: vt.text2, margin: "4px 0 0" },
+  detailTime: { display: "inline-flex", alignItems: "center", gap: "5px", "& > svg": { color: vt.text3 } },
+  detailBody: { display: "grid", gap: "24px", padding: "20px", minWidth: 0, [PHONE]: { padding: "16px" } },
+  warnNote: {
+    ...typo.meta,
+    color: vt.text1,
+    margin: 0,
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "8px",
+    padding: "10px 12px",
+    borderRadius: "8px",
+    backgroundColor: vt.warningTint,
+    "& > svg": { color: vt.warning, flexShrink: 0, marginTop: "1px" },
+  },
+  block: { display: "grid", gap: "10px", minWidth: 0 },
+  blockHead: { display: "flex", alignItems: "center", gap: "10px", minWidth: 0 },
+  h3: { ...typo.cardTitle, color: vt.text1, margin: 0 },
   notes: { display: "grid", margin: 0, padding: 0, listStyle: "none" },
   note: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) auto",
     gap: "4px 12px",
     alignItems: "start",
-    padding: "8px 0",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
-    ":first-child": { borderTop: "none", paddingTop: 0 },
+    padding: "10px 0",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    ":first-child": { borderTopColor: "transparent", paddingTop: "2px" },
   },
-  noteBody: { display: "grid", gap: "2px", minWidth: 0 },
+  noteBody: { display: "grid", gap: "4px", minWidth: 0 },
   noteText: { ...typo.body, color: vt.text1, overflowWrap: "anywhere" },
   noteDismissed: { color: vt.text3, textDecorationLine: "line-through" },
-  noteMeta: { ...typo.meta, ...typo.tabular, color: vt.text3 },
+  noteMeta: { ...typo.meta, ...typo.tabular, color: vt.text2, display: "flex", alignItems: "center", gap: "4px 12px", flexWrap: "wrap" },
+  noteMetaItem: { display: "inline-flex", alignItems: "center", gap: "6px", "& > svg": { color: vt.text3 } },
+  retention: { ...typo.meta, color: vt.text2, margin: 0, display: "flex", alignItems: "flex-start", gap: "6px", "& > svg": { color: vt.success, flexShrink: 0, marginTop: "1px" } },
   transcript: {
     position: "relative",
     display: "grid",
     gap: "2px",
     margin: 0,
-    padding: "4px",
+    padding: "6px",
     listStyle: "none",
     maxHeight: "440px",
     overflowY: "auto",
     backgroundColor: vt.inset,
-    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${vt.borderSubtle}`,
+    borderRadius: "8px",
   },
   turn: {
     display: "grid",
-    gridTemplateColumns: "72px minmax(0, 1fr)",
+    gridTemplateColumns: "96px minmax(0, 1fr)",
     gap: "12px",
-    padding: "6px 8px",
-    borderRadius: tokens.borderRadiusMedium,
-    "@media (max-width: 639px)": { gridTemplateColumns: "minmax(0, 1fr)", gap: "2px" },
+    padding: "8px 10px",
+    borderRadius: "6px",
+    [PHONE]: { gridTemplateColumns: "minmax(0, 1fr)", gap: "2px" },
   },
-  turnFocus: { backgroundColor: vt.accentTint },
-  turnTime: { ...typo.meta, ...typo.tabular, color: vt.text2, paddingTop: "3px" },
-  turnBody: { display: "grid", gap: "2px", minWidth: 0 },
-  turnSpeaker: { ...typo.label, color: vt.text2 },
+  turnFocus: { backgroundColor: vt.accentTint, boxShadow: `inset 3px 0 0 ${vt.accent}` },
+  turnTime: { ...typo.meta, ...typo.tabular, color: vt.text3, paddingTop: "1px", whiteSpace: "nowrap" },
+  turnBody: { display: "grid", gap: "4px", minWidth: 0 },
+  turnSpeaker: { ...typo.label, color: vt.text1, display: "inline-flex", alignItems: "center", gap: "6px" },
   turnText: { ...typo.reading, color: vt.text1, overflowWrap: "anywhere" },
   footer: {
     display: "grid",
-    gap: "16px",
-    paddingTop: "16px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    gap: "14px",
+    padding: "16px 20px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    backgroundColor: vt.inset,
+    [PHONE]: { padding: "16px" },
   },
-  fixRow: { display: "flex", alignItems: "flex-end", gap: "8px 12px", flexWrap: "wrap" },
-  fixField: { flex: "1 1 180px", maxWidth: "260px" },
-  forget: { display: "flex", alignItems: "center", gap: "8px 12px", flexWrap: "wrap" },
-  forgetText: { ...typo.meta, color: vt.text1, margin: 0, flex: "1 1 260px" },
+  fixRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr) auto",
+    alignItems: "end",
+    gap: "8px 12px",
+    minWidth: 0,
+    [PHONE]: { gridTemplateColumns: "minmax(0, 1fr)", justifyItems: "start" },
+  },
+  fixField: { minWidth: 0, [PHONE]: { width: "100%" } },
+  forget: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px 12px",
+    flexWrap: "wrap",
+    paddingTop: "12px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+  },
+  forgetText: { ...typo.meta, color: vt.text1, margin: 0, flex: "1 1 240px" },
   dangerText: {
     ":enabled": { color: vt.danger },
     ":enabled:hover": { color: vt.danger },
@@ -241,6 +339,18 @@ export const NOTE_LABEL: Record<NoteKind, [string, string]> = {
   risk: ["Risk", "Risks"],
   idea: ["Idea", "Ideas"],
 };
+
+/** Each kind of note has one icon everywhere (the counts in the list, the groups in a meeting). */
+const NOTE_ICON: Record<NoteKind, { icon: ReactElement; tone: Tone }> = {
+  decision: { icon: <CheckmarkCircle16Regular />, tone: "neutral" },
+  requirement: { icon: <ClipboardTask16Regular />, tone: "neutral" },
+  action_item: { icon: <TaskListSquareLtr16Regular />, tone: "neutral" },
+  commitment: { icon: <Handshake16Regular />, tone: "neutral" },
+  open_question: { icon: <QuestionCircle16Regular />, tone: "neutral" },
+  risk: { icon: <Warning16Regular />, tone: "warning" },
+  idea: { icon: <Lightbulb16Regular />, tone: "neutral" },
+};
+
 const ORDER: NoteKind[] = ["decision", "requirement", "action_item", "commitment", "open_question", "risk", "idea"];
 const EXAMPLES = [
   "What did the client ask for last week?",
@@ -253,11 +363,11 @@ function when(iso: string): string {
 }
 
 function clock(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 function hm(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 /** "Today", "Yesterday", "Tuesday", "13 Oct", "13 Oct 2025": the heading of a day's meetings. */
@@ -275,9 +385,14 @@ function dayLabel(iso: string, now = new Date()): string {
   });
 }
 
+/** One kind's count in words: "2 decisions". */
+function noteCount(kind: NoteKind, n: number): string {
+  return `${n} ${NOTE_LABEL[kind][n === 1 ? 0 : 1].toLowerCase()}`;
+}
+
 /** The notes summary of a meeting: "2 decisions · 1 requirement". */
 export function noteSummary(notes: MeetingList["items"][number]["notes"]): string {
-  const parts = ORDER.filter((k) => notes[k]).map((k) => `${notes[k]} ${NOTE_LABEL[k][notes[k] === 1 ? 0 : 1].toLowerCase()}`);
+  const parts = ORDER.filter((k) => notes[k]).map((k) => noteCount(k, notes[k]!));
   return parts.join(" · ") || "No notes";
 }
 
@@ -317,9 +432,29 @@ function AnswerText({ text, citations, onCite }: { text: string; citations: Meet
   );
 }
 
+/** A meeting's notes as icon counts ("✓ 2", "⚠ 1"), each named for screen readers and on hover. */
+function NoteCounts({ notes }: { notes: MeetingList["items"][number]["notes"] }) {
+  const s = useStyles();
+  return (
+    <>
+      {ORDER.filter((k) => notes[k]).map((k) => (
+        <Tooltip key={k} content={noteCount(k, notes[k]!)} relationship="description" withArrow>
+          <span className={s.countWrap}>
+            <Pill tone={NOTE_ICON[k].tone} icon={NOTE_ICON[k].icon}>
+              {notes[k]}
+              <span style={srOnly}> {NOTE_LABEL[k][notes[k] === 1 ? 0 : 1].toLowerCase()}</span>
+            </Pill>
+          </span>
+        </Tooltip>
+      ))}
+    </>
+  );
+}
+
 export function Meetings({ embedded = false }: { embedded?: boolean }) {
   const styles = useStyles();
   const api = useApi();
+  const askId = useId("ask");
   const [list, setList] = useState<MeetingList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanNote, setScanNote] = useState<string | null>(null);
@@ -416,7 +551,8 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
       <Page
         title="Meetings"
         width="wide"
-        description="What your Teams meetings decided, asked for and promised, read from Microsoft's own transcripts of internal meetings you were invited to. Ask a question and every answer says which meeting and when it was said."
+        description="What your Teams meetings decided, asked for and promised, with answers that say where they come from."
+        info="Read from Microsoft's own transcripts of internal Teams meetings you were invited to, after they end. Ask a question and every answer says which meeting and when it was said."
       >
         {children}
       </Page>
@@ -441,10 +577,6 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
 
   return frame(
     <>
-      <div className={styles.context}>
-        <StatusDot tone={list.label.startsWith("Offline") ? "warning" : "neutral"}>{list.label}</StatusDot>
-        {!list.on && <Pill tone="danger">Off for your organisation</Pill>}
-      </div>
       {scanNote && (
         <MessageBar intent="info">
           <MessageBarBody>{scanNote}</MessageBarBody>
@@ -456,7 +588,18 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
         </MessageBar>
       )}
 
-      <div className={styles.ask}>
+      <Surface padding="none" className={styles.askCard}>
+        <div className={styles.askHead}>
+          <label htmlFor={askId} className={styles.askLabel}>
+            <IconTile icon={<Search20Regular />} tone="accent" size={28} />
+            Ask about your meetings
+          </label>
+          {!list.on && (
+            <Pill tone="danger" dot>
+              Off for your organisation
+            </Pill>
+          )}
+        </div>
         <form
           className={styles.askForm}
           onSubmit={(e) => {
@@ -464,19 +607,21 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
             void ask(question);
           }}
         >
-          <Field label="Ask about your meetings" className={styles.askField}>
-            <Input
-              value={question}
-              maxLength={300}
-              contentBefore={<Search16Regular aria-hidden />}
-              placeholder="What did the client ask for in Tuesday's meeting?"
-              onChange={(_, d) => setQuestion(d.value)}
-            />
-          </Field>
+          <Input
+            id={askId}
+            size="large"
+            className={styles.askInput}
+            value={question}
+            maxLength={300}
+            contentBefore={<Search20Regular className={styles.askIcon} aria-hidden />}
+            placeholder="What did the client ask for in Tuesday's meeting?"
+            onChange={(_, d) => setQuestion(d.value)}
+          />
           <Button
             type="submit"
+            size="large"
             appearance="primary"
-            icon={asking ? <Spinner size="extra-tiny" /> : undefined}
+            icon={asking ? <Spinner size="extra-tiny" /> : <Send16Regular />}
             disabled={asking || !list.on || question.trim().length < 3}
           >
             {asking ? "Looking…" : "Ask"}
@@ -485,7 +630,17 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
         <div className={styles.examples}>
           <span className={styles.examplesLabel}>Try</span>
           {EXAMPLES.map((q) => (
-            <Button key={q} size="small" shape="circular" disabled={!list.on} onClick={() => { setQuestion(q); void ask(q); }}>
+            <Button
+              key={q}
+              size="small"
+              shape="circular"
+              appearance="outline"
+              disabled={!list.on}
+              onClick={() => {
+                setQuestion(q);
+                void ask(q);
+              }}
+            >
               {q}
             </Button>
           ))}
@@ -494,7 +649,12 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
         {answer && (
           <Rise visible appear>
             <div className={styles.answer} role="region" aria-label="Answer">
-              {answer.when && <p className={styles.answerWhen}>Looked at: {answer.when}</p>}
+              {answer.when && (
+                <p className={styles.answerWhen}>
+                  <CalendarClock16Regular aria-hidden />
+                  Looked at: {answer.when}
+                </p>
+              )}
               <p className={styles.answerText}>
                 <AnswerText text={answer.answer} citations={answer.citations} onCite={(c) => void open(c.meetingId, c.turn)} />
               </p>
@@ -510,20 +670,17 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
                         <span className={styles.sourceBody}>
                           <span className={styles.sourceTitle}>{c.title}</span>
                           <span className={styles.sourceMeta}>
+                            <Clock16Regular aria-hidden />
                             {when(c.meetingStart)} · {clock(c.at)}–{clock(c.endAt)}
                           </span>
                           <span className={styles.sourceQuote}>
-                            {c.speaker}: “{c.quote}”
+                            <PersonAvatar name={c.speaker} size={20} />
+                            <span>
+                              {c.speaker}: “{c.quote}”
+                            </span>
                           </span>
                         </span>
-                        <Button
-                          size="small"
-                          appearance="subtle"
-                          className={styles.sourceAction}
-                          onClick={() => void open(c.meetingId, c.turn)}
-                        >
-                          Show in meeting
-                        </Button>
+                        <IconAction icon={<Open16Regular />} label="Show in meeting" onClick={() => void open(c.meetingId, c.turn)} />
                       </li>
                     ))}
                   </ol>
@@ -533,30 +690,40 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
                 <div className={styles.candidates}>
                   <span className={styles.candidatesLabel}>{answer.clarify ? "Which meeting?" : "Close matches:"}</span>
                   {answer.candidates.map((m) => (
-                    <Button key={m.id} size="small" onClick={() => void ask(question, m.id)}>
+                    <Button key={m.id} size="small" icon={<CalendarLtr16Regular />} onClick={() => void ask(question, m.id)}>
                       {m.title} ({when(m.startsAt)})
                     </Button>
                   ))}
                 </div>
               )}
-              <p className={styles.answerLabel}>{answer.label}. Check anything important against the meeting.</p>
+              <div className={styles.answerFoot}>
+                <EngineBadge offline={answer.label.startsWith("Offline")} detail={answer.label} />
+                <span className={styles.footNote}>
+                  <Info16Regular aria-hidden />
+                  Check anything important against the meeting.
+                </span>
+              </div>
             </div>
           </Rise>
         )}
-      </div>
+      </Surface>
 
       <div className={styles.split}>
-        <section className={styles.listPane} aria-labelledby="meetings-list-title">
-          <h2 id="meetings-list-title" className={styles.h2}>
-            Remembered meetings
-            <span className={styles.count}>{list.items.length}</span>
-          </h2>
+        <Section
+          className={styles.listPane}
+          title="Remembered meetings"
+          count={list.items.length}
+          aria-label="Remembered meetings"
+          actions={<EngineBadge offline={list.label.startsWith("Offline")} detail={list.label} />}
+        >
           {list.items.length === 0 ? (
-            <EmptyState icon={<CalendarLtr20Regular />} title={list.on ? "No meetings yet" : "Meeting memory is off"}>
-              {list.on
-                ? "No meetings yet. Vanimo reads the transcripts of internal Teams meetings that had transcription on, after they end, each time you open this page."
-                : "Your organisation turned meeting memory off."}
-            </EmptyState>
+            <Surface>
+              <EmptyState center icon={<CalendarLtr20Regular />} title={list.on ? "No meetings yet" : "Meeting memory is off"}>
+                {list.on
+                  ? "No meetings yet. Vanimo reads the transcripts of internal Teams meetings that had transcription on, after they end, each time you open this page."
+                  : "Your organisation turned meeting memory off."}
+              </EmptyState>
+            </Surface>
           ) : (
             <List bordered label="Remembered meetings">
               {days.map((d, i) => (
@@ -567,14 +734,25 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
                       wrap
                       selected={detail?.id === m.id}
                       onClick={() => void open(m.id)}
+                      leading={<IconTile icon={CHANNELS.meeting.icon} tone={CHANNELS.meeting.tone} size={32} />}
                       title={m.title}
                       meta={
                         <span className={styles.rowMeta}>
-                          <span>
-                            {hm(m.startsAt)}–{hm(m.endsAt)} · {noteSummary(m.notes)}
+                          <span className={styles.rowTime}>
+                            <Clock16Regular aria-hidden />
+                            {hm(m.startsAt)}–{hm(m.endsAt)}
                           </span>
-                          {m.external && <Pill>With people outside</Pill>}
-                          {m.attribution === "unattributed" && <Pill tone="warning">No speaker names</Pill>}
+                          {(Object.keys(m.notes).length > 0 || m.external || m.attribution === "unattributed") && (
+                            <span className={styles.pills}>
+                              <NoteCounts notes={m.notes} />
+                              {m.external && <Pill icon={<Globe16Regular />}>External</Pill>}
+                              {m.attribution === "unattributed" && (
+                                <Pill tone="warning" icon={<PersonQuestionMark16Regular />}>
+                                  No speaker names
+                                </Pill>
+                              )}
+                            </span>
+                          )}
                         </span>
                       }
                     />
@@ -584,9 +762,12 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
             </List>
           )}
           {list.hidden > 0 && (
-            <p className={styles.hidden}>{list.hidden} hidden because of a rule you added; they're being deleted.</p>
+            <p className={styles.hidden}>
+              <EyeOff16Regular aria-hidden />
+              {list.hidden} hidden because of a rule you added; they're being deleted.
+            </p>
           )}
-        </section>
+        </Section>
 
         {detail ? (
           <div className={styles.detailPane} ref={detailRef}>
@@ -606,10 +787,11 @@ export function Meetings({ embedded = false }: { embedded?: boolean }) {
           </div>
         ) : (
           list.items.length > 0 && (
-            <p className={styles.placeholder}>
-              <CalendarLtr20Regular className={styles.placeholderIcon} aria-hidden />
-              Pick a meeting to read its notes and transcript, or ask a question above.
-            </p>
+            <Surface className={styles.placeholder}>
+              <EmptyState center icon={<CalendarLtr20Regular />} title="Pick a meeting">
+                Its notes and transcript open here. Or ask a question above.
+              </EmptyState>
+            </Surface>
           )
         )}
       </div>
@@ -680,84 +862,116 @@ function MeetingView({
   }
 
   return (
-    <Surface as="section" padding="l" aria-label="Meeting" className={styles.detail}>
+    <Surface as="section" padding="none" aria-label="Meeting" className={styles.detail}>
       <div className={styles.detailHead}>
+        <IconTile icon={CHANNELS.meeting.icon20} tone={CHANNELS.meeting.tone} size={40} className={styles.detailTile} />
         <div>
           <h2 className={styles.detailTitle}>{detail.title}</h2>
           <p className={styles.detailMeta}>
-            <span>
+            <span className={styles.detailTime}>
+              <Clock16Regular aria-hidden />
               {when(detail.startsAt)}–{hm(detail.endsAt)}
             </span>
-            {detail.external && <Pill>With people outside</Pill>}
+            {detail.external && <Pill icon={<Globe16Regular />}>External</Pill>}
           </p>
         </div>
-        <Tooltip content="Close" relationship="label">
-          <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={onClose} />
-        </Tooltip>
+        <IconAction icon={<Dismiss16Regular />} label="Close" onClick={onClose} />
       </div>
-      {detail.attribution === "unattributed" && (
-        <p className={styles.detailNote}>Speaker names were off for this meeting, so notes don't say who said what.</p>
-      )}
-      {ORDER.map((kind) => {
-        const notes = detail.notesList.filter((n) => n.kind === kind);
-        return notes.length ? (
-          <div key={kind} className={styles.block}>
-            <h3 className={styles.h3}>
-              {NOTE_LABEL[kind][1]}
-              <span className={styles.count}>{notes.length}</span>
-            </h3>
-            <ul className={styles.notes}>
-              {notes.map((n) => (
-                <li key={n.id} className={styles.note}>
-                  <span className={styles.noteBody}>
-                    <span className={mergeClasses(styles.noteText, n.status === "dismissed" && styles.noteDismissed)}>
-                      {n.text}
-                      {n.owner ? ` — for ${n.owner}` : ""}
-                      {n.dueAt ? ` (due ${when(n.dueAt)})` : ""}
+      <div className={styles.detailBody}>
+        {detail.attribution === "unattributed" && (
+          <p className={styles.warnNote}>
+            <PersonQuestionMark16Regular aria-hidden />
+            Speaker names were off for this meeting, so notes don't say who said what.
+          </p>
+        )}
+        {ORDER.map((kind) => {
+          const notes = detail.notesList.filter((n) => n.kind === kind);
+          return notes.length ? (
+            <div key={kind} className={styles.block}>
+              <div className={styles.blockHead}>
+                <IconTile icon={NOTE_ICON[kind].icon} tone={NOTE_ICON[kind].tone === "neutral" ? "accent" : NOTE_ICON[kind].tone} size={24} />
+                <h3 className={styles.h3}>{NOTE_LABEL[kind][1]}</h3>
+                <Pill>{notes.length}</Pill>
+              </div>
+              <ul className={styles.notes}>
+                {notes.map((n) => (
+                  <li key={n.id} className={styles.note}>
+                    <span className={styles.noteBody}>
+                      <span className={mergeClasses(styles.noteText, n.status === "dismissed" && styles.noteDismissed)}>
+                        {n.text}
+                        {n.owner ? ` — for ${n.owner}` : ""}
+                        {n.dueAt ? ` (due ${when(n.dueAt)})` : ""}
+                      </span>
+                      <span className={styles.noteMeta}>
+                        <span className={styles.noteMetaItem}>
+                          <PersonAvatar name={n.speaker} size={20} />
+                          {n.speaker}
+                        </span>
+                        <span className={styles.noteMetaItem}>
+                          <Clock16Regular aria-hidden />
+                          {clock(n.saidAt)}
+                        </span>
+                        {n.status === "dismissed" && (
+                          <span className={styles.noteMetaItem}>
+                            <ThumbDislike16Regular aria-hidden />
+                            Marked not right
+                          </span>
+                        )}
+                      </span>
                     </span>
-                    <span className={styles.noteMeta}>
-                      {n.speaker}, {clock(n.saidAt)}
-                      {n.status === "dismissed" ? " · marked not right" : ""}
-                    </span>
+                    {n.status === "active" ? (
+                      <IconAction icon={<ThumbDislike16Regular />} label="Not right" onClick={() => onDecide(n)} />
+                    ) : (
+                      <IconAction icon={<ArrowUndo16Regular />} label="Restore" onClick={() => onDecide(n)} />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null;
+        })}
+        {detail.transcript.length > 0 ? (
+          <div className={styles.block}>
+            <div className={styles.blockHead}>
+              <IconTile icon={<DocumentText16Regular />} tone="accent" size={24} />
+              <h3 className={styles.h3}>Transcript</h3>
+            </div>
+            <p className={styles.retention}>
+              <ShieldCheckmark16Regular aria-hidden />
+              <span>
+                Kept until {detail.transcriptUntil ? new Date(detail.transcriptUntil).toLocaleDateString() : "—"}; then only the
+                notes stay. Names you excluded and never-send words are never stored.
+              </span>
+            </p>
+            <ol className={styles.transcript} ref={transcriptRef} aria-label="Transcript">
+              {detail.transcript.map((t, i) => (
+                <li
+                  key={t.turn}
+                  data-turn={t.turn}
+                  className={mergeClasses(styles.turn, t.turn === focusTurn && styles.turnFocus)}
+                  aria-current={t.turn === focusTurn ? "true" : undefined}
+                >
+                  <span className={styles.turnTime}>{clock(t.at)}</span>
+                  <span className={styles.turnBody}>
+                    {(i === 0 || detail.transcript[i - 1]?.speaker !== t.speaker) && (
+                      <span className={styles.turnSpeaker}>
+                        <PersonAvatar name={t.speaker} id={t.speakerId} size={20} />
+                        {t.speaker}
+                      </span>
+                    )}
+                    <span className={styles.turnText}>{t.text}</span>
                   </span>
-                  <Button size="small" appearance="subtle" onClick={() => onDecide(n)}>
-                    {n.status === "active" ? "Not right" : "Restore"}
-                  </Button>
                 </li>
               ))}
-            </ul>
+            </ol>
           </div>
-        ) : null;
-      })}
-      {detail.transcript.length > 0 ? (
-        <div className={styles.block}>
-          <h3 className={styles.h3}>Transcript</h3>
-          <p className={styles.detailNote}>
-            Kept until {detail.transcriptUntil ? new Date(detail.transcriptUntil).toLocaleDateString() : "—"}; then only the
-            notes stay. Names you excluded and never-send words are never stored.
+        ) : (
+          <p className={styles.retention}>
+            <ShieldCheckmark16Regular aria-hidden />
+            The transcript is no longer kept; the notes stay.
           </p>
-          <ol className={styles.transcript} ref={transcriptRef} aria-label="Transcript">
-            {detail.transcript.map((t, i) => (
-              <li
-                key={t.turn}
-                data-turn={t.turn}
-                className={mergeClasses(styles.turn, t.turn === focusTurn && styles.turnFocus)}
-                aria-current={t.turn === focusTurn ? "true" : undefined}
-              >
-                <span className={styles.turnTime}>{clock(t.at)}</span>
-                <span className={styles.turnBody}>
-                  {(i === 0 || detail.transcript[i - 1]?.speaker !== t.speaker) && (
-                    <span className={styles.turnSpeaker}>{t.speaker}</span>
-                  )}
-                  <span className={styles.turnText}>{t.text}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : (
-        <p className={styles.detailNote}>The transcript is no longer kept; the notes stay.</p>
-      )}
+        )}
+      </div>
       <div className={styles.footer}>
         {speakers.length > 0 && (
           <div className={styles.fixRow}>
@@ -768,7 +982,7 @@ function MeetingView({
                 ))}
               </Select>
             </Field>
-            <Field label="was really" className={styles.fixField}>
+            <Field label="Was really" className={styles.fixField}>
               <Select value={to} onChange={(_, d) => setTo(d.value)}>
                 <option value="">I don't know who</option>
                 {detail.people
@@ -778,7 +992,9 @@ function MeetingView({
                   ))}
               </Select>
             </Field>
-            <Button disabled={!from} onClick={() => void fixSpeaker()}>Fix speaker</Button>
+            <Button icon={<PersonEdit16Regular />} disabled={!from} onClick={() => void fixSpeaker()}>
+              Fix speaker
+            </Button>
           </div>
         )}
         <div className={styles.forget}>

@@ -1,8 +1,9 @@
 /** Drafts queue (M4): conversations waiting for your reply, with a draft ready for each — and,
  * if you opt in, waiting in your Outlook Drafts folder (every Outlook, including mobile).
  * Vanimo never sends: you open the draft in Outlook, edit it and send it yourself.
- * Layout: a count header with the one primary action, hairline rows (subject and status, sender and
- * why, the draft's state, row actions on the right), and the Outlook settings as a settings list. */
+ * Layout: a count header with the one primary action, a card of rows (the sender's avatar, subject
+ * and status pill, sender and why, the draft's state as pills, time and actions on the right), and
+ * the Outlook settings as a settings card. */
 import {
   Button,
   Link,
@@ -13,10 +14,25 @@ import {
   Select,
   Spinner,
   Switch,
-  tokens,
-  Tooltip,
 } from "@fluentui/react-components";
-import { Compose16Regular, MailInbox20Regular, Open16Regular } from "@fluentui/react-icons";
+import {
+  ArrowClockwise16Regular,
+  ArrowReply16Regular,
+  Broom16Regular,
+  CheckmarkCircle16Regular,
+  Clock16Regular,
+  Compose16Regular,
+  Document16Regular,
+  Drafts16Regular,
+  Drafts20Regular,
+  EyeOff16Regular,
+  FolderMail16Regular,
+  Info16Regular,
+  MailDismiss16Regular,
+  MailInbox20Regular,
+  Open16Regular,
+  Warning16Regular,
+} from "@fluentui/react-icons";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Prepared, QueueItem, QueueView } from "../../api/client";
@@ -24,68 +40,81 @@ import { useApi } from "../../api/context";
 import { draftErrorText } from "../../drafting/DraftView";
 import {
   EmptyState,
+  IconAction,
+  List,
   Page,
   PageSkeleton,
+  PersonAvatar,
   Pill,
   Rise,
   Section,
   SettingList,
   SettingRow,
-  StatusDot,
+  Surface,
   Time,
   typo,
   vt,
-  type Tone,
 } from "../../ui";
 
+const PHONE = "@media (max-width: 639px)";
+
 const useStyles = makeStyles({
-  list: {
-    display: "grid",
-    margin: 0,
-    padding: 0,
-    listStyle: "none",
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    overflow: "hidden",
-  },
   row: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) auto",
-    gap: "8px 24px",
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    columnGap: "14px",
+    rowGap: "10px",
     padding: "14px 16px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
-    ":first-child": { borderTop: "none" },
-    "@media (max-width: 639px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    ":first-child": { borderTopColor: "transparent" },
+    [PHONE]: { gridTemplateColumns: "auto minmax(0, 1fr)", columnGap: "12px" },
   },
-  main: { display: "grid", gap: "4px", minWidth: 0 },
+  avatar: { paddingTop: "2px" },
+  main: { display: "grid", gap: "6px", minWidth: 0 },
   titleLine: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flexWrap: "wrap" },
   subject: { ...typo.itemTitle, color: vt.text1, overflowWrap: "anywhere" },
   subjectMuted: { color: vt.text2 },
-  meta: { ...typo.meta, color: vt.text2, overflowWrap: "anywhere" },
-  sender: { ...typo.address, color: vt.text1 },
+  meta: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px 14px", ...typo.meta, color: vt.text2, minWidth: 0 },
+  sender: { ...typo.address, color: vt.text1, fontWeight: 500 },
+  metaItem: { display: "inline-flex", alignItems: "center", gap: "5px", minWidth: 0, "& > svg": { color: vt.text3, flexShrink: 0 } },
   draftLine: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: "4px 10px",
+    gap: "6px 12px",
     ...typo.meta,
     ...typo.tabular,
     color: vt.text2,
     marginTop: "2px",
   },
   link: { display: "inline-flex", alignItems: "center", gap: "4px" },
-  notice: { ...typo.meta, color: vt.text1, margin: "4px 0 0", maxWidth: "72ch" },
+  // What preparing did, in a well inside the card.
+  notice: {
+    ...typo.meta,
+    color: vt.text1,
+    margin: "2px 0 0",
+    maxWidth: "72ch",
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "8px",
+    padding: "8px 12px",
+    borderRadius: "8px",
+    backgroundColor: vt.inset,
+    border: `1px solid ${vt.borderSubtle}`,
+    "& > svg": { color: vt.info, flexShrink: 0, marginTop: "1px" },
+  },
   side: {
     display: "flex",
     flexDirection: "column",
     alignItems: "flex-end",
     justifyContent: "space-between",
     gap: "10px",
-    "@media (max-width: 639px)": { flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
+    [PHONE]: { gridColumn: "2 / -1", flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" },
   },
   time: { ...typo.meta, color: vt.text3 },
-  actions: { display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" },
+  actions: { display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap", [PHONE]: { marginLeft: "auto" } },
+  prepare: { marginRight: "4px" },
+  settings: { padding: "2px 16px" },
 });
 
 const NOT_PLACED: Record<NonNullable<Prepared["notPlacedReason"]>, string> = {
@@ -108,16 +137,28 @@ const GOOD_STATES = new Set(["placed", "kept_edited", "sent"]);
 
 function DraftState({ draft }: { draft: NonNullable<QueueItem["draft"]> }) {
   const s = useStyles();
-  const tone: Tone = draft.blocked ? "warning" : draft.placedState && GOOD_STATES.has(draft.placedState) ? "success" : "neutral";
+  const good = Boolean(draft.placedState && GOOD_STATES.has(draft.placedState));
+  const label = draft.placedState ? (PLACED_STATE[draft.placedState] ?? draft.placedState) : "Draft ready";
   return (
     <div className={s.draftLine}>
-      <StatusDot tone={tone}>
-        {draft.placedState ? (PLACED_STATE[draft.placedState] ?? draft.placedState) : "Draft ready"}
-      </StatusDot>
-      <span>
-        Drafted <Time iso={draft.createdAt} />
+      {good ? (
+        <Pill tone="success" icon={<CheckmarkCircle16Regular />}>
+          {label}
+        </Pill>
+      ) : (
+        <Pill icon={<Document16Regular />}>{label}</Pill>
+      )}
+      {draft.blocked && (
+        <Pill tone="warning" icon={<Warning16Regular />}>
+          Has a warning to check
+        </Pill>
+      )}
+      <span className={s.metaItem}>
+        <Clock16Regular aria-hidden />
+        <span>
+          Drafted <Time iso={draft.createdAt} />
+        </span>
       </span>
-      {draft.blocked && <Pill tone="warning">Has a warning to check</Pill>}
       {draft.webLink && draft.placed && (
         <Link href={draft.webLink} target="_blank" rel="noreferrer" className={s.link}>
           Open in Outlook
@@ -204,7 +245,6 @@ export function Queue() {
   return (
     <Page
       title="Queue"
-      eyebrow={<Pill>{view.sourceKind === "sample" ? "Sample workspace" : "Microsoft 365"}</Pill>}
       description="Emails waiting for your reply, with a draft in your voice. Vanimo never sends: you read, edit and send."
     >
       <Section
@@ -213,6 +253,7 @@ export function Queue() {
         actions={
           <Button
             appearance="primary"
+            icon={<Drafts16Regular />}
             disabled={busy !== null || !waiting.some((i) => !i.draft)}
             onClick={() => void prepareAll()}
           >
@@ -221,36 +262,44 @@ export function Queue() {
         }
       >
         {view.items.length === 0 ? (
-          <EmptyState icon={<MailInbox20Regular />} title="Nothing waiting for a reply">
-            Emails that need an answer from you appear here, ready for Vanimo to draft a reply in your voice.
-          </EmptyState>
+          <Surface padding="l">
+            <EmptyState center icon={<MailInbox20Regular />} title="Nothing waiting for a reply">
+              Emails that need an answer from you appear here, ready for Vanimo to draft a reply in your voice.
+            </EmptyState>
+          </Surface>
         ) : (
-          <ul className={styles.list} aria-label="Conversations">
+          <List bordered label="Conversations">
             {view.items.map((i) => {
               const drafting = busy === i.conversationId;
               return (
                 <li key={i.conversationId} className={styles.row}>
+                  <span className={styles.avatar}>
+                    <PersonAvatar name={i.sender.name ?? i.sender.email} id={i.sender.email} size={32} />
+                  </span>
                   <div className={styles.main}>
                     <div className={styles.titleLine}>
                       <span className={mergeClasses(styles.subject, i.excluded && styles.subjectMuted)}>
                         {i.subject ?? "(no subject)"}
                       </span>
                       {i.excluded ? (
-                        <Pill>Excluded</Pill>
+                        <Pill icon={<EyeOff16Regular />}>Excluded</Pill>
                       ) : i.needsReply ? (
-                        <Pill tone="accent">Needs a reply</Pill>
+                        <Pill tone="accent" icon={<ArrowReply16Regular />}>
+                          Needs a reply
+                        </Pill>
                       ) : (
-                        <Pill>For your information</Pill>
+                        <Pill icon={<Info16Regular />}>For your information</Pill>
                       )}
                     </div>
                     <div className={styles.meta}>
                       <span className={styles.sender}>{i.sender.name ?? i.sender.email}</span>
-                      {i.reason ? ` · ${i.reason}` : ""}
+                      {i.reason && <span>{i.reason}</span>}
                     </div>
                     {i.draft && <DraftState draft={i.draft} />}
                     {notice[i.conversationId] && (
                       <Rise visible appear>
                         <p className={styles.notice} role="status">
+                          <Info16Regular aria-hidden />
                           {notice[i.conversationId]}
                         </p>
                       </Rise>
@@ -263,33 +312,34 @@ export function Queue() {
                         <Button
                           size="small"
                           disabled={busy !== null}
-                          icon={drafting ? <Spinner size="extra-tiny" /> : undefined}
+                          className={styles.prepare}
+                          icon={drafting ? <Spinner size="extra-tiny" /> : i.draft ? <ArrowClockwise16Regular /> : <Drafts16Regular />}
                           onClick={() => void prepare(i)}
                         >
                           {drafting ? "Drafting…" : i.draft ? "Draft again" : "Prepare draft"}
                         </Button>
-                        <Button size="small" appearance="subtle" onClick={() => void dismiss(i)}>
-                          No reply needed
-                        </Button>
-                        <Tooltip content="Open the Draft page" relationship="label">
-                          <Button size="small" appearance="subtle" icon={<Compose16Regular />} onClick={() => navigate("/draft")} />
-                        </Tooltip>
+                        <IconAction icon={<MailDismiss16Regular />} label="No reply needed" onClick={() => void dismiss(i)} />
+                        <IconAction icon={<Compose16Regular />} label="Open the Draft page" onClick={() => navigate("/draft")} />
                       </div>
                     )}
                   </div>
                 </li>
               );
             })}
-          </ul>
+          </List>
         )}
       </Section>
 
       <Section
+        variant="card"
+        flush
+        icon={<Drafts20Regular />}
         title="Drafts in Outlook"
         description={view.sourceKind === "sample" ? "Sample workspace: the Drafts folder is simulated." : undefined}
       >
-        <SettingList>
+        <SettingList className={styles.settings}>
           <SettingRow
+            icon={<FolderMail16Regular />}
             label="Put drafts in my Outlook Drafts folder"
             description={
               s.allowedByOrganisation
@@ -304,7 +354,7 @@ export function Queue() {
               aria-label="Put drafts in my Outlook Drafts folder (works on Outlook mobile too)"
             />
           </SettingRow>
-          <SettingRow label="Remove unused drafts after" description="Drafts you edited or sent are never removed.">
+          <SettingRow icon={<Broom16Regular />} label="Remove unused drafts after" description="Drafts you edited or sent are never removed.">
             <Select
               aria-label="Remove unused drafts after"
               value={String(s.staleDays)}

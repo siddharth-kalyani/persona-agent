@@ -11,61 +11,103 @@ import {
   RadioGroup,
   Switch,
   tokens,
-  Tooltip,
 } from "@fluentui/react-components";
-import { Delete16Regular, TextBulletListSquare20Regular } from "@fluentui/react-icons";
-import { useCallback, useEffect, useState } from "react";
+import {
+  Add16Regular,
+  Dismiss16Regular,
+  Eye16Regular,
+  Person16Regular,
+  Prohibited20Regular,
+  Tag16Regular,
+  TextBulletListSquare20Regular,
+  TextT16Regular,
+  Translate16Regular,
+} from "@fluentui/react-icons";
+import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from "react";
 import type { NeverSendWord, TermKind, WordPreview } from "../../api/client";
 import { useApi } from "../../api/context";
-import { EmptyState, List, Pill, Rise, typo, vt } from "../../ui";
+import { EmptyState, IconAction, Pill, Rise, Section, typo, vt } from "../../ui";
 import { errorText } from "../Home";
 
 const useStyles = makeStyles({
-  stack: { display: "grid", gap: "28px", minWidth: 0 },
-  intro: { ...typo.meta, color: vt.text2, margin: 0, maxWidth: "72ch" },
-  block: { display: "grid", gap: "12px", minWidth: 0 },
-  heading: { ...typo.itemTitle, color: vt.text1, margin: 0, display: "flex", alignItems: "baseline", gap: "8px" },
-  headingCount: { ...typo.meta, ...typo.tabular, color: vt.text3, fontWeight: 400 },
+  stack: { display: "grid", gap: "20px", minWidth: 0 },
+  form: { display: "grid", gap: "16px", minWidth: 0 },
   fields: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: "12px 16px",
     alignItems: "start",
-    maxWidth: "720px",
     "@media (max-width: 639px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   kind: { display: "grid", gap: "2px" },
   kindHelp: { ...typo.meta, color: vt.text2, margin: 0, paddingLeft: "4px" },
-  actions: { display: "flex", gap: "8px 12px", alignItems: "center", flexWrap: "wrap" },
+  actions: {
+    display: "flex",
+    gap: "8px 12px",
+    alignItems: "center",
+    flexWrap: "wrap",
+    paddingTop: "16px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+  },
   spacer: { flexGrow: 1, "@media (max-width: 479px)": { display: "none" } },
   preview: {
     display: "grid",
     gap: "10px",
-    padding: "12px 16px",
+    padding: "12px 14px",
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: vt.inset,
-    border: `1px solid ${tokens.colorNeutralStroke3}`,
-    maxWidth: "720px",
+    border: `1px solid ${vt.borderSubtle}`,
   },
   previewText: { ...typo.body, color: vt.text1, margin: 0 },
   variants: { display: "flex", gap: "4px", flexWrap: "wrap" },
   variant: { ...typo.address, fontWeight: 400, fontSize: "12.5px" },
+  list: { listStyle: "none", margin: 0, padding: 0, display: "grid" },
   wordRow: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) auto",
     alignItems: "center",
     gap: "8px 16px",
-    padding: "10px 16px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    padding: "10px 12px 10px 16px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
     "@media (max-width: 479px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   wordFirst: { borderTopColor: "transparent" },
-  wordText: { display: "grid", gap: "2px", minWidth: 0 },
-  word: { ...typo.itemTitle, ...typo.address, color: vt.text1 },
-  wordMeta: { ...typo.meta, color: vt.text2, overflowWrap: "anywhere" },
-  wordActions: { display: "flex", alignItems: "center", gap: "8px", justifyContent: "flex-end" },
+  wordMain: { display: "flex", alignItems: "center", gap: "6px 12px", flexWrap: "wrap", minWidth: 0 },
+  // The word itself as a token: the thing that is masked.
+  chip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    minHeight: "26px",
+    padding: "2px 10px 2px 8px",
+    borderRadius: "7px",
+    backgroundColor: vt.inset,
+    border: `1px solid ${vt.border}`,
+    ...typo.itemTitle,
+    ...typo.address,
+    color: vt.text1,
+    maxWidth: "100%",
+    "& > svg": { flexShrink: 0, color: vt.text3 },
+  },
+  wordMeta: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px 10px",
+    flexWrap: "wrap",
+    ...typo.meta,
+    color: vt.text2,
+    minWidth: 0,
+    overflowWrap: "anywhere",
+  },
+  metaItem: { display: "inline-flex", alignItems: "center", gap: "4px", "& > svg": { color: vt.text3, flexShrink: 0 } },
+  wordActions: { display: "flex", alignItems: "center", gap: "4px", justifyContent: "flex-end" },
   switchLabel: { ...typo.meta, color: vt.text2 },
 });
+
+/** A card section one heading level down (h3): it sits inside the Sources section of Setup and My data. */
+function Card({ title, ...rest }: { icon: ReactElement; title: string; description?: string; info?: string; count?: number; flush?: boolean; children: ReactNode }) {
+  return <Section variant="card" headingLevel={3} title={title} aria-label={title} {...rest} />;
+}
 
 const KIND_HELP: Record<TermKind, string> = {
   word: "A word or phrase, matched as a whole word (plus plurals).",
@@ -74,6 +116,12 @@ const KIND_HELP: Record<TermKind, string> = {
 };
 
 const KIND_LABEL: Record<TermKind, string> = { word: "Word", name: "Name", codename: "Codename" };
+
+const KIND_ICON: Record<TermKind, ReactElement> = {
+  word: <TextT16Regular aria-hidden />,
+  name: <Person16Regular aria-hidden />,
+  codename: <Tag16Regular aria-hidden />,
+};
 
 /** Never-send words: never stored by Vanimo in readable form and never sent to any AI model. */
 export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
@@ -136,92 +184,103 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
 
   return (
     <div className={styles.stack}>
-      <p className={styles.intro}>
-        Codenames, client nicknames, family names, internal figures. They're replaced before any AI model sees your text,
-        and drafts show [removed] where they would appear, unless you allow a word in your own drafts.
-      </p>
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
 
-      <div className={styles.block}>
-        <h3 className={styles.heading}>Add a word</h3>
-        <div className={styles.fields}>
-          <Field label="Word or phrase">
-            <Input value={text} onChange={(_, d) => setText(d.value)} maxLength={100} />
-          </Field>
-          <Field label="Other spellings (optional, comma-separated)" hint="For example the Devanagari spelling">
-            <Input value={extra} onChange={(_, d) => setExtra(d.value)} />
-          </Field>
-        </div>
-        <div className={styles.kind}>
-          <RadioGroup layout="horizontal" value={kind} onChange={(_, d) => setKind(d.value as TermKind)} aria-label="Type">
-            <Radio value="word" label="Word" />
-            <Radio value="name" label="Name" />
-            <Radio value="codename" label="Codename" />
-          </RadioGroup>
-          <p className={styles.kindHelp}>{KIND_HELP[kind]}</p>
-        </div>
-        <div className={styles.actions}>
-          <Switch checked={allow} onChange={(_, d) => setAllow(d.checked)} label="Allow in my own drafts" />
-          <span className={styles.spacer} />
-          <Button disabled={!text.trim()} onClick={() => void check()}>
-            Preview
-          </Button>
-          <Button disabled={!preview || busy} onClick={() => void save()}>
-            Add word
-          </Button>
-        </div>
-        {preview && (
-          <Rise visible appear>
-            <div className={styles.preview} role="status">
-              <p className={styles.previewText}>Appears in {preview.appearsIn} of your stored sources. Also matched as:</p>
-              <div className={styles.variants}>
-                {preview.variants.map((v) => (
-                  <Pill key={v} className={styles.variant}>
-                    {v}
-                  </Pill>
-                ))}
+      <Card
+        icon={<Prohibited20Regular />}
+        title="Add a never-send word"
+        description="Replaced before any AI model sees your text."
+        info="Codenames, client nicknames, family names, internal figures. Drafts show [removed] where they would appear, unless you allow a word in your own drafts."
+      >
+        <div className={styles.form}>
+          <div className={styles.fields}>
+            <Field label="Word or phrase">
+              <Input value={text} onChange={(_, d) => setText(d.value)} maxLength={100} />
+            </Field>
+            <Field label="Other spellings (optional, comma-separated)" hint="For example the Devanagari spelling">
+              <Input value={extra} onChange={(_, d) => setExtra(d.value)} />
+            </Field>
+          </div>
+          <div className={styles.kind}>
+            <RadioGroup layout="horizontal" value={kind} onChange={(_, d) => setKind(d.value as TermKind)} aria-label="Type">
+              <Radio value="word" label="Word" />
+              <Radio value="name" label="Name" />
+              <Radio value="codename" label="Codename" />
+            </RadioGroup>
+            <p className={styles.kindHelp}>{KIND_HELP[kind]}</p>
+          </div>
+          {preview && (
+            <Rise visible appear>
+              <div className={styles.preview} role="status">
+                <p className={styles.previewText}>Appears in {preview.appearsIn} of your stored sources. Also matched as:</p>
+                <div className={styles.variants}>
+                  {preview.variants.map((v) => (
+                    <Pill key={v} className={styles.variant}>
+                      {v}
+                    </Pill>
+                  ))}
+                </div>
+                {preview.foldedForm && (
+                  <Checkbox
+                    checked={folds}
+                    onChange={(_, d) => setFolds(!!d.checked)}
+                    label={`Also catch Hinglish spellings (anything that simplifies to "${preview.foldedForm}"): ${preview.appearsInWithFolds} sources instead of ${preview.appearsIn}`}
+                  />
+                )}
               </div>
-              {preview.foldedForm && (
-                <Checkbox
-                  checked={folds}
-                  onChange={(_, d) => setFolds(!!d.checked)}
-                  label={`Also catch Hinglish spellings (anything that simplifies to "${preview.foldedForm}"): ${preview.appearsInWithFolds} sources instead of ${preview.appearsIn}`}
-                />
-              )}
-            </div>
-          </Rise>
-        )}
-        {preview?.commonWord && (
-          <MessageBar intent="warning">
-            <MessageBarBody>This is a common word. Removing it everywhere can make drafts sound less like you.</MessageBarBody>
-          </MessageBar>
-        )}
-      </div>
+            </Rise>
+          )}
+          {preview?.commonWord && (
+            <MessageBar intent="warning">
+              <MessageBarBody>This is a common word. Removing it everywhere can make drafts sound less like you.</MessageBarBody>
+            </MessageBar>
+          )}
+          <div className={styles.actions}>
+            <Switch checked={allow} onChange={(_, d) => setAllow(d.checked)} label="Allow in my own drafts" />
+            <span className={styles.spacer} />
+            <Button icon={<Eye16Regular />} disabled={!text.trim()} onClick={() => void check()}>
+              Preview
+            </Button>
+            <Button icon={<Add16Regular />} disabled={!preview || busy} onClick={() => void save()}>
+              Add word
+            </Button>
+          </div>
+        </div>
+      </Card>
 
-      <div className={styles.block}>
-        <h3 className={styles.heading}>
-          Your never-send words
-          {words.length > 0 && <span className={styles.headingCount}>{words.length}</span>}
-        </h3>
+      <Card
+        flush
+        icon={<TextBulletListSquare20Regular />}
+        title="Your never-send words"
+        count={words.length > 0 ? words.length : undefined}
+      >
         {words.length === 0 ? (
-          <EmptyState headingLevel={4} icon={<TextBulletListSquare20Regular />} title="No never-send words yet">
+          <EmptyState headingLevel={4} icon={<Prohibited20Regular />} title="No never-send words yet" center>
             Add a codename or a name above. It's masked in everything Vanimo reads from then on, and in what it has
             already stored.
           </EmptyState>
         ) : (
-          <List bordered label="Never-send words">
+          <ul className={styles.list} aria-label="Never-send words">
             {words.map((w, i) => (
               <li key={w.id} className={mergeClasses(styles.wordRow, i === 0 && styles.wordFirst)}>
-                <span className={styles.wordText}>
-                  <span className={styles.word}>{w.text}</span>
+                <span className={styles.wordMain}>
+                  <span className={styles.chip}>
+                    {KIND_ICON[w.kind]}
+                    {w.text}
+                  </span>
                   <span className={styles.wordMeta}>
-                    {KIND_LABEL[w.kind] ?? w.kind}
-                    {w.variants.length > 0 && ` · also ${w.variants.join(", ")}`}
-                    {w.folds && " · Hinglish spellings"}
+                    <span>{KIND_LABEL[w.kind] ?? w.kind}</span>
+                    {w.variants.length > 0 && <span>also {w.variants.join(", ")}</span>}
+                    {w.folds && (
+                      <span className={styles.metaItem}>
+                        <Translate16Regular aria-hidden />
+                        Hinglish spellings
+                      </span>
+                    )}
                   </span>
                 </span>
                 <span className={styles.wordActions}>
@@ -231,26 +290,23 @@ export function NeverSendPanel({ onChange }: { onChange?: () => void }) {
                     aria-label={`Allow ${w.text} in my drafts`}
                     onChange={(_, d) => void api.updateWord(w.id, d.checked).then(load, (e) => setError(errorText(e)))}
                   />
-                  <Tooltip content="Remove" relationship="description" withArrow>
-                    <Button
-                      size="small"
-                      appearance="subtle"
-                      icon={<Delete16Regular />}
-                      aria-label={`Remove ${w.text}`}
-                      onClick={() =>
-                        void api
-                          .deleteWord(w.id)
-                          .then(load)
-                          .then(() => onChange?.(), (e) => setError(errorText(e)))
-                      }
-                    />
-                  </Tooltip>
+                  <IconAction
+                    icon={<Dismiss16Regular />}
+                    label={`Remove ${w.text}`}
+                    danger
+                    onClick={() =>
+                      void api
+                        .deleteWord(w.id)
+                        .then(load)
+                        .then(() => onChange?.(), (e) => setError(errorText(e)))
+                    }
+                  />
                 </span>
               </li>
             ))}
-          </List>
+          </ul>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

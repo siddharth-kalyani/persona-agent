@@ -1,13 +1,23 @@
-/** Home: what needs you, how far Vanimo is set up, and the facts it works from. Task-first, no
- * greeting hero: a status strip, a setup checklist until it's done, promises coming due, and your
- * profile as Vanimo reads it. */
-import { Avatar, Button, Link, makeStyles, MessageBar, MessageBarBody, tokens } from "@fluentui/react-components";
+/** Home: what needs you, how far Vanimo is set up, and the facts it works from. A greeting with a one-
+ * line summary, stat cards, a setup checklist until it's done, promises coming due, your last sent
+ * emails, and your profile as Vanimo reads it. */
+import { Button, Link, makeStyles, MessageBar, MessageBarActions, MessageBarBody } from "@fluentui/react-components";
 import {
   ArrowRight16Regular,
+  ArrowReply16Regular,
+  CalendarClock20Regular,
   CheckmarkCircle20Filled,
-  Circle20Regular,
+  Clock16Regular,
+  Compose20Regular,
+  Flag20Regular,
+  HatGraduation20Regular,
+  ClockAlarm16Regular,
   Mail16Regular,
-  TaskListSquareLtr16Regular,
+  People16Regular,
+  PersonCircle20Regular,
+  Send20Regular,
+  ShieldCheckmark16Regular,
+  TaskListSquareLtr20Regular,
 } from "@fluentui/react-icons";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -16,16 +26,19 @@ import { useApi } from "../api/context";
 import { AUDIENCE } from "./commitments/Commitments";
 import {
   EmptyState,
+  IconTile,
   List,
   ListRow,
+  Meter,
   Page,
   PageSkeleton,
+  PersonAvatar,
   Pill,
   Section,
   Stat,
   StatStrip,
-  Surface,
   Time,
+  CHANNELS,
   typo,
   vt,
 } from "../ui";
@@ -34,24 +47,46 @@ const useStyles = makeStyles({
   columns: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) 320px",
-    gap: "32px",
+    gap: "20px",
     alignItems: "start",
     "@media (max-width: 899px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
-  main: { display: "grid", gap: "32px", minWidth: 0 },
-  side: { display: "grid", gap: "16px", minWidth: 0 },
+  main: { display: "grid", gap: "20px", minWidth: 0 },
+  side: { display: "grid", gap: "20px", minWidth: 0 },
   person: { display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", gap: "12px", alignItems: "center" },
   personText: { display: "grid", minWidth: 0 },
-  personLabel: { ...typo.label, color: vt.text3 },
+  personLabel: { ...typo.label, fontWeight: 400, color: vt.text3 },
   personName: { ...typo.itemTitle, color: vt.text1 },
   personMeta: { ...typo.meta, color: vt.text2 },
-  divider: { height: "1px", backgroundColor: tokens.colorNeutralStroke3, margin: "16px 0" },
-  roles: { display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "12px" },
-  fact: { ...typo.meta, color: vt.text2, margin: 0 },
-  steps: { display: "grid", gap: 0 },
-  stepIconDone: { color: vt.success },
-  stepIconTodo: { color: vt.text3 },
-  progress: { ...typo.meta, color: vt.text2, ...typo.tabular },
+  divider: { height: "1px", backgroundColor: vt.borderSubtle, margin: "14px 0" },
+  roles: { display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "14px" },
+  fact: {
+    display: "flex",
+    gap: "8px",
+    alignItems: "flex-start",
+    ...typo.meta,
+    color: vt.text2,
+    margin: "14px -16px -16px",
+    padding: "12px 16px",
+    backgroundColor: vt.inset,
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    "& > svg": { flexShrink: 0, marginTop: "1px", color: vt.success },
+  },
+  progress: { display: "flex", alignItems: "center", gap: "10px", ...typo.meta, color: vt.text2, ...typo.tabular },
+  progressMeter: { width: "72px" },
+  stepDone: { color: vt.success },
+  stepNumber: {
+    width: "28px",
+    height: "28px",
+    borderRadius: "50%",
+    display: "grid",
+    placeItems: "center",
+    border: `1px solid ${vt.borderStrong}`,
+    ...typo.label,
+    color: vt.text2,
+  },
+  stepLink: { fontWeight: 500 },
+  metaIcon: { display: "inline-flex", alignItems: "center", gap: "4px" },
 });
 
 export function errorText(err: unknown): string {
@@ -80,7 +115,7 @@ const ROLE_LABELS: Record<string, string> = {
   "Vanimo.SuperAdmin": "Super-admin",
 };
 
-/** Optional extras for the strip and checklist: each loads on its own and never blocks the page. */
+/** Optional extras for the stats and checklist: each loads on its own and never blocks the page. */
 function useExtras() {
   const api = useApi();
   const [learning, setLearning] = useState<LearningStatus | null>(null);
@@ -99,6 +134,11 @@ function useExtras() {
     };
   }, [api]);
   return { learning, drafting, drafts, ledger };
+}
+
+function greeting(now = new Date()): string {
+  const h = now.getHours();
+  return h < 5 ? "Good evening" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
 export function Home() {
@@ -150,18 +190,25 @@ export function Home() {
     .slice(0, 4);
   const roles = me.roles.map((r) => ROLE_LABELS[r] ?? r);
   const today = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  // "Meera Iyer" and the directory form "Iyer, Meera" both greet Meera.
+  const display = me.user.displayName?.trim() ?? "";
+  const firstName = (display.includes(",") ? display.split(",")[1] : display)?.trim().split(/\s+/)[0];
+  const summary = !ledger
+    ? "Here's where things stand."
+    : ledger.overdue
+      ? `${ledger.overdue} ${ledger.overdue === 1 ? "promise is" : "promises are"} overdue. Start there.`
+      : ledger.dueSoon
+        ? `${ledger.dueSoon} ${ledger.dueSoon === 1 ? "promise is" : "promises are"} due soon.`
+        : "Nothing is overdue.";
 
   return (
     <Page
-      title="Home"
-      eyebrow={
-        <>
-          <span>{today}</span>
-          <Pill>{me.dataSource === "sample" ? "Sample workspace" : "Microsoft 365"}</Pill>
-        </>
-      }
+      title={firstName ? `${greeting()}, ${firstName}` : greeting()}
+      documentTitle="Home"
+      eyebrow={today}
+      description={summary}
       actions={
-        <Button appearance="primary" onClick={() => navigate("/draft")}>
+        <Button appearance="primary" icon={<ArrowReply16Regular />} onClick={() => navigate("/draft")}>
           Draft a reply
         </Button>
       }
@@ -169,26 +216,36 @@ export function Home() {
       {me.dataSource === "sample" && (
         <MessageBar intent="info">
           <MessageBarBody>
-            You're seeing the sample workspace — a fictional company, Kestrel Analytics. Your own Microsoft 365 data
-            appears when you sign in with Microsoft.
+            You're in the sample workspace: Kestrel Analytics, a fictional company.
           </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => navigate("/sample")}>
+              Open it
+            </Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
       <StatStrip label="At a glance">
         <Stat
+          icon={<TaskListSquareLtr20Regular />}
           value={ledger ? ledger.open : "–"}
           label="Open commitments"
           hint={ledger ? (ledger.overdue ? `${ledger.overdue} overdue` : `${ledger.dueSoon} due soon`) : undefined}
+          hintTone={ledger?.overdue ? "danger" : undefined}
           onClick={() => navigate("/commitments")}
         />
         <Stat
+          icon={<HatGraduation20Regular />}
+          tone="neutral"
           value={learning ? learning.stored.total : "–"}
           label="Messages learned"
           hint={learning ? `${learning.styleCards} style cards` : undefined}
           onClick={() => navigate("/learning")}
         />
         <Stat
+          icon={<Compose20Regular />}
+          tone="neutral"
           value={draftsThisWeek ?? "–"}
           label="Drafts this week"
           hint={drafting ? (drafting.generator === "offline" ? "Offline stand-in" : "Claude on Amazon Bedrock") : undefined}
@@ -200,19 +257,29 @@ export function Home() {
         <div className={styles.main}>
           {doneCount < steps.length && (
             <Section
+              variant="card"
+              flush
+              icon={<Flag20Regular />}
               title="Get set up"
               description="Three steps, in order. You can change your choices any time."
-              actions={<span className={styles.progress}>{doneCount} of {steps.length} done</span>}
+              actions={
+                <span className={styles.progress}>
+                  <Meter value={doneCount / steps.length} className={styles.progressMeter} />
+                  {doneCount} of {steps.length} done
+                </span>
+              }
             >
-              <List bordered label="Setup steps">
-                {steps.map((s) => (
+              <List label="Setup steps">
+                {steps.map((s, i) => (
                   <ListRow
                     key={s.path}
                     leading={
                       s.done ? (
-                        <CheckmarkCircle20Filled className={styles.stepIconDone} aria-label="Done" />
+                        <CheckmarkCircle20Filled className={styles.stepDone} aria-label="Done" />
                       ) : (
-                        <Circle20Regular className={styles.stepIconTodo} aria-label="To do" />
+                        <span className={styles.stepNumber} role="img" aria-label="To do">
+                          {i + 1}
+                        </span>
                       )
                     }
                     title={
@@ -220,6 +287,7 @@ export function Home() {
                         s.label
                       ) : (
                         <Link
+                          className={styles.stepLink}
                           href={s.path}
                           onClick={(e) => {
                             e.preventDefault();
@@ -240,48 +308,74 @@ export function Home() {
           )}
 
           <Section
+            variant="card"
+            flush
+            icon={<CalendarClock20Regular />}
             title="Coming due"
             description="Promises you made in email, chats and meetings."
             actions={
-              <Button appearance="subtle" size="small" onClick={() => navigate("/commitments")}>
+              <Button appearance="subtle" size="small" icon={<ArrowRight16Regular />} iconPosition="after" onClick={() => navigate("/commitments")}>
                 All commitments
               </Button>
             }
           >
             {due.length > 0 ? (
-              <List bordered label="Commitments coming due">
-                {due.map((c) => (
-                  <ListRow
-                    key={c.id}
-                    leading={<TaskListSquareLtr16Regular aria-hidden />}
-                    title={c.what}
-                    meta={`To ${AUDIENCE[c.relationship] ?? c.relationship}${c.duePhrase ? ` · “${c.duePhrase}”` : ""}`}
-                    trailing={
-                      new Date(c.dueAt!).getTime() < Date.now() ? (
-                        <Pill tone="danger">Overdue</Pill>
-                      ) : (
-                        <Time iso={c.dueAt!} />
-                      )
-                    }
-                    onClick={() => navigate("/commitments")}
-                  />
-                ))}
+              <List label="Commitments coming due">
+                {due.map((c) => {
+                  const overdue = new Date(c.dueAt!).getTime() < Date.now();
+                  return (
+                    <ListRow
+                      key={c.id}
+                      leading={<IconTile icon={CHANNELS[c.channel].icon} tone={CHANNELS[c.channel].tone} size={32} />}
+                      title={c.what}
+                      meta={
+                        <span className={styles.metaIcon}>
+                          <People16Regular />
+                          {CHANNELS[c.channel].label} to {AUDIENCE[c.relationship] ?? c.relationship}
+                        </span>
+                      }
+                      trailing={
+                        overdue ? (
+                          <Pill tone="danger" icon={<ClockAlarm16Regular />}>
+                            Overdue
+                          </Pill>
+                        ) : (
+                          <Pill icon={<Clock16Regular />}>
+                            <Time iso={c.dueAt!} />
+                          </Pill>
+                        )
+                      }
+                      onClick={() => navigate("/commitments")}
+                    />
+                  );
+                })}
               </List>
             ) : (
-              <EmptyState icon={<TaskListSquareLtr16Regular />} title="Nothing due">
+              <EmptyState icon={<TaskListSquareLtr20Regular />} title="Nothing due" center>
                 When you promise something with a date (“I'll send it by Friday”), it shows up here.
               </EmptyState>
             )}
           </Section>
 
-          <Section title="Your last 5 sent emails" description="Subjects only, read live. Vanimo doesn't store them.">
-            <List bordered label="Last sent emails">
+          <Section
+            variant="card"
+            flush
+            icon={<Send20Regular />}
+            title="Your last 5 sent emails"
+            description="Subjects only, read live. Vanimo doesn't store them."
+          >
+            <List label="Last sent emails">
               {me.recentSent.map((m, i) => (
                 <ListRow
                   key={i}
-                  leading={<Mail16Regular aria-hidden />}
+                  leading={<IconTile icon={<Mail16Regular />} tone="blue" size={32} />}
                   title={m.subject || "(no subject)"}
-                  meta={`${m.recipientCount} recipient${m.recipientCount === 1 ? "" : "s"}`}
+                  meta={
+                    <span className={styles.metaIcon}>
+                      <People16Regular />
+                      {m.recipientCount} recipient{m.recipientCount === 1 ? "" : "s"}
+                    </span>
+                  }
                   trailing={m.sentDateTime ? <Time iso={m.sentDateTime} /> : "—"}
                 />
               ))}
@@ -291,9 +385,9 @@ export function Home() {
         </div>
 
         <aside className={styles.side} aria-label="Your profile">
-          <Surface padding="m">
+          <Section variant="card" icon={<PersonCircle20Regular />} title="Your profile">
             <div className={styles.person}>
-              <Avatar name={me.user.displayName ?? undefined} size={36} color="neutral" />
+              <PersonAvatar name={me.user.displayName} id={me.email} size={40} />
               <div className={styles.personText}>
                 <span className={styles.personLabel}>You</span>
                 <span className={styles.personName}>{me.user.displayName ?? "—"}</span>
@@ -304,7 +398,7 @@ export function Home() {
             </div>
             <div className={styles.divider} />
             <div className={styles.person}>
-              <Avatar name={me.manager?.displayName ?? undefined} size={36} color="neutral" />
+              <PersonAvatar name={me.manager?.displayName} size={40} />
               <div className={styles.personText}>
                 <span className={styles.personLabel}>Your manager</span>
                 {me.manager ? (
@@ -322,12 +416,13 @@ export function Home() {
                 <Pill key={r}>{r}</Pill>
               ))}
             </div>
-          </Surface>
-          <p className={styles.fact}>
-            {me.dataSource === "sample"
-              ? "Everything here is synthetic. Vanimo reads it exactly as it would read a real mailbox."
-              : "Read live from Microsoft 365 with your permission. Vanimo never sends anything on its own."}
-          </p>
+            <p className={styles.fact}>
+              <ShieldCheckmark16Regular aria-hidden />
+              {me.dataSource === "sample"
+                ? "Everything here is synthetic. Vanimo reads it exactly as it would read a real mailbox."
+                : "Read live from Microsoft 365 with your permission. Vanimo never sends anything on its own."}
+            </p>
+          </Section>
         </aside>
       </div>
     </Page>

@@ -1,5 +1,6 @@
 /** The in-app end of the notification channel (M5): counts only, never content — the same
- * notifications Teams' activity feed gets. Opening one takes you to the page it's about. */
+ * notifications Teams' activity feed gets. Opening one takes you to the page it's about. The bell
+ * carries a dot when something is unread; the count is in its label and the popover header. */
 import {
   Button,
   makeStyles,
@@ -9,51 +10,53 @@ import {
   PopoverTrigger,
   tokens,
 } from "@fluentui/react-components";
-import { Alert20Regular } from "@fluentui/react-icons";
-import { useCallback, useEffect, useState } from "react";
+import {
+  Alert20Regular,
+  AlertOn20Regular,
+  CheckmarkCircle20Regular,
+  DocumentSearch16Regular,
+  PersonVoice16Regular,
+  TaskListSquareLtr16Regular,
+} from "@fluentui/react-icons";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { AppNotification } from "../api/client";
 import { useApi } from "../api/context";
-import { absoluteTime, hoverTransition, relativeTime, typo, vt } from "../ui";
+import { absoluteTime, hoverTransition, IconTile, Pill, relativeTime, typo, vt, type Tone } from "../ui";
 
 const useStyles = makeStyles({
-  trigger: { position: "relative" },
-  count: {
+  trigger: { position: "relative", display: "inline-grid", placeItems: "center" },
+  dot: {
     position: "absolute",
-    top: "2px",
-    right: "1px",
-    minWidth: "16px",
-    height: "16px",
-    padding: "0 4px",
-    borderRadius: "8px",
-    backgroundColor: tokens.colorBrandBackground,
-    color: tokens.colorNeutralForegroundOnBrand,
-    fontSize: "10px",
-    fontWeight: 600,
-    lineHeight: "16px",
-    textAlign: "center",
-    ...typo.tabular,
-    boxShadow: `0 0 0 2px ${tokens.colorNeutralBackground2}`,
+    top: "0",
+    right: "0",
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+    backgroundColor: vt.accent,
+    boxShadow: `0 0 0 2px ${vt.frame}`,
     pointerEvents: "none",
   },
-  surface: { padding: 0, width: "340px", maxWidth: "calc(100vw - 24px)" },
+  surface: { padding: 0, width: "360px", maxWidth: "calc(100vw - 24px)" },
   header: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "10px 12px 10px 16px",
-    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    gap: "8px",
+    padding: "10px 10px 10px 16px",
+    borderBottom: `1px solid ${vt.borderSubtle}`,
   },
-  title: { ...typo.itemTitle, color: vt.text1, margin: 0 },
-  list: { listStyle: "none", margin: 0, padding: "4px", display: "grid", gap: "2px", maxHeight: "360px", overflowY: "auto" },
+  headerTitle: { display: "flex", alignItems: "center", gap: "8px" },
+  title: { ...typo.cardTitle, color: vt.text1, margin: 0 },
+  list: { listStyle: "none", margin: 0, padding: "6px", display: "grid", gap: "2px", maxHeight: "380px", overflowY: "auto" },
   item: {
     ...hoverTransition,
     display: "grid",
-    gridTemplateColumns: "8px minmax(0, 1fr)",
-    gap: "10px",
+    gridTemplateColumns: "auto minmax(0, 1fr) 8px",
+    gap: "12px",
     alignItems: "start",
     width: "100%",
-    padding: "8px 10px",
+    padding: "10px",
     border: "none",
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: "transparent",
@@ -64,13 +67,14 @@ const useStyles = makeStyles({
     "@media (hover: hover)": { ":hover": { backgroundColor: vt.hover } },
     ":focus-visible": { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: "-2px" },
   },
-  unreadDot: { width: "8px", height: "8px", borderRadius: "50%", marginTop: "6px", backgroundColor: vt.accent },
+  unreadDot: { width: "8px", height: "8px", borderRadius: "50%", marginTop: "12px", backgroundColor: vt.accent },
   readDot: { backgroundColor: "transparent" },
   text: { display: "grid", gap: "2px", minWidth: 0 },
   unread: { ...typo.body, fontWeight: 500 },
   read: { ...typo.body, color: vt.text2 },
   when: { ...typo.meta, color: vt.text3 },
-  empty: { ...typo.meta, color: vt.text2, padding: "20px 16px" },
+  empty: { display: "grid", justifyItems: "center", gap: "8px", ...typo.meta, color: vt.text2, padding: "28px 16px", textAlign: "center" },
+  emptyIcon: { color: vt.success },
   srOnly: {
     position: "absolute",
     width: "1px",
@@ -85,6 +89,12 @@ const TARGET: Record<AppNotification["kind"], string> = {
   commitments_due: "/commitments",
   rules_to_confirm: "/persona",
   review_reminder: "/setup",
+};
+
+const KIND: Record<AppNotification["kind"], { icon: ReactElement; tone: Tone }> = {
+  commitments_due: { icon: <TaskListSquareLtr16Regular />, tone: "accent" },
+  rules_to_confirm: { icon: <PersonVoice16Regular />, tone: "purple" },
+  review_reminder: { icon: <DocumentSearch16Regular />, tone: "blue" },
 };
 
 export function NotificationBell() {
@@ -122,21 +132,21 @@ export function NotificationBell() {
       <PopoverTrigger disableButtonEnhancement>
         <Button
           appearance="subtle"
-          size="small"
-          className={styles.trigger}
-          icon={<Alert20Regular />}
-          aria-label={`Notifications, ${unread} unread`}
-        >
-          {unread > 0 && (
-            <span className={styles.count} aria-hidden>
-              {unread > 9 ? "9+" : unread}
+          icon={
+            <span className={styles.trigger}>
+              {unread > 0 ? <AlertOn20Regular /> : <Alert20Regular />}
+              {unread > 0 && <span className={styles.dot} aria-hidden />}
             </span>
-          )}
-        </Button>
+          }
+          aria-label={`Notifications, ${unread} unread`}
+        />
       </PopoverTrigger>
       <PopoverSurface className={styles.surface} aria-label="Notifications">
         <div className={styles.header}>
-          <h2 className={styles.title}>Notifications</h2>
+          <div className={styles.headerTitle}>
+            <h2 className={styles.title}>Notifications</h2>
+            {unread > 0 && <Pill tone="accent">{unread} new</Pill>}
+          </div>
           {unread > 0 && (
             <Button
               size="small"
@@ -150,13 +160,16 @@ export function NotificationBell() {
           )}
         </div>
         {items.length === 0 ? (
-          <div className={styles.empty}>Nothing new.</div>
+          <div className={styles.empty}>
+            <CheckmarkCircle20Regular className={styles.emptyIcon} aria-hidden />
+            You're all caught up.
+          </div>
         ) : (
           <ul className={styles.list}>
             {items.map((n) => (
               <li key={n.id}>
                 <button type="button" className={styles.item} onClick={() => void go(n)}>
-                  <span className={mergeClasses(styles.unreadDot, n.read && styles.readDot)} aria-hidden />
+                  <IconTile icon={KIND[n.kind].icon} tone={KIND[n.kind].tone} size={32} />
                   <span className={styles.text}>
                     <span className={n.read ? styles.read : styles.unread}>{n.text}</span>
                     <span className={styles.when} title={absoluteTime(n.createdAt)}>
@@ -164,6 +177,7 @@ export function NotificationBell() {
                       {!n.read && <span className={styles.srOnly}> · unread</span>}
                     </span>
                   </span>
+                  <span className={mergeClasses(styles.unreadDot, n.read && styles.readDot)} aria-hidden />
                 </button>
               </li>
             ))}

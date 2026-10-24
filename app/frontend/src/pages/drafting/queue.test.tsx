@@ -1,5 +1,5 @@
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
@@ -88,8 +88,10 @@ describe("Learned from your edits", () => {
     const decide = vi.spyOn(a, "decideRule").mockResolvedValue({ ...RULE, status: "confirmed" });
     const user = userEvent.setup();
     wrap(a, <EditsCard />);
-    expect(await screen.findByText("25% sent without edits")).toBeInTheDocument();
-    expect(screen.getByText(/to your direct reports · seen 3 times/)).toBeInTheDocument();
+    // The rate is a named metric, the rule's audience and evidence are icon + value meta (was: sentences).
+    expect(within(await screen.findByRole("group", { name: "Sent without edits" })).getByText("25%")).toBeInTheDocument();
+    expect(screen.getByText(/To your direct reports/)).toBeInTheDocument();
+    expect(screen.getByText(/Seen 3 times/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Keep" }));
     await waitFor(() => expect(decide).toHaveBeenCalledWith("r1", "keep"));
   });

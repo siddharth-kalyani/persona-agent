@@ -122,7 +122,8 @@ describe("Persona", () => {
     await userEvent.click(clients);
     expect(screen.getByText("With clients and partners")).toBeInTheDocument();
     expect(screen.getByText("Dear ‹first name›,")).toBeInTheDocument(); // the audience's own card
-    expect(screen.getByText(/greeting match 67%/)).toBeInTheDocument();
+    // The style check is a set of named metrics (was: one sentence, "greeting match 67%").
+    expect(within(screen.getByRole("group", { name: "Greeting match" })).getByText("67%")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Phrases to use (one per line)"), "Project Falcon update");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(save).toHaveBeenCalled());
@@ -151,7 +152,8 @@ describe("SampleWorkspace", () => {
     wrap(api, <SampleWorkspace />);
     expect(await screen.findByText("Excluded")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Acme invoice"));
-    expect(screen.getByText(/27AAPFU0939F1ZV/)).toBeInTheDocument();
+    // The body opens in the reading pane (the list also shows its first line as a preview).
+    expect(within(screen.getByLabelText("Reading pane")).getByText(/27AAPFU0939F1ZV/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "See what Vanimo stored" }));
     expect(await screen.findAllByText(/Our GSTIN is \[GSTIN\]/, { selector: "pre" })).toHaveLength(2);
     expect(screen.getByText(/⟦ME.full⟧/)).toBeInTheDocument();

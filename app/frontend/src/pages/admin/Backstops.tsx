@@ -6,9 +6,34 @@ import {
   MessageBarBody,
   MessageBarTitle,
   Spinner,
+  tokens,
 } from "@fluentui/react-components";
-import { ShieldCheckmark20Regular } from "@fluentui/react-icons";
-import { useCallback, useEffect, useState } from "react";
+import {
+  CheckmarkCircle16Filled,
+  CheckmarkCircle16Regular,
+  Circle16Regular,
+  Clock16Regular,
+  Cloud16Regular,
+  Cloud20Regular,
+  CloudArrowUp16Regular,
+  Database20Regular,
+  Delete16Regular,
+  DismissCircle16Filled,
+  DocumentSearch16Regular,
+  DocumentSearch20Regular,
+  Filter16Regular,
+  History16Regular,
+  PlugDisconnected16Regular,
+  ScanText16Regular,
+  ScanText20Regular,
+  Shield16Regular,
+  Shield20Regular,
+  ShieldCheckmark16Regular,
+  ShieldCheckmark20Regular,
+  ShieldError20Regular,
+  Warning16Filled,
+} from "@fluentui/react-icons";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type { BackstopEvent, BackstopKey, BackstopProbe, BackstopStatus } from "../../api/client";
 import { useApi } from "../../api/context";
 import { announceMeChanged } from "../../shell/events";
@@ -16,13 +41,14 @@ import {
   absoluteTime,
   DataTable,
   EmptyState,
-  KeyValueList,
+  IconTile,
   Page,
   PageSkeleton,
   Pill,
   Rise,
   Section,
-  StatusDot,
+  Stat,
+  StatStrip,
   Td,
   Time,
   type Tone,
@@ -33,21 +59,51 @@ import {
 import { errorText } from "../Home";
 
 const useStyles = makeStyles({
-  name: { ...typo.itemTitle, color: vt.text1, display: "block" },
-  role: { ...typo.meta, color: vt.text2, display: "block", maxWidth: "48ch" },
-  modeLabel: { ...typo.meta, color: vt.text3, display: "block", marginTop: "4px" },
-  probes: { display: "grid", gap: "8px", minWidth: "220px", "@media (max-width: 639px)": { minWidth: 0 } },
-  probe: { display: "grid", gap: "2px" },
-  probeHead: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" },
+  // Inside a flush card the table drops its own card edge (never a card in a card).
+  checks: { listStyle: "none", margin: 0, padding: 0, display: "grid" },
+  check: {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    alignItems: "start",
+    columnGap: "14px",
+    rowGap: "12px",
+    padding: "16px",
+    borderTop: `1px solid ${vt.borderSubtle}`,
+    ":first-child": { borderTopColor: "transparent" },
+    "@media (max-width: 639px)": { gridTemplateColumns: "auto minmax(0, 1fr)" },
+  },
+  checkText: { display: "grid", gap: "2px", minWidth: 0 },
+  name: { ...typo.itemTitle, color: vt.text1 },
+  role: { ...typo.meta, color: vt.text2, maxWidth: "68ch" },
+  facts: { display: "flex", gap: "4px 16px", flexWrap: "wrap", ...typo.meta, color: vt.text3, marginTop: "6px" },
+  fact: { display: "inline-flex", alignItems: "flex-start", gap: "5px", minWidth: 0, "& > svg": { flexShrink: 0, marginTop: "1px" } },
+  mode: { "@media (max-width: 639px)": { gridColumn: "2", gridRow: "2", justifySelf: "start" } },
+  // The last service check: a well under the check's description.
+  probes: {
+    gridColumn: "2 / -1",
+    display: "grid",
+    gap: "10px",
+    padding: "10px 12px",
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: vt.inset,
+    border: `1px solid ${vt.borderSubtle}`,
+    minWidth: 0,
+  },
+  probe: { display: "grid", gridTemplateColumns: "16px minmax(0, 1fr)", gap: "8px", alignItems: "start" },
+  probeIcon: { marginTop: "1px", display: "inline-flex" },
+  probeBody: { display: "grid", gap: "2px", minWidth: 0 },
+  probeHead: { display: "flex", gap: "8px", alignItems: "baseline", flexWrap: "wrap", ...typo.meta, fontWeight: 500 },
   ms: { ...typo.label, ...typo.tabular, fontWeight: 400, color: vt.text3 },
   probeText: { ...typo.meta, color: vt.text1 },
-  quiet: { ...typo.meta, color: vt.text3 },
+  notChecked: { gridColumn: "2 / -1", display: "inline-flex", alignItems: "center", gap: "6px", ...typo.meta, color: vt.text3 },
   ref: { ...typo.mono, color: vt.text3, display: "block" },
   code: { ...typo.mono },
-  checkCell: { display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" },
-  stage: { display: "block", color: vt.text1 },
+  eventCheck: { display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", gap: "10px", alignItems: "center", minWidth: 0 },
+  eventText: { display: "grid", minWidth: 0 },
+  stage: { ...typo.itemTitle, color: vt.text1, display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" },
   outcome: { display: "block", color: vt.text2 },
   found: { ...typo.tabular, color: vt.text1 },
+  when: { display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap", "& > svg": { color: vt.text3 } },
 });
 
 const NAMES: Record<BackstopKey | "guardrail_india", string> = {
@@ -63,6 +119,13 @@ const ROLE: Record<BackstopKey, string> = {
   macie: "Scans a daily copy of the redacted text; a finding pauses Vanimo for the organisation.",
 };
 
+/** Each check's own icon, so the three read apart at a glance (20px in the checks card, 16px in rows). */
+const ICON: Record<BackstopKey, { icon20: ReactElement; icon16: ReactElement }> = {
+  comprehend: { icon20: <ScanText20Regular />, icon16: <ScanText16Regular /> },
+  guardrail: { icon20: <Shield20Regular />, icon16: <Shield16Regular /> },
+  macie: { icon20: <DocumentSearch20Regular />, icon16: <DocumentSearch16Regular /> },
+};
+
 const STAGE: Record<BackstopEvent["stage"], string> = {
   redaction: "Redaction",
   model_input: "Sent to the model",
@@ -76,12 +139,31 @@ const OUTCOME: Record<BackstopEvent["outcome"], string> = {
   unavailable: "Check unavailable",
 };
 
+/** A caught event's tile tone: a finding needs attention, a block did its job, unavailable is neutral. */
+const OUTCOME_TONE: Record<BackstopEvent["outcome"], Tone> = { finding: "danger", blocked: "warning", unavailable: "neutral" };
+
 const SEVERITY: Record<NonNullable<BackstopEvent["severity"]>, string> = { low: "Low", medium: "Medium", high: "High" };
 
 const PROBE: Record<BackstopProbe["state"], [Tone, string]> = {
   ok: ["success", "Passed"],
   warn: ["warning", "Warning"],
   fail: ["danger", "Failed"],
+};
+
+const PROBE_ICON: Record<BackstopProbe["state"], ReactElement> = {
+  ok: <CheckmarkCircle16Filled style={{ color: vt.success }} aria-hidden />,
+  warn: <Warning16Filled style={{ color: vt.warning }} aria-hidden />,
+  fail: <DismissCircle16Filled style={{ color: vt.danger }} aria-hidden />,
+};
+
+const TONE_TEXT: Record<Tone, string> = {
+  neutral: vt.text2,
+  accent: vt.accent,
+  blue: vt.info,
+  purple: vt.purple,
+  success: vt.success,
+  warning: vt.warning,
+  danger: vt.danger,
 };
 
 /** One probe result in plain words. */
@@ -161,26 +243,34 @@ export function Backstops() {
       <PageSkeleton label="Loading…" />
     );
 
-  const spin = (what: Work) => (working === what ? <Spinner size="extra-tiny" aria-hidden /> : undefined);
+  const spin = (what: Work, icon?: ReactElement) => (working === what ? <Spinner size="extra-tiny" aria-hidden /> : icon);
   const probesFor = (key: BackstopKey) =>
     (probes ?? []).filter((p) => p.key === key || (key === "guardrail" && p.key === "guardrail_india"));
+  const onAws = status.backstops.filter((b) => b.mode === "aws").length;
+  const offline = status.backstops.length - onAws;
+  const toRemove = status.events.filter((e) => !e.purgedAt).reduce((n, e) => n + e.flaggedItems, 0);
 
   return (
     <Page
       title="Redaction checks"
       eyebrow={
         status.paused ? (
-          <StatusDot tone="warning">Paused</StatusDot>
+          <Pill tone="warning" dot>
+            Paused
+          </Pill>
         ) : (
-          <StatusDot tone="success">Running: no open findings.</StatusDot>
+          <Pill tone="success" dot>
+            Running: no open findings
+          </Pill>
         )
       }
-      description="Extra AWS checks on top of Vanimo's own redaction. Each one fails closed: if it can't run, nothing goes through unchecked."
+      description="Extra AWS checks on top of Vanimo's own redaction: if one can't run, nothing goes through unchecked."
+      info="Each check fails closed. Check the services sends made-up test text (no one's data) to each one; exporting writes today's snapshot for Macie to scan."
       actions={
         <>
           <Button
             disabled={busy}
-            icon={spin("export")}
+            icon={spin("export", <CloudArrowUp16Regular />)}
             onClick={() =>
               void act(async () => {
                 const r = await api.exportSnapshots();
@@ -194,7 +284,7 @@ export function Backstops() {
           </Button>
           <Button
             disabled={busy}
-            icon={spin("probe")}
+            icon={spin("probe", <ShieldCheckmark16Regular />)}
             onClick={() =>
               void act(async () => {
                 setProbes(await api.probeBackstops());
@@ -246,75 +336,140 @@ export function Backstops() {
       {note && (
         <Rise visible appear>
           <div role="status">
-            <StatusDot tone="success">{note}</StatusDot>
+            <MessageBar intent="success">
+              <MessageBarBody>{note}</MessageBarBody>
+            </MessageBar>
           </div>
         </Rise>
       )}
 
-      <Section title="Checks" description="Each check, how it runs here, and the result of the last service check on this page.">
-        <DataTable label="Redaction checks" columns={[{ label: "Check" }, { label: "Runs as" }, { label: "Last service check" }]}>
+      <StatStrip label="At a glance">
+        <Stat
+          icon={<Cloud20Regular />}
+          value={`${onAws} of ${status.backstops.length}`}
+          label="Checks running on AWS"
+          hint={offline ? `${offline} on the offline stand-in` : "None on the offline stand-in"}
+          hintTone={offline ? "warning" : undefined}
+        />
+        <Stat
+          icon={<ShieldError20Regular />}
+          tone={status.events.length ? "warning" : "success"}
+          value={status.events.length}
+          label="Caught"
+          hint={
+            toRemove
+              ? `${toRemove} flagged ${toRemove === 1 ? "item" : "items"} to remove`
+              : "Types and counts only, never values"
+          }
+          hintTone={toRemove ? "danger" : undefined}
+        />
+        <Stat
+          icon={<Database20Regular />}
+          tone="blue"
+          value={status.mySnapshot ? status.mySnapshot.items : "–"}
+          label="Items in your snapshot"
+          hint={
+            status.mySnapshot ? (
+              <>
+                Exported <Time iso={status.mySnapshot.exportedAt} />
+              </>
+            ) : (
+              "Not exported yet"
+            )
+          }
+        />
+      </StatStrip>
+
+      <Section
+        variant="card"
+        flush
+        icon={<ShieldCheckmark20Regular />}
+        title="Checks"
+        description="Each check, how it runs here, and the result of the last service check on this page."
+      >
+        <ul className={styles.checks} aria-label="Redaction checks">
           {status.backstops.map((b) => {
             const results = probesFor(b.key);
             return (
-              <Tr key={b.key}>
-                <Td primary>
+              <li key={b.key} className={styles.check}>
+                <IconTile icon={ICON[b.key].icon20} tone="accent" size={36} />
+                <div className={styles.checkText}>
                   <span className={styles.name}>{NAMES[b.key]}</span>
                   <span className={styles.role}>{ROLE[b.key]}</span>
-                </Td>
-                <Td label="Runs as">
-                  <Pill tone={b.mode === "aws" ? "neutral" : "warning"}>{b.mode === "aws" ? "AWS" : "Offline stand-in"}</Pill>
-                  <span className={styles.modeLabel}>{b.label}</span>
-                </Td>
-                <Td label="Last service check">
-                  {results.length === 0 ? (
-                    <span className={styles.quiet}>Not checked yet</span>
+                  <span className={styles.facts}>
+                    <span className={styles.fact}>
+                      {b.mode === "aws" ? <Cloud16Regular aria-hidden /> : <PlugDisconnected16Regular aria-hidden />}
+                      {b.label}
+                    </span>
+                    {b.key === "comprehend" && (
+                      <span className={styles.fact}>
+                        <Filter16Regular aria-hidden />
+                        {status.comprehendScope === "all" ? "Checks every item" : "Checks only items with identifiers"}
+                      </span>
+                    )}
+                    {b.key === "macie" && (
+                      <span className={styles.fact}>
+                        <History16Regular aria-hidden />
+                        Snapshots rewritten every {status.snapshotEveryHours} hours
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <span className={styles.mode}>
+                  {b.mode === "aws" ? (
+                    <Pill icon={<Cloud16Regular />}>AWS</Pill>
                   ) : (
-                    <div className={styles.probes}>
-                      {results.map((p) => {
-                        const [tone, word] = PROBE[p.state];
-                        return (
-                          <div key={p.key} className={styles.probe}>
+                    <Pill icon={<PlugDisconnected16Regular />}>Offline stand-in</Pill>
+                  )}
+                </span>
+                {results.length === 0 ? (
+                  <span className={styles.notChecked}>
+                    <Circle16Regular aria-hidden />
+                    Not checked yet
+                  </span>
+                ) : (
+                  <div className={styles.probes} aria-label={`Last service check: ${NAMES[b.key]}`} role="group">
+                    {results.map((p) => {
+                      const [tone, word] = PROBE[p.state];
+                      return (
+                        <div key={p.key} className={styles.probe}>
+                          <span className={styles.probeIcon}>{PROBE_ICON[p.state]}</span>
+                          <span className={styles.probeBody}>
                             <span className={styles.probeHead}>
-                              <StatusDot tone={tone}>{p.key === "guardrail_india" ? `${word} · Indian IDs` : word}</StatusDot>
+                              <span style={{ color: TONE_TEXT[tone] }}>
+                                {p.key === "guardrail_india" ? `${word} · Indian IDs` : word}
+                              </span>
                               <span className={styles.ms}>{p.ms} ms</span>
                             </span>
                             <span className={styles.probeText}>{probeText(p)}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </Td>
-              </Tr>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </li>
             );
           })}
-        </DataTable>
-        <KeyValueList
-          items={[
-            ["Comprehend checks", status.comprehendScope === "all" ? "Every item" : "Only items with identifiers"],
-            ["Snapshots", `Rewritten every ${status.snapshotEveryHours} hours`],
-            [
-              "Your snapshot",
-              status.mySnapshot ? (
-                <>
-                  {status.mySnapshot.items} items · exported <Time iso={status.mySnapshot.exportedAt} />
-                </>
-              ) : (
-                "Not exported yet"
-              ),
-            ],
-          ]}
-        />
+        </ul>
       </Section>
 
-      <Section title="What the checks caught" description="Types and counts only: never the values themselves.">
+      <Section
+        variant="card"
+        flush
+        icon={<ShieldError20Regular />}
+        title="What the checks caught"
+        count={status.events.length > 0 ? status.events.length : undefined}
+        description="Types and counts only: never the values themselves."
+      >
         {status.events.length === 0 ? (
-          <EmptyState icon={<ShieldCheckmark20Regular />} title="Nothing caught yet">
+          <EmptyState icon={<ShieldCheckmark20Regular />} tone="success" title="Nothing caught yet" center>
             When a check blocks something or finds personal details, the type and count appear here.
           </EmptyState>
         ) : (
           <DataTable
             label="Caught"
+            embedded
             columns={[
               { label: "When" },
               { label: "Check" },
@@ -326,19 +481,27 @@ export function Backstops() {
             {status.events.map((e, i) => (
               <Tr key={`${e.at}-${i}`}>
                 <Td label="When" numeric>
-                  <Time iso={e.at} />
+                  <span className={styles.when}>
+                    <Clock16Regular aria-hidden />
+                    <Time iso={e.at} />
+                  </span>
                 </Td>
                 <Td label="Check">
-                  <span className={styles.checkCell}>
-                    <span className={styles.stage}>{NAMES[e.source]}</span>
-                    {e.severity && (
-                      <Pill tone={e.severity === "high" ? "danger" : "warning"}>{SEVERITY[e.severity]} severity</Pill>
-                    )}
+                  <span className={styles.eventCheck}>
+                    <IconTile icon={ICON[e.source].icon16} tone={OUTCOME_TONE[e.outcome]} size={28} />
+                    <span className={styles.eventText}>
+                      <span className={styles.stage}>
+                        {NAMES[e.source]}
+                        {e.severity && (
+                          <Pill tone={e.severity === "high" ? "danger" : "warning"}>{SEVERITY[e.severity]} severity</Pill>
+                        )}
+                      </span>
+                      <span className={styles.outcome}>
+                        {STAGE[e.stage]} · {OUTCOME[e.outcome] ?? e.outcome}
+                      </span>
+                      <span className={styles.ref}>{e.ref}</span>
+                    </span>
                   </span>
-                  <span className={styles.outcome}>
-                    {STAGE[e.stage]} · {OUTCOME[e.outcome] ?? e.outcome}
-                  </span>
-                  <span className={styles.ref}>{e.ref}</span>
                 </Td>
                 <Td label="Found">
                   <span className={styles.found}>{kindsText(e.kinds)}</span>
@@ -348,13 +511,15 @@ export function Backstops() {
                 </Td>
                 <Td actions>
                   {e.purgedAt ? (
-                    <StatusDot>Removed</StatusDot>
+                    <Pill tone="success" icon={<CheckmarkCircle16Regular />}>
+                      Removed
+                    </Pill>
                   ) : (
                     e.flaggedItems > 0 && (
                       <Button
                         size="small"
                         disabled={busy}
-                        icon={spin(`purge-${e.id}`)}
+                        icon={spin(`purge-${e.id}`, <Delete16Regular />)}
                         onClick={() =>
                           void act(async () => {
                             const r = await api.purgeFlagged(e.id);

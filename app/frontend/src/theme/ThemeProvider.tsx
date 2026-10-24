@@ -3,6 +3,7 @@
 import { AriaLiveAnnouncer, FluentProvider } from "@fluentui/react-components";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useGlobalStyles } from "./global";
+import { styleHooks } from "./styleHooks";
 import { vanimoDark, vanimoLight } from "./theme";
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -73,7 +74,7 @@ export function VanimoThemeProvider({ children }: { children: ReactNode }) {
       {/* No className here: Fluent copies the provider's classes onto every portal mount node (menus,
           tooltips, the live announcer), so a layout style on it would cover the page. The shell and
           the signed-out screens paint the frame themselves. */}
-      <FluentProvider theme={mode === "dark" ? vanimoDark : vanimoLight}>
+      <FluentProvider theme={mode === "dark" ? vanimoDark : vanimoLight} customStyleHooks_unstable={styleHooks}>
         <AriaLiveAnnouncer>{children}</AriaLiveAnnouncer>
       </FluentProvider>
     </ThemeContext.Provider>

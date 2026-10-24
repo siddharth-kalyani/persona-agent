@@ -1,62 +1,65 @@
 /** Status and progress: dots and pills (never colour alone: always with a word), empty states that
  * name the next step, skeletons that mirror the layout (shown only after 300 ms, so fast answers
- * never flash), and honest step lists for long AI work. */
-import { makeStyles, mergeClasses, Skeleton, SkeletonItem, Spinner, tokens } from "@fluentui/react-components";
-import { CheckmarkCircle16Filled, DismissCircle16Filled } from "@fluentui/react-icons";
-import { useEffect, useState, type ReactNode } from "react";
+ * never flash), honest step lists for long AI work, and the drafting-engine badge. */
+import { makeStyles, mergeClasses, Skeleton, SkeletonItem, Spinner, tokens, Tooltip } from "@fluentui/react-components";
+import {
+  CheckmarkCircle16Filled,
+  DismissCircle16Filled,
+  PlugDisconnected16Regular,
+  ShieldCheckmark16Regular,
+} from "@fluentui/react-icons";
+import { useEffect, useState, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import { vt } from "../theme/theme";
 import { typo } from "../theme/typography";
+import { TONES, type Tone } from "./tones";
+import { IconTile } from "./visual";
 
-export type Tone = "neutral" | "accent" | "success" | "warning" | "danger";
+export type { Tone };
 
 const useStyles = makeStyles({
   dotWrap: { display: "inline-flex", alignItems: "center", gap: "6px", ...typo.meta, color: vt.text2 },
   dot: { width: "8px", height: "8px", borderRadius: "50%", flexShrink: 0 },
   neutral: { backgroundColor: vt.dot },
   accent: { backgroundColor: vt.accent },
+  blue: { backgroundColor: vt.info },
+  purple: { backgroundColor: vt.purple },
   success: { backgroundColor: vt.success },
   warning: { backgroundColor: vt.warning },
   danger: { backgroundColor: vt.danger },
   pill: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "4px",
-    minHeight: "20px",
+    gap: "5px",
+    minHeight: "22px",
     maxWidth: "100%",
-    padding: "1px 6px",
-    borderRadius: tokens.borderRadiusSmall,
+    padding: "2px 8px",
+    borderRadius: "6px",
     ...typo.label,
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
-    border: "1px solid transparent",
+    "& > svg": { flexShrink: 0 },
   },
+  pillWithIcon: { paddingLeft: "6px" },
   pillWrap: { whiteSpace: "normal", overflowWrap: "anywhere" },
-  pillNeutral: { backgroundColor: vt.inset, color: vt.text2, border: `1px solid ${tokens.colorNeutralStroke2}` },
-  pillAccent: { backgroundColor: vt.accentTint, color: vt.accentTintText },
-  pillSuccess: { backgroundColor: vt.successTint, color: vt.success },
-  pillWarning: { backgroundColor: vt.warningTint, color: vt.warning },
-  pillDanger: { backgroundColor: vt.dangerTint, color: vt.danger },
-  empty: { display: "grid", gap: "8px", justifyItems: "start", maxWidth: "460px", padding: "24px 0" },
-  emptyIcon: {
-    width: "40px",
-    height: "40px",
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: vt.inset,
-    border: `1px solid ${tokens.colorNeutralStroke3}`,
-    display: "grid",
-    placeItems: "center",
-    color: vt.text2,
-    fontSize: "20px",
-    marginBottom: "4px",
-  },
+  pillDot: { width: "6px", height: "6px", borderRadius: "50%", flexShrink: 0, backgroundColor: "currentColor" },
+  pillNeutral: { backgroundColor: TONES.neutral.bg, color: TONES.neutral.fg },
+  pillAccent: { backgroundColor: TONES.accent.bg, color: TONES.accent.fg },
+  pillBlue: { backgroundColor: TONES.blue.bg, color: TONES.blue.fg },
+  pillPurple: { backgroundColor: TONES.purple.bg, color: TONES.purple.fg },
+  pillSuccess: { backgroundColor: TONES.success.bg, color: TONES.success.fg },
+  pillWarning: { backgroundColor: TONES.warning.bg, color: TONES.warning.fg },
+  pillDanger: { backgroundColor: TONES.danger.bg, color: TONES.danger.fg },
+  empty: { display: "grid", gap: "6px", justifyItems: "start", maxWidth: "460px", padding: "28px 0" },
+  emptyCenter: { justifyItems: "center", textAlign: "center", marginInline: "auto", paddingInline: "16px" },
+  emptyIcon: { marginBottom: "8px" },
   emptyTitle: { ...typo.sectionTitle, color: vt.text1, margin: 0 },
   emptyBody: { ...typo.body, color: vt.text2, margin: 0 },
   emptyAction: { marginTop: "8px", display: "flex", gap: "8px", flexWrap: "wrap" },
   skeleton: { display: "grid", gap: "12px" },
   skelTitle: { width: "220px", height: "24px" },
   skelLine: { height: "14px" },
-  skelRow: { height: "48px", borderRadius: tokens.borderRadiusMedium },
+  skelRow: { height: "52px", borderRadius: tokens.borderRadiusLarge },
   steps: { listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "6px" },
   step: { display: "grid", gridTemplateColumns: "16px minmax(0, 1fr)", gap: "10px", alignItems: "start", ...typo.meta },
   stepIcon: { height: "18px", display: "grid", placeItems: "center" },
@@ -84,45 +87,84 @@ export function Pill({
   tone = "neutral",
   icon,
   wrap,
+  dot,
   children,
   className,
+  ...rest
 }: {
   tone?: Tone;
   icon?: ReactNode;
   /** Let long text wrap (e.g. "Writing to: someone outside your organisation") instead of truncating. */
   wrap?: boolean;
+  /** A small dot in the tone's colour before the text (status: "Live", "Paused"). */
+  dot?: boolean;
   children: ReactNode;
   className?: string;
-}) {
+} & Omit<HTMLAttributes<HTMLSpanElement>, "children" | "className"> & { ref?: Ref<HTMLSpanElement> }) {
   const s = useStyles();
-  const t = { neutral: s.pillNeutral, accent: s.pillAccent, success: s.pillSuccess, warning: s.pillWarning, danger: s.pillDanger }[tone];
+  const t = {
+    neutral: s.pillNeutral,
+    accent: s.pillAccent,
+    blue: s.pillBlue,
+    purple: s.pillPurple,
+    success: s.pillSuccess,
+    warning: s.pillWarning,
+    danger: s.pillDanger,
+  }[tone];
   return (
-    <span className={mergeClasses(s.pill, t, wrap && s.pillWrap, className)}>
+    <span {...rest} className={mergeClasses(s.pill, t, Boolean(icon || dot) && s.pillWithIcon, wrap && s.pillWrap, className)}>
+      {dot && <span className={s.pillDot} aria-hidden />}
       {icon}
       {children}
     </span>
   );
 }
 
+/** What drafts and extraction run on: the labelled offline stand-in, or Claude on Amazon Bedrock. The
+ * explanation sits in a tooltip (and is the badge's description for screen readers). */
+export function EngineBadge({ offline, detail }: { offline: boolean; detail?: string }) {
+  const text =
+    detail ?? (offline ? "No AI model is connected yet: this runs on rules, clearly labelled." : "Runs on Claude in Amazon Bedrock.");
+  return (
+    <Tooltip content={text} relationship="description" withArrow>
+      {offline ? (
+        <Pill tabIndex={0} icon={<PlugDisconnected16Regular />}>
+          Offline stand-in
+        </Pill>
+      ) : (
+        <Pill tabIndex={0} tone="accent" icon={<ShieldCheckmark16Regular />}>
+          Claude on Bedrock
+        </Pill>
+      )}
+    </Tooltip>
+  );
+}
+
 export function EmptyState({
   icon,
+  tone = "accent",
   title,
   children,
   action,
   headingLevel = 3,
+  center,
 }: {
+  /** A 20px icon: it sits in a tinted tile. */
   icon?: ReactNode;
+  tone?: Tone;
   title: ReactNode;
   children?: ReactNode;
   action?: ReactNode;
   /** 2 directly under the page title, 3 inside a section, 4 inside a sub-section. */
   headingLevel?: 2 | 3 | 4;
+  /** Centred, for an empty card or pane. */
+  center?: boolean;
 }) {
   const s = useStyles();
   const Heading = (`h${headingLevel}` as "h2" | "h3" | "h4");
   return (
-    <div className={s.empty}>
-      {icon && <div className={s.emptyIcon} aria-hidden>{icon}</div>}
+    <div className={mergeClasses(s.empty, center && s.emptyCenter)}>
+      {icon && <IconTile icon={icon} tone={tone} size={40} className={s.emptyIcon} />}
       <Heading className={s.emptyTitle}>{title}</Heading>
       {children && <p className={s.emptyBody}>{children}</p>}
       {action && <div className={s.emptyAction}>{action}</div>}

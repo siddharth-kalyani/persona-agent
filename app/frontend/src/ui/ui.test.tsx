@@ -1,4 +1,5 @@
-import { FluentProvider, Popover, PopoverSurface, PopoverTrigger, webLightTheme } from "@fluentui/react-components";
+import { AnnounceProvider, Button, FluentProvider, Input, Popover, PopoverSurface, PopoverTrigger, webLightTheme } from "@fluentui/react-components";
+import { Delete16Regular } from "@fluentui/react-icons";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +8,9 @@ import { activePath, visibleDestinations } from "../shell/nav";
 import { useThemePreference, VanimoThemeProvider } from "../theme/ThemeProvider";
 import { vanimoDark, vanimoLight, vt } from "../theme/theme";
 import { relativeTime } from "./data";
+import { IconAction, initialsOf } from "./visual";
+import { DraftView } from "../drafting/DraftView";
+import type { Draft } from "../api/client";
 
 describe("relativeTime", () => {
   const now = new Date("2026-10-23T12:00:00");
@@ -55,6 +59,79 @@ describe("theme", () => {
     expect(localStorage.getItem("vanimo.theme")).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
     localStorage.removeItem("vanimo.theme");
+  });
+});
+
+describe("initialsOf", () => {
+  it("uses words that start with a letter and ignores brackets", () => {
+    expect(initialsOf("Meera Iyer")).toBe("MI");
+    expect(initialsOf("Kestrel Colleague 01")).toBe("KC");
+    expect(initialsOf("Nisha (home)")).toBe("N");
+    expect(initialsOf("")).toBe("");
+  });
+});
+
+describe("draft checks", () => {
+  it("are announced when they appear: blocking ones at once", async () => {
+    const announce = vi.fn();
+    const draft = {
+      id: "d1", text: "Hi", generator: "offline", label: "Offline stand-in", modelId: "m", tier: "default", routeReason: "default",
+      audience: { relationship: "external", label: "someone outside your organisation", to: [], cc: [], internal: 0, external: 1 },
+      styleSlice: "", learned: false, basedOn: 0, exemplars: 0, checks: [], insertAllowed: false, oneOff: false,
+      timing: { totalMs: 1, modelMs: null },
+    } as unknown as Draft; // prettier-ignore
+    render(
+      <AnnounceProvider value={{ announce }}>
+        <DraftView
+          draft={draft}
+          text="Hi"
+          onTextChange={() => undefined}
+          checks={[
+            { code: "fill_in", severity: "info", message: "Fill in [x]." },
+            { code: "payment_change", severity: "block", message: "This email asks to change payment details." },
+          ]}
+          confirmed={false}
+          onConfirm={() => undefined}
+          actions={null}
+        />
+      </AnnounceProvider>,
+    );
+    expect(announce).toHaveBeenCalledWith("Check before sending: This email asks to change payment details.", { alert: true });
+    expect(announce).toHaveBeenCalledWith("Note: Fill in [x].", { polite: true });
+    expect(screen.getByRole("group", { name: "Check before sending" })).toHaveTextContent("change payment details");
+  });
+});
+
+describe("app-wide Fluent styling", () => {
+  it("gives fields one even hairline and secondary buttons the raised fill, without touching page styles", () => {
+    render(
+      <VanimoThemeProvider>
+        <Input aria-label="Name" />
+        <Button>Save</Button>
+        <Button appearance="primary" style={{ color: "red" }}>
+          Go
+        </Button>
+      </VanimoThemeProvider>,
+    );
+    const field = screen.getByRole("textbox", { name: "Name" }).parentElement!;
+    expect(field.style.getPropertyValue("--colorNeutralStrokeAccessible")).toBe(vt.borderStrong);
+    expect(field.style.getPropertyValue("--colorNeutralBackground1")).toBe(vt.field);
+    expect(screen.getByRole("button", { name: "Save" }).style.getPropertyValue("--colorNeutralBackground1")).toBe(vt.button);
+    // A page's own inline style still wins, and primary buttons keep the brand fill.
+    const go = screen.getByRole("button", { name: "Go" });
+    expect(go.style.color).toBe("red");
+    expect(go.style.getPropertyValue("--colorNeutralBackground1")).toBe("");
+  });
+
+  it("names icon-only actions by their tooltip", async () => {
+    const onClick = vi.fn();
+    render(
+      <VanimoThemeProvider>
+        <IconAction icon={<Delete16Regular />} label="Discard" onClick={onClick} />
+      </VanimoThemeProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
 

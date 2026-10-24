@@ -22,13 +22,15 @@ const srOnly = {
 
 const useTableStyles = makeStyles({
   wrap: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    border: `1px solid ${vt.border}`,
     borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: vt.shadowCard,
     // Clips to the radius; a table that still can't fit scrolls inside itself, never the page.
     overflowX: "auto",
     minWidth: 0,
   },
+  embedded: { border: "none", borderRadius: 0, boxShadow: "none" },
   table: {
     width: "100%",
     borderCollapse: "collapse",
@@ -41,13 +43,14 @@ const useTableStyles = makeStyles({
     color: vt.text3,
     textAlign: "left",
     whiteSpace: "nowrap",
-    padding: "10px 14px 8px",
-    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    padding: "10px 16px",
+    backgroundColor: vt.inset,
+    borderBottom: `1px solid ${vt.borderSubtle}`,
   },
   thEnd: { textAlign: "right" },
   body: { [PHONE]: { display: "block" } },
   tr: {
-    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    borderTop: `1px solid ${vt.borderSubtle}`,
     [PHONE]: {
       display: "grid",
       gap: "6px",
@@ -58,12 +61,12 @@ const useTableStyles = makeStyles({
   td: {
     ...typo.meta,
     color: vt.text2,
-    padding: "12px 14px",
+    padding: "12px 16px",
     verticalAlign: "middle",
     overflowWrap: "anywhere",
     [PHONE]: { display: "block", padding: 0 },
   },
-  dense: { padding: "8px 14px", [PHONE]: { padding: 0 } },
+  dense: { padding: "8px 16px", [PHONE]: { padding: 0 } },
   primary: { ...typo.body, color: vt.text1, minWidth: "140px", [PHONE]: { minWidth: 0 } },
   end: { textAlign: "right", [PHONE]: { textAlign: "left" } },
   numeric: { ...typo.tabular, whiteSpace: "nowrap" },
@@ -100,16 +103,19 @@ export function DataTable({
   label,
   columns,
   children,
+  embedded,
   className,
 }: {
   label: string;
   columns: Column[];
   children: ReactNode;
+  /** Inside a card (`Section variant="card" flush`): no frame of its own. */
+  embedded?: boolean;
   className?: string;
 }) {
   const s = useTableStyles();
   return (
-    <div className={mergeClasses(s.wrap, className)}>
+    <div className={mergeClasses(s.wrap, embedded && s.embedded, className)}>
       <table className={s.table} aria-label={label}>
         <thead className={s.head}>
           <tr>

@@ -3,9 +3,10 @@
 #
 #   cd app/deploy/ec2 && sudo docker compose up -d --build
 #
-# Secrets and AWS resource IDs come from ./.env (copy .env.example; owned by root, chmod 600). Nothing
-# listens on a public port: the web app is on 127.0.0.1:8080, reached through an SSM tunnel. AWS access
-# comes from the instance role (IMDSv2, hop limit 2 so containers can reach it), never stored keys.
+# Secrets and AWS resource IDs come from ./.env (copy .env.example; owned by root, chmod 600). The web
+# app is on 127.0.0.1:8080, reached through an SSM tunnel; with CloudFront in front (VANIMO_WEB_BIND=0.0.0.0)
+# it also listens on the instance's private address, which the security group opens to CloudFront only.
+# AWS access comes from the instance role (IMDSv2, hop limit 2 so containers can reach it), never stored keys.
 name: vanimo
 
 x-logging: &logging
@@ -58,8 +59,10 @@ services:
       # No Entra (F11): password sign-in, and the sample workspace for every account.
       VANIMO_ENABLE_PASSWORD_AUTH: "true"
       VANIMO_SAMPLE_DATA: always
-      VANIMO_WEB_URL: http://localhost:8080
+      VANIMO_WEB_URL: ${VANIMO_WEB_URL:-http://localhost:8080}
       VANIMO_CORS_ORIGINS: "[]"  # same origin through Caddy
+      # Only Caddy reaches port 8000, and it sends exactly one X-Forwarded-For: the visitor's address.
+      FORWARDED_ALLOW_IPS: "*"
       VANIMO_REF_HMAC_KEY: ${VANIMO_REF_HMAC_KEY:?set VANIMO_REF_HMAC_KEY in .env}
       VANIMO_VAULT_MASTER_KEY: ${VANIMO_VAULT_MASTER_KEY:?set VANIMO_VAULT_MASTER_KEY in .env}
       # Claude on Bedrock and the three redaction backstops: the real services, never the stand-ins.
@@ -80,7 +83,7 @@ services:
     build: { context: ../../frontend }
     image: vanimo-web
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${VANIMO_WEB_BIND:-127.0.0.1}:8080:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:

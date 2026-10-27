@@ -1,9 +1,18 @@
-# Vanimo web server on the EC2 instance (F11). Plain HTTP on 127.0.0.1:8080 only: the founder reaches it
-# through an SSM port-forwarding tunnel (http://localhost:8080 on the laptop), so nothing is public and
-# no certificate is needed. Security headers match the CloudFront ones in app/infra/vanimo_infra/app_stack.py.
+# Vanimo web server on the EC2 instance (F11). Plain HTTP on port 8080, reached two ways: through an SSM
+# port-forwarding tunnel (http://localhost:8080 on the laptop), and from CloudFront over its VPC origin
+# (https://<distribution>.cloudfront.net; the security group admits only CloudFront, which terminates
+# HTTPS). Security headers match the CloudFront ones in app/infra/vanimo_infra/app_stack.py.
 {
 	admin off
 	auto_https off
+	servers {
+		# Only CloudFront and the tunnel can connect, so every peer may name the client. CloudFront sets
+		# CloudFront-Viewer-Address (ip:port; the distribution is IPv4 only, as an IPv6 address arrives
+		# without brackets and its port can't be split off). Through the tunnel there is no such header
+		# and the client is the connection's own address.
+		trusted_proxies static 0.0.0.0/0 ::/0
+		client_ip_headers CloudFront-Viewer-Address
+	}
 }
 
 :8080 {
@@ -16,7 +25,11 @@
 	}
 
 	handle /api/* {
-		reverse_proxy api:8000
+		reverse_proxy api:8000 {
+			# Exactly one address per visitor, never one a browser sent: the API's login throttle counts
+			# per client (uvicorn trusts this header from Caddy, FORWARDED_ALLOW_IPS in compose.yml).
+			header_up X-Forwarded-For {client_ip}
+		}
 	}
 
 	handle {

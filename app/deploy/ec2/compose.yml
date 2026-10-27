@@ -38,8 +38,9 @@ services:
   # One-shot on every `up`: create roles + schema (idempotent), then apply migrations. Also where
   # owner-only tools run, e.g. `sudo docker compose run --rm migrate python -m vanimo.ops.local_user
   # --email you@example.com --role superadmin` (prints a one-time password to your terminal only).
+  # Runs the image the api service builds: two services building one image name race at export
+  # ("image already exists" with Docker's containerd image store).
   migrate:
-    build: { context: ../../backend }
     image: vanimo-api
     command: ["sh", "-c", "python -m vanimo.ops.bootstrap_db && alembic upgrade head"]
     environment: *db-owner

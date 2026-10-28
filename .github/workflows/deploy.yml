@@ -2,14 +2,16 @@ name: deploy
 
 # Every push to main (a merged feature branch) ships to the EC2 instance (F14):
 #
-#   ci (the same tests as every branch) → images (API and web, built for the instance's Arm CPU, pushed
-#   to ECR, tagged with the commit) → deploy (the server is told through SSM Run Command to pull them and
-#   restart; it checks its own health and puts the previous release back if the new one fails).
+#   ci (the same tests as every branch) → images (API and web, built natively on GitHub's Arm runners for
+#   the instance's Arm CPU, pushed to ECR, tagged with the commit) → deploy (the server is told through SSM
+#   Run Command to pull them and restart; it checks its own health and puts the previous release back if the
+#   new one fails).
 #
 # No AWS keys are stored in GitHub. Each job gets a short-lived OIDC token from GitHub, which AWS exchanges
 # for the deploy role only when it comes from this repository's main branch (the role's trust policy).
 # Setup, once: app/deploy/ec2/README.md, section I. Until the repository variables exist, main still runs
-# its tests and is simply not deployed.
+# its tests and builds both images (so a broken image shows up now, not at the first deploy), without
+# storing them anywhere, and is not deployed.
 on:
   push:
     branches: [main]
@@ -32,11 +34,14 @@ jobs:
 
   images:
     needs: ci
-    if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
-    runs-on: ubuntu-latest
+    # GitHub's Arm runner, free for public repositories: the images are built natively for the t4g (Graviton)
+    # instance, with no CPU emulation.
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       id-token: write # the OIDC token AWS exchanges for the deploy role
+    env:
+      PUSH: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }} # "false" until the AWS side exists: build only
     strategy:
       matrix:
         include:
@@ -44,27 +49,27 @@ jobs:
           - { repository: vanimo-web, context: app/frontend }
     steps:
       - uses: actions/checkout@v5
-      - uses: aws-actions/configure-aws-credentials@v4
+      - if: env.PUSH == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           role-session-name: gh-${{ matrix.repository }}-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
-      - id: ecr
+      - if: env.PUSH == 'true'
+        id: ecr
         uses: aws-actions/amazon-ecr-login@v2
       - id: built
         name: Already built for this commit?
-        # Tags are immutable in ECR: re-running a deploy reuses the commit's images instead of failing.
+        # Tags are immutable in ECR: re-running a deploy reuses the commit's images instead of failing. Docker
+        # asks ECR directly (it is signed in by the step above), so the runner needs no AWS command line.
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ matrix.repository }}:${{ github.sha }}
         run: |
-          if aws ecr describe-images --repository-name "${{ matrix.repository }}" \
-               --image-ids imageTag="${GITHUB_SHA}" >/dev/null 2>&1; then
+          if [ "$PUSH" = true ] && docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
-      - if: steps.built.outputs.found == 'false'
-        uses: docker/setup-qemu-action@v3 # GitHub's runners are x86; QEMU lets them build Arm images
-        with:
-          platforms: arm64
       - if: steps.built.outputs.found == 'false'
         uses: docker/setup-buildx-action@v3
       - if: steps.built.outputs.found == 'false'
@@ -72,14 +77,18 @@ jobs:
         with:
           context: ${{ matrix.context }}
           platforms: linux/arm64 # the t4g (Graviton) instance
-          push: true
+          push: ${{ env.PUSH == 'true' }}
           provenance: false
-          tags: ${{ steps.ecr.outputs.registry }}/${{ matrix.repository }}:${{ github.sha }}
+          tags: >-
+            ${{ env.PUSH == 'true'
+                && format('{0}/{1}:{2}', steps.ecr.outputs.registry, matrix.repository, github.sha)
+                || format('{0}:check', matrix.repository) }}
           cache-from: type=gha,scope=${{ matrix.repository }}
           cache-to: type=gha,mode=max,scope=${{ matrix.repository }}
 
   deploy:
     needs: images
+    if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

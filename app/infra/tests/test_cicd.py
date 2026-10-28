@@ -39,7 +39,7 @@ def test_deploy_role_is_least_privilege() -> None:
     policy = cicd.github_deploy_policy()
     assert _actions(policy) == sorted([
         "ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload",
-        "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage", "ecr:DescribeImages",
+        "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage",
         "s3:PutObject", "s3:GetObject", "ssm:SendCommand", "ssm:GetCommandInvocation", "ssm:ListCommandInvocations",
     ])  # fmt: skip
     text = json.dumps(policy)

@@ -71,7 +71,8 @@ def github_deploy_policy() -> dict:
                 "Resource": "*",
             },
             {
-                # Push an image (layers, then the manifest) and check whether a commit's image exists.
+                # Push an image (layers, then the manifest), and read a manifest: whether a commit's image is
+                # already there (`docker manifest inspect`, so a re-run reuses it).
                 "Sid": "PushReleaseImages",
                 "Effect": "Allow",
                 "Action": [
@@ -81,7 +82,6 @@ def github_deploy_policy() -> dict:
                     "ecr:CompleteLayerUpload",
                     "ecr:PutImage",
                     "ecr:BatchGetImage",
-                    "ecr:DescribeImages",
                 ],
                 "Resource": _repo_arns(),
             },

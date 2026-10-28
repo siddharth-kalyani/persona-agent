@@ -196,7 +196,12 @@ Once this section is done, **every push to `main` ships itself**: GitHub runs th
 web images for the instance's Arm CPU, stores them in **ECR** (AWS's private image registry), then tells the
 instance through **SSM Run Command** to pull them and restart. `deploy.sh` on the instance runs the
 migrations, checks the new release's health and puts the previous release back if it fails. The workflow is
-`.github/workflows/deploy.yml`; until the GitHub variables in I7 exist, `main` only runs its tests.
+`.github/workflows/deploy.yml`; until the GitHub variables in I7 exist, `main` runs its tests and builds both
+images (stored nowhere), so a broken image shows up before the first deploy. The images are built on GitHub's
+Arm runners (free for public repositories), natively for the instance's CPU.
+
+The repository is public: fill in `<ACCOUNT_ID>`, `<INSTANCE_ID>` and the other placeholders **in the console
+only**. Never commit real account IDs, ARNs or `.env` values.
 
 No AWS keys are stored in GitHub. GitHub gives each run a signed, short-lived **OIDC token**; IAM trusts
 GitHub's token issuer (I1) and swaps a token for the deploy role (I4) only when it says "repository
@@ -242,9 +247,9 @@ I7. **Tell GitHub where to deploy** (GitHub → the repository → Settings → 
     | `DEPLOY_BUCKET` | the deploy bucket's name |
     | `DEPLOY_DIR` | `/opt/PersonaAgent` (the folder that holds `app/`) |
 
-I8. **First deploy**: GitHub → Actions → **deploy** → Run workflow (branch `main`). The first image build takes
-    15–25 minutes (GitHub's runners emulate the Arm CPU); later ones reuse the build cache. The run's summary
-    says which commit went out; the server's own output is in the "Deploy on the server" step.
+I8. **First deploy**: GitHub → Actions → **deploy** → Run workflow (branch `main`). The image builds take a few
+    minutes on GitHub's Arm runners and reuse their build cache after that. The run's summary says which
+    commit went out; the server's own output is in the "Deploy on the server" step.
 I9. **Going back**: revert the bad commit on `main` and push (the usual way: a new, tested release), or on the
     instance: `sudo bash /opt/PersonaAgent/app/deploy/ec2/deploy.sh <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com
     <an earlier commit SHA>`. `cat /opt/PersonaAgent/app/deploy/ec2/.deployed` shows what is running.

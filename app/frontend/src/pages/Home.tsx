@@ -1,6 +1,9 @@
-/** Home: what needs you, how far Vanimo is set up, and the facts it works from. A greeting with a one-
- * line summary, stat cards, a setup checklist until it's done, promises coming due, your last sent
- * emails, and your profile as Vanimo reads it. */
+/** Home: what needs you, how far Vanimo is set up, and the facts it works from.
+ *
+ * Until Vanimo knows how you write (F15), Home is one greeting and one card that does the next step
+ * (choose your sources, then learn your style, with live progress): nothing to read through, no counters
+ * full of zeros, no button that can't work yet. After that: a one-line summary, stat cards, the last setup
+ * step until you've drafted once, promises coming due, your last sent emails, and your profile. */
 import { Button, Link, makeStyles, MessageBar, MessageBarActions, MessageBarBody } from "@fluentui/react-components";
 import {
   ArrowRight16Regular,
@@ -24,6 +27,7 @@ import { useNavigate } from "react-router-dom";
 import { ApiError, type DraftingStatus, type DraftSummary, type LearningStatus, type Ledger, type Me } from "../api/client";
 import { useApi } from "../api/context";
 import { AUDIENCE } from "./commitments/Commitments";
+import { LearnFirst } from "./learning/LearnFirst";
 import {
   EmptyState,
   IconTile,
@@ -115,8 +119,9 @@ const ROLE_LABELS: Record<string, string> = {
   "Vanimo.SuperAdmin": "Super-admin",
 };
 
-/** Optional extras for the stats and checklist: each loads on its own and never blocks the page. */
-function useExtras() {
+/** Optional extras for the stats and checklist: each loads on its own and never blocks the page.
+ * `version`: bump it to read them again (after learning finishes). */
+function useExtras(version: number) {
   const api = useApi();
   const [learning, setLearning] = useState<LearningStatus | null>(null);
   const [drafting, setDrafting] = useState<DraftingStatus | null>(null);
@@ -132,7 +137,7 @@ function useExtras() {
     return () => {
       live = false;
     };
-  }, [api]);
+  }, [api, version]);
   return { learning, drafting, drafts, ledger };
 }
 
@@ -147,7 +152,8 @@ export function Home() {
   const navigate = useNavigate();
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { learning, drafting, drafts, ledger } = useExtras();
+  const [version, setVersion] = useState(0);
+  const { learning, drafting, drafts, ledger } = useExtras(version);
 
   useEffect(() => {
     let live = true;
@@ -171,7 +177,7 @@ export function Home() {
   if (!me) return <PageSkeleton label="Loading your profile…" />;
 
   const reviewDone = me.onboardingState !== "review_pending";
-  const learned = (learning?.stored.total ?? 0) > 0;
+  const learned = learning?.learned ?? false;
   const drafted = (drafts?.length ?? 0) > 0;
   const steps = [
     { done: reviewDone, label: "Choose what Vanimo learns from", detail: "Nothing is read beyond headers until you finish or skip this.", path: "/setup" },
@@ -201,6 +207,42 @@ export function Home() {
         ? `${ledger.dueSoon} ${ledger.dueSoon === 1 ? "promise is" : "promises are"} due soon.`
         : "Nothing is overdue.";
 
+  const sampleBar = me.dataSource === "sample" && (
+    <MessageBar intent="info">
+      <MessageBarBody>You're in the sample workspace: Kestrel Analytics, a fictional company.</MessageBarBody>
+      <MessageBarActions>
+        <Button size="small" onClick={() => navigate("/sample")}>
+          Open it
+        </Button>
+      </MessageBarActions>
+    </MessageBar>
+  );
+
+  // Not set up yet: the next step, and nothing else to read through.
+  if (learning && !learned)
+    return (
+      <Page
+        title={firstName ? `${greeting()}, ${firstName}` : greeting()}
+        documentTitle="Home"
+        eyebrow={today}
+        description={
+          reviewDone
+            ? "One more step: Vanimo learns how you write, then drafts sound like you."
+            : "Two quick steps, then Vanimo can draft in your voice."
+        }
+      >
+        {sampleBar}
+        <LearnFirst
+          state={{
+            reviewDone,
+            learningRunning: learning.run?.status === "running",
+            learningOutdated: learning.outdated,
+          }}
+          onLearned={() => setVersion((v) => v + 1)}
+        />
+      </Page>
+    );
+
   return (
     <Page
       title={firstName ? `${greeting()}, ${firstName}` : greeting()}
@@ -213,18 +255,7 @@ export function Home() {
         </Button>
       }
     >
-      {me.dataSource === "sample" && (
-        <MessageBar intent="info">
-          <MessageBarBody>
-            You're in the sample workspace: Kestrel Analytics, a fictional company.
-          </MessageBarBody>
-          <MessageBarActions>
-            <Button size="small" onClick={() => navigate("/sample")}>
-              Open it
-            </Button>
-          </MessageBarActions>
-        </MessageBar>
-      )}
+      {sampleBar}
 
       <StatStrip label="At a glance">
         <Stat
@@ -240,8 +271,8 @@ export function Home() {
           tone="neutral"
           value={learning ? learning.stored.total : "–"}
           label="Messages learned"
-          hint={learning ? `${learning.styleCards} style cards` : undefined}
-          onClick={() => navigate("/learning")}
+          hint="See your style"
+          onClick={() => navigate("/persona")}
         />
         <Stat
           icon={<Compose20Regular />}

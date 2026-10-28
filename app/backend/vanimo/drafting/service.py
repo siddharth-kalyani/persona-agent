@@ -1,8 +1,9 @@
 """The drafting service (MVP plan M3; architecture §7.2 S12, §9.1-§9.2).
 
-    rate limit → onboarding gate → exclusions on the conversation or chat (metadata) → live thread to L1
-    → persona pack (exemplars post-filtered) → model route → generate the body → output gate
-    → greeting + body + sign-off → re-hydrate for the owner → pre-send checks → store (L1)
+    rate limit → onboarding gate → learning gate (F15) → exclusions on the conversation or chat (metadata)
+    → live thread to L1 → the conversation's tone (learned, chosen, or judged now) → persona pack
+    (exemplars post-filtered) → model route → generate the body → output gate → greeting + body + sign-off
+    → re-hydrate for the owner → pre-send checks → store (L1)
 
 Nothing is ever sent: the draft goes back to the user's screen. Logs carry codes, counts and
 timings only. Emails (M3) and Teams chats (M5) go through the same steps; a chat has no subject,
@@ -32,8 +33,8 @@ from vanimo.drafting.generate import OFFLINE_LABEL, BedrockGenerator, Generator,
 from vanimo.drafting.pack import load_pack
 from vanimo.drafting.prompt import apply_rules, build
 from vanimo.gates import onboarding_state, require_pipeline_active
-from vanimo.learning import style
-from vanimo.learning.backfill import controls_version
+from vanimo.learning import style, tone_store, tones
+from vanimo.learning.backfill import controls_version, learning_state
 from vanimo.llm.router import Quality
 from vanimo.logs import get_logger
 from vanimo.redaction.marks import L1_MARKS
@@ -83,6 +84,9 @@ class DraftResult:
     extra: dict[str, Any] = field(default_factory=dict)
     channel: str = "email"
     chat_users: list[str] = field(default_factory=list)  # Teams 1:1: who "Open chat" opens it with
+    tone: str = "formal"
+    bucket: str = "email"
+    tone_basis: str | None = None  # why this tone: learned, your choice, or judged from this conversation now
 
     @property
     def insert_allowed(self) -> bool:
@@ -150,8 +154,40 @@ async def require_review(state: AppState, user: UserRef, source: WorkspaceSource
         raise DraftError("review_pending", 409)
 
 
+async def require_learned(state: AppState, user: UserRef, source: WorkspaceSource) -> None:
+    """No drafting before the user's style is learned (F15): a draft in a neutral voice isn't what Vanimo
+    promises, and its first impression matters. Learning again keeps the earlier result in use."""
+    async with user_tx(state.engine, user) as conn:
+        learning = await learning_state(conn, source.kind)
+    if not learning.learned:
+        raise DraftError("learning_required", 409, running=learning.running, outdated=learning.outdated)
+
+
 def generator_for(state: AppState) -> Generator:
     return BedrockGenerator(state.llm) if state.settings.drafter == "bedrock" else OfflineGenerator()
+
+
+def judge_for(state: AppState) -> tones.ToneJudge:
+    return tones.BedrockJudge(state.llm, state.router) if state.settings.drafter == "bedrock" else tones.OfflineJudge()
+
+
+async def _tone(state: AppState, ctx: LiveContext, found: dict[str, tone_store.Known]) -> tones.Judged | None:
+    """Sets the conversation's tone on the audience: the user's choice or what learning judged (`found`; an
+    email: its most formal person). A conversation learning never saw (a new chat, a new contact) is judged
+    now from this thread, mine first, then theirs, then the directory, and returned to be remembered. Runs
+    outside any transaction: the judge may be a model call."""
+    a = ctx.audience
+    known = tone_store.email_tone(found, a.partners) if a.bucket == "email" else None
+    if a.bucket != "email" and a.partners and a.partners[0] in found:
+        known = found[a.partners[0]].tone
+    if known:
+        a.tone = known
+        return None
+    mine = [m.text for m in ctx.thread if m.from_me]
+    theirs = [m.text for m in ctx.thread if not m.from_me]
+    judged = await tones.decide(judge_for(state), mine, theirs, tones.hint_for(a.relationship))
+    a.tone = judged.tone
+    return judged
 
 
 async def create_draft(
@@ -167,6 +203,7 @@ async def create_draft(
     if req.channel == "chat" and not req.conversation_id:
         raise DraftError("chat_required", 422)
     await require_review(state, user, source)
+    await require_learned(state, user, source)
 
     hasher = hasher_for(state.vault, user)
     sample_domains = _sample_domains(source)
@@ -223,6 +260,9 @@ async def create_draft(
             one_off=req.one_off,
             known_people=known_people,
         )
+    async with user_tx(state.engine, user) as conn:
+        found_tones = await tone_store.known(conn, source.kind, ctx.audience.bucket, ctx.audience.partners)
+    judged = await _tone(state, ctx, found_tones)
     async with user_tx(state.engine, user) as conn:
         pack = await load_pack(conn, state.vault, user, source.kind, ctx, ex_engine, hasher, matcher)
     prompt = build(ctx, pack)
@@ -298,7 +338,7 @@ async def create_draft(
             Check(
                 "persona_not_learned",
                 "info",
-                "Vanimo hasn't learned your style yet: run Learning for drafts in your voice.",
+                "Vanimo has few of your own messages like this one yet, so this draft uses a neutral style.",
             )
         )
     if ctx.one_off:
@@ -332,6 +372,8 @@ async def create_draft(
             request_id,
             version,
         )
+        if draft_id is not None and judged is not None:
+            await _remember_tone(state, user, source.kind, ctx, judged, hasher, ex_engine, version)
         if draft_id is None:
             # A rule or never-send word was added while drafting (§6.5 X4: it wins). The draft isn't
             # stored, and what's shown is masked again with the words as they are now.
@@ -382,7 +424,39 @@ async def create_draft(
         # "Open the chat with this text" only for 1:1 chats: for a group, Teams would open (or create) the
         # chat with exactly those people, which may not be the chat being answered (until spike 1 says).
         chat_users=[r.address.email for r in ctx.audience.to] if ctx.chat_type == "oneOnOne" else [],
+        tone=ctx.audience.tone,
+        bucket=ctx.audience.bucket,
+        tone_basis=judged.basis if judged is not None else "learned",
     )
+
+
+async def _remember_tone(
+    state: AppState,
+    user: UserRef,
+    source_kind: str,
+    ctx: LiveContext,
+    judged: tones.Judged,
+    hasher: Any,
+    ex_engine: Any,
+    version: int,
+) -> None:
+    """A tone judged now for a conversation learning never saw, kept for the next draft there: only for one
+    partner (a 1:1 chat, a group, an email to one person; for several new people at once, this thread can't
+    tell whose tone it is), and only if the user's controls are unchanged since drafting began."""
+    a = ctx.audience
+    if len(a.partners) != 1:
+        return
+    me = ctx.me.address.email
+    members = [m for m in ctx.thread_people if m.email and m.email.lower() != me] if a.bucket == "group" else []
+    people = members or [r.address for r in a.to + a.cc]
+    lineage = sorted({(hasher("person", p.email), tuple(ex_engine.domain_hashes(p.domain))) for p in people})
+    chat = hasher("chat", ctx.conversation_id) if ctx.channel == "chat" and ctx.conversation_id else None
+    row = tone_store.ToneRow(a.bucket, a.partners[0], [(p, list(d)) for p, d in lineage], chat, judged)
+    async with user_tx(state.engine, user) as conn:
+        await lock_user_controls(conn, user)
+        if await controls_version(conn) != version:
+            return
+        await tone_store.save_one(conn, user, source_kind, row)
 
 
 async def _chat_meeting(
@@ -444,10 +518,10 @@ async def _store(
                     text(
                         "insert into vanimo.drafts (tenant_id, owner_user_id, source_kind, surface, mode, generator, "
                         "tier, model_id, relationship, thread_hash, people, text_enc, checks, word_count, latency_ms, "
-                        "reply_to_enc, audience_enc, channel, meeting_hash, series_hash, chat_ref_enc) "
+                        "reply_to_enc, audience_enc, channel, meeting_hash, series_hash, chat_ref_enc, tone) "
                         "values (:t, :u, :k, :surface, :mode, :gen, :tier, :model, :rel, :th, cast(:people as jsonb), "
                         ":txt, "
-                        "cast(:checks as jsonb), :wc, :ms, :rt, :aud, :ch, :mh, :sh, :cr) returning id"
+                        "cast(:checks as jsonb), :wc, :ms, :rt, :aud, :ch, :mh, :sh, :cr, :tone) returning id"
                     ),
                     {
                         "t": t,
@@ -459,6 +533,7 @@ async def _store(
                         "tier": tier,
                         "model": model_id,
                         "rel": ctx.audience.relationship,
+                        "tone": ctx.audience.tone,
                         "th": hasher("chat" if ctx.channel == "chat" else "thread", ctx.conversation_id)
                         if ctx.conversation_id
                         else None,

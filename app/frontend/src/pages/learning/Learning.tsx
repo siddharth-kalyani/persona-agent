@@ -1,8 +1,9 @@
 /** Learning: Vanimo learns how you write from your own sent emails and chat messages (only from the
- * sources you allowed), redacting each one before it is stored. The header starts or repeats a run,
- * stat cards say what's stored, the last run is a card with its status and per-source counts,
- * "What's stored" shows every kept item exactly as stored (tokens as mono chips) or as shown to you,
- * and deleting sits at the end in a danger-zone card. */
+ * sources you allowed), redacting each one before it is stored. Before the first run, one card explains
+ * it and starts it (F15: drafting waits for it). After: the header repeats a run, stat cards say what's
+ * stored, the last run is a card with its status and per-source counts, "What's stored" (folded until
+ * asked for) shows every kept item exactly as stored (tokens as mono chips) or as shown to you, with its
+ * tone and channel, and deleting sits at the end in a danger-zone card. */
 import {
   Button,
   Dialog,
@@ -74,6 +75,8 @@ import {
   type Tone,
 } from "../../ui";
 import { errorText } from "../Home";
+import { LearnFirst } from "./LearnFirst";
+import { BUCKET_INFO, TONE_INFO } from "./tone";
 
 /** Stored items shown before "Show all". */
 const SHOWN = 12;
@@ -191,6 +194,8 @@ const useStyles = makeStyles({
 const COUNT_LABELS: Record<string, string> = {
   email_learned: "emails learned",
   chat_learned: "chat messages learned",
+  conversations: "people and group chats given a tone",
+  conversations_by_ai: "of them read by Claude (the rest by rules)",
   email_excluded: "emails skipped (excluded)",
   chat_excluded: "chats skipped (excluded)",
   context_excluded: "replied-to messages left out (excluded participant)",
@@ -221,20 +226,13 @@ export function runSummary(counts: Record<string, number>): string[] {
 function countIcon(key: string): { icon: ReactElement; tone: Tone } {
   if (key === "email_learned") return { icon: <Mail16Regular />, tone: "blue" };
   if (key === "chat_learned") return { icon: <Chat16Regular />, tone: "purple" };
+  if (key.startsWith("conversations")) return { icon: <People16Regular />, tone: "accent" };
   if (key.includes("blocked")) return { icon: <ShieldError16Regular />, tone: "warning" };
   if (key.endsWith("_excluded")) return { icon: <EyeOff16Regular />, tone: "neutral" };
   if (key === "chat_meeting_unknown") return { icon: <CalendarCancel16Regular />, tone: "neutral" };
   if (key === "email_missing") return { icon: <MailDismiss16Regular />, tone: "neutral" };
   return { icon: <DocumentDismiss16Regular />, tone: "neutral" };
 }
-
-const AUDIENCE: Record<string, string> = {
-  manager: "to your manager",
-  report: "to your team",
-  peer: "to colleagues",
-  external: "to clients and partners",
-  personal: "personal",
-};
 
 /** "1 min 20 s", "12 min", "1 h 5 min". */
 function took(fromIso: string, toIso: string): string {
@@ -344,6 +342,7 @@ export function Learning() {
   const [showAll, setShowAll] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [showStored, setShowStored] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -418,6 +417,25 @@ export function Learning() {
   const gated = status.onboardingState !== "review_done";
   const total = status.stored.total;
 
+  // Nothing learned yet: one card that explains learning and starts it (no counters full of zeros).
+  if (!status.learned && total === 0 && !running)
+    return (
+      <Page
+        title="Learning"
+        description="Vanimo learns how you write from your own sent emails and chat messages, only from the sources you allowed."
+      >
+        {error && (
+          <MessageBar intent="error">
+            <MessageBarBody>{error}</MessageBarBody>
+          </MessageBar>
+        )}
+        <LearnFirst
+          state={{ reviewDone: !gated, learningRunning: false, learningOutdated: status.outdated }}
+          onLearned={() => void refresh()}
+        />
+      </Page>
+    );
+
   let storedBody: ReactNode;
   if (items.length > 0) {
     storedBody = (
@@ -434,7 +452,7 @@ export function Learning() {
                 <div className={styles.itemMeta}>
                   <span className={styles.metaItem}>
                     <People16Regular aria-hidden />
-                    {cap(AUDIENCE[i.relationship] ?? i.relationship)}
+                    {TONE_INFO[i.tone].label} · {BUCKET_INFO[i.bucket].short}
                   </span>
                   <span className={styles.metaItem}>
                     <Tag16Regular aria-hidden />
@@ -482,6 +500,7 @@ export function Learning() {
     <Page
       title="Learning"
       description="Vanimo learns how you write from your own sent emails and chat messages, only from the sources you allowed."
+      info="Vanimo learns again by itself once a day while you use it, so new people and new phrases keep up with you. Your tone choices and data controls always hold."
       actions={
         <Button
           appearance="primary"
@@ -514,9 +533,9 @@ export function Learning() {
         <Stat icon={<Chat20Regular />} tone="purple" value={status.stored.chat} label="Chat messages stored" hint="From your Teams chats" />
         <Stat
           icon={<TextQuote20Regular />}
-          value={status.styleCards}
-          label="Style cards"
-          hint="See your persona"
+          value={run?.counts.conversations ?? "–"}
+          label="People and groups"
+          hint="See who's formal, friendly or casual"
           onClick={() => navigate("/persona")}
         />
       </StatStrip>
@@ -546,6 +565,19 @@ export function Learning() {
         </Section>
       )}
 
+      {status.outdated && !running && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            Learn again so drafts follow who you're formal, friendly or casual with. Drafting waits until you do.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!showStored && total > 0 ? (
+        <Button appearance="subtle" icon={<ChevronDown16Regular />} onClick={() => setShowStored(true)}>
+          Show what Vanimo stored ({total})
+        </Button>
+      ) : (
       <Section
         title="What's stored"
         count={total || undefined}
@@ -573,6 +605,7 @@ export function Learning() {
       >
         {storedBody}
       </Section>
+      )}
 
       <Section title="Start over">
         <Surface>

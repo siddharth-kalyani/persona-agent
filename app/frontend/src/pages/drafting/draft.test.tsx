@@ -23,6 +23,7 @@ function wrap(api: Api) {
 const STATUS: DraftingStatus = {
   generator: "offline", label: "Offline stand-in", defaultModel: "anthropic.claude-haiku-5-5",
   premiumModel: "anthropic.claude-sonnet-5-5", premiumLeftToday: 20, reviewDone: true, learnedItems: 70, sourceKind: "sample",
+  learned: true, learningRunning: false, learningOutdated: false,
 }; // prettier-ignore
 
 const THREADS: DraftThread[] = [
@@ -126,6 +127,36 @@ describe("Draft page", () => {
     await user.click(screen.getByRole("button", { name: "Draft" }));
     expect(await screen.findByText(/Not an email address: bad-address/)).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe("Draft page: learn first (F15)", () => {
+  it("offers the one missing step instead of a draft that can't be made, then carries on", async () => {
+    const a = api();
+    const status = vi
+      .spyOn(a, "draftingStatus")
+      .mockResolvedValueOnce({ ...STATUS, learned: false, learnedItems: 0 })
+      .mockResolvedValue(STATUS);
+    vi.spyOn(a, "startLearning").mockResolvedValue({
+      onboardingState: "review_done", sourceKind: "sample", stored: { email: 40, chat: 10, total: 50 }, styleCards: 9,
+      learned: true, outdated: false,
+      run: { id: "r1", status: "done", sourceKind: "sample", startedAt: "", finishedAt: "", counts: {}, errorCode: null },
+    }); // prettier-ignore
+    const user = userEvent.setup();
+    wrap(a);
+    expect(await screen.findByText("Vanimo needs to learn your style first")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New email" })).toBeNull(); // nothing that would fail
+    await user.click(screen.getByRole("button", { name: "Learn my style" }));
+    expect(await screen.findByRole("button", { name: "New email" })).toBeInTheDocument();
+    expect(status).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks to learn again when the style predates tone groups", async () => {
+    const a = api();
+    vi.spyOn(a, "draftingStatus").mockResolvedValue({ ...STATUS, learned: false, learningOutdated: true });
+    wrap(a);
+    expect(await screen.findByText("Learn again to write in each person's tone")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Learn again" })).toBeInTheDocument();
   });
 });
 

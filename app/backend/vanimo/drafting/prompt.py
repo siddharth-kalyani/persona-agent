@@ -34,8 +34,9 @@ _RULES = (
     "Markers like ⟦PERSON_1a2b3c4d⟧ stand for people and ⟦ME⟧ for the writer: keep them exactly as written when "
     "you refer to someone. Slots such as [PAN] or [bank account] are values removed for privacy: keep them as slots "
     "and never fill them in. Never use or guess ⟦NS_…⟧ markers.",
-    'Write in English, in the writer\'s own English (keep Indian-English usages they use, such as "revert", '
-    '"PFA" or "kindly").',
+    "Write in the language the writer uses with this audience (the persona says: English, Hinglish in Roman "
+    'script, or Hindi), in their own words: keep Indian-English usages they use, such as "revert", "PFA" or '
+    '"kindly", and their own spellings.',
     "No links unless the same link is in the thread or the instruction.",
 )
 SYSTEM_RULES = (
@@ -165,12 +166,19 @@ def _level(value: float) -> str:
     )
 
 
-def describe(card: dict[str, Any], *, title: str) -> str:
+def describe(card: dict[str, Any], *, title: str, length: bool = True) -> str:
     lines = [f"{title} (from {card.get('n', 0)} of their messages):"]
-    length = card.get("length") or {}
-    if length:
-        lines.append(f"- length: usually {length.get('p25')}-{length.get('p75')} words, median {length.get('median')}")
+    words = card.get("length") or {}
+    if words and length:
+        lines.append(f"- length: usually {words.get('p25')}-{words.get('p75')} words, median {words.get('median')}")
     lines.append(f"- tone: {_level(float(card.get('formality', 0.5)))}")
+    languages = card.get("languages") or {}
+    mixed = float(languages.get("hinglish", 0)) + float(languages.get("hindi", 0))
+    if mixed >= 0.3:
+        lines.append(
+            f"- language: Hindi mixed with English in {round(100 * mixed)}% of messages "
+            "(Hinglish, in Roman script unless they write Devanagari)"
+        )
     lines.append(
         f"- exclamation marks in {round(100 * card.get('exclamation_rate', 0))}% of messages, questions in "
         f"{round(100 * card.get('question_rate', 0))}%, emoji in {round(100 * card.get('emoji_rate', 0))}%"
@@ -237,10 +245,39 @@ def _learned(pack: PersonaPack) -> dict[str, Any]:
     return out
 
 
+BUCKET_WORDS = {"email": "emails", "dm": "Teams 1:1 chats", "group": "Teams group chats"}
+TONE_WORDS = {
+    "formal": "formal (respectful and professional)",
+    "friendly": "friendly (professional but warm and relaxed)",
+    "casual": "casual (like friends)",
+}
+
+
+def _vocabulary(pack: PersonaPack, tone: str) -> str | None:
+    """The writer's own words for what this draft does (their tone's vocabulary) and their spellings."""
+    from vanimo.learning.vocab import LABELS
+
+    lines = [
+        f"- {LABELS.get(s, s).lower()}: " + "; ".join(f'"{p}"' for p in phrases)
+        for s, phrases in pack.vocabulary.items()
+        if phrases
+    ]
+    spellings = [f'"{s["use"]}" (not "{s["instead_of"]}")' for s in pack.spellings]
+    if spellings:
+        lines.append("- their spellings: " + ", ".join(spellings))
+    if not lines:
+        return None
+    return (
+        f"<vocabulary>The writer's own words in {tone} messages (use one or two where they fit; vary them, "
+        "never every one):\n" + "\n".join(lines) + "\n</vocabulary>"
+    )
+
+
 def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
     card = pack.card
     learned = _learned(pack)
     chat = ctx.channel == "chat"
+    a = ctx.audience
     if chat:
         # Greeting, sign-off and length rules were learned from emails: not a chat's habits.
         learned["length"] = 0
@@ -248,9 +285,17 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
         learned.pop("sign_off", None)
         learned["lines"] = [f"- {r.text}" for r in pack.rules if r.kind in ("avoid", "prefer", "exclamations")]
     words, bounds = target(card, max(-2, min(2, pack.settings.length + learned["length"])))
-    persona = [describe(card, title="How the writer writes to this kind of audience")]
-    if pack.overall and pack.card_key != style.slice_key():
-        persona.append(describe(pack.overall, title="How the writer writes in general"))
+    tone_words = TONE_WORDS.get(a.tone, a.tone)
+    persona = [
+        describe(card, title=f"How the writer writes {BUCKET_WORDS[a.bucket]} to people they are {tone_words} with")
+    ]
+    if pack.voice and pack.voice_key != pack.card_key:
+        title = (
+            f"Their {a.tone} voice, in every channel"
+            if pack.voice_key != style.slice_key()
+            else "How the writer writes in general"
+        )
+        persona.append(describe(pack.voice, title=title, length=False))
     persona.append(_settings_text(pack))
     if learned["lines"]:
         persona.append("Learned from the writer's own edits of earlier drafts:\n" + "\n".join(learned["lines"]))
@@ -263,22 +308,32 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
             "cache_control": {"type": "ephemeral"},
         },
     ]
-    a = ctx.audience
-    if chat and ctx.chat_type == "oneOnOne":
-        parts = [f"<audience>A Teams 1:1 chat with {a.label}: {', '.join(r.token for r in a.to)}.</audience>"]
+    tone_line = f"The writer is {tone_words} with them."
+    opens = greeting(pack.person, a.to) if pack.person else ""
+    if opens:
+        tone_line += f' They usually open with "{opens}".'
+    if chat and a.bucket == "dm":
+        parts = [
+            f"<audience>A Teams 1:1 chat with {a.label}: {', '.join(r.token for r in a.to)}. {tone_line}</audience>"
+        ]
     elif chat:
         named = ", ".join(r.token for r in a.to[:8]) + (f" and {len(a.to) - 8} more" if len(a.to) > 8 else "")
-        parts = [f"<audience>A Teams group chat with {len(a.to)} other people ({a.label}): {named}.</audience>"]
+        parts = [
+            f"<audience>A Teams group chat with {len(a.to)} other people ({a.label}): {named}. "
+            f"The writer is {tone_words} in this group.</audience>"
+        ]
     else:
         parts = [f"<audience>Writing to {a.label}: {', '.join(r.token for r in a.to)}."]
         if a.cc:
             parts.append(f"Copied: {len(a.cc)} more.")
-        parts.append("</audience>")
+        parts.append(f"{tone_line}</audience>")
+    if vocabulary := _vocabulary(pack, a.tone):
+        parts.append(vocabulary)
     if pack.exemplars:
         parts.append("<examples>")
         for ex in pack.exemplars:
             kind = "message" if ex.verbatim else "structure only"
-            parts.append(f'<example kind="{kind}" audience="{ex.relationship}">\n{ex.text}\n</example>')
+            parts.append(f'<example kind="{kind}" tone="{ex.tone}" channel="{ex.bucket}">\n{ex.text}\n</example>')
         parts.append("</examples>")
     if ctx.thread:
         parts.append("<thread>")
@@ -297,7 +352,9 @@ def build(ctx: LiveContext, pack: PersonaPack) -> Prompt:
         task += " Follow the writer's instruction."
     parts.append(f"{task} Aim for about {words} words (between {bounds[0]} and {bounds[1]}).")
     user = "\n".join(parts)
-    g = "" if chat else greeting({"greetings": learned["greeting"]} if "greeting" in learned else card, a.to)
+    # The greeting: a rule learned from the user's edits, else how they greet this person, else the channel's.
+    opener = pack.person if pack.person and _top(pack.person.get("greetings", [])) else card
+    g = "" if chat else greeting({"greetings": learned["greeting"]} if "greeting" in learned else opener, a.to)
     s = "" if chat else sign_off({"sign_offs": learned["sign_off"]} if "sign_off" in learned else card)
     marks = set(L1_MARKS.findall(user)) | set(L1_MARKS.findall(g + "\n" + s))
     return Prompt(

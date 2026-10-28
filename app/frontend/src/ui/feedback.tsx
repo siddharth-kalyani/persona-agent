@@ -17,7 +17,8 @@ import { IconTile } from "./visual";
 export type { Tone };
 
 const useStyles = makeStyles({
-  dotWrap: { display: "inline-flex", alignItems: "center", gap: "6px", ...typo.meta, color: vt.text2 },
+  // A status is one or two words: it never breaks inside a word in a narrow table column.
+  dotWrap: { display: "inline-flex", alignItems: "center", gap: "6px", ...typo.meta, color: vt.text2, whiteSpace: "nowrap" },
   dot: { width: "8px", height: "8px", borderRadius: "50%", flexShrink: 0 },
   neutral: { backgroundColor: vt.dot },
   accent: { backgroundColor: vt.accent },

@@ -51,14 +51,14 @@ async def offline_baseline(engine: AsyncEngine, vault: Vault, ref: UserRef, sour
     metrics: dict[str, Any] = {"n_train": len(train), "n_eval": len(test), "drafter": "offline_stand_in"}
     if train and test:
         cards = {k: c for k, (_, c) in style.build_cards(examples(train)).items()}
-        pool = [Exemplar(i.id, i.text, i.context, i.relationship, i.channel, i.vec) for i in train]
+        pool = [Exemplar(i.id, i.text, i.context, i.tone, i.bucket, i.vec) for i in train]
         drafter = OfflineDrafter()
         scores = [
             score(
                 drafter.draft(
                     t.context or "",
-                    relationship=t.relationship,
-                    channel=t.channel,
+                    tone=t.tone,
+                    bucket=t.bucket,
                     cards=cards,
                     pool=pool,
                     language=t.language,

@@ -40,6 +40,7 @@ from vanimo.sources.base import Address, MessageHeader, WorkspaceSource
 MAX_THREAD_MESSAGES = 4  # the most recent messages of the thread given to the drafter
 MAX_MESSAGE_CHARS = 4000  # per message, before redaction (denial of wallet)
 MAX_RECIPIENTS = 50
+MAX_TONE_PARTNERS = 10  # as learning: an email's tone comes from at most this many of its people
 DIRECTORY_TTL_S = 600.0
 
 Mode = Literal["reply", "new"]
@@ -128,6 +129,12 @@ class Audience:
     cc: list[Recipient]
     internal: int
     external: int
+    # F15: email, a Teams 1:1 chat or a group; the tone partners (person hashes, or the group chat's hash);
+    # who it is written to (a hash); the tone, once the drafting service has looked it up or judged it.
+    bucket: str = "email"
+    partners: list[str] = field(default_factory=list)
+    counterpart: str | None = None
+    tone: str = "formal"
 
     @property
     def label(self) -> str:
@@ -391,6 +398,7 @@ async def gather(
     subj = await red(subject or thread_subject, "subject")
     instr = await red(instruction, "instruction")
     audience_people = [*to_list, *cc_list]
+    first = (to_list or cc_list)[0]
     audience = Audience(
         relationship=labels.relationship(
             audience_people,
@@ -402,6 +410,9 @@ async def gather(
         cc=[recipient(a) for a in cc_list],
         internal=sum(1 for a in audience_people if _in(a.domain, directory.org_domains)),
         external=sum(1 for a in audience_people if not _in(a.domain, directory.org_domains)),
+        bucket="email",
+        partners=[hasher("person", a.email) for a in audience_people[:MAX_TONE_PARTNERS]],
+        counterpart=hasher("person", first.email),
     )
     return LiveContext(
         mode=mode,
@@ -528,6 +539,9 @@ async def gather_chat(
 
     instr = await red(instruction, "instruction")
     topic = await red(chat.topic, "subject") if chat.topic else None
+    # The tone partner: the other person of a 1:1 chat, or the group chat itself (as learning keys them).
+    dm = chat.chat_type == "oneOnOne" and len(others) == 1
+    partner = hasher("person", others[0].email) if dm else chat_hash
     audience = Audience(
         relationship=labels.relationship(
             others, manager=directory.manager, reports=directory.reports, org_domains=directory.org_domains
@@ -536,6 +550,9 @@ async def gather_chat(
         cc=[],
         internal=sum(1 for a in others if _in(a.domain, directory.org_domains)),
         external=sum(1 for a in others if not _in(a.domain, directory.org_domains)),
+        bucket="dm" if dm else "group",
+        partners=[partner],
+        counterpart=partner,
     )
     return LiveContext(
         mode=mode,

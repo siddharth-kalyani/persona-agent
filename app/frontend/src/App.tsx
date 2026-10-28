@@ -159,6 +159,39 @@ function useMe(ready: boolean, pathname: string): Me | null {
   return me;
 }
 
+const REFRESHED_KEY = "vanimo.learningRefreshedAt";
+const DAY_MS = 24 * 3600_000;
+
+/** Keeps your style current (F15): once a day while you use Vanimo, it learns again in the background, so
+ * new phrases and new people reach your tone groups and vocabulary without a button. Only a style already
+ * learned is refreshed (the first run is always your own choice); your tone choices and data controls hold. */
+function useDailyRefresh(ready: boolean) {
+  const api = useApi();
+  useEffect(() => {
+    if (!ready) return;
+    let last = 0;
+    try {
+      last = Number(localStorage.getItem(REFRESHED_KEY) ?? 0);
+    } catch {
+      // No storage (private window): the server-side check below still keeps it to once a day.
+    }
+    if (Date.now() - last < DAY_MS / 2) return;
+    api
+      .learning()
+      .then((s) => {
+        const finished = s.run?.finishedAt ? new Date(s.run.finishedAt).getTime() : 0;
+        if (!s.learned || s.run?.status === "running" || Date.now() - finished < DAY_MS) return;
+        try {
+          localStorage.setItem(REFRESHED_KEY, String(Date.now()));
+        } catch {
+          // Best effort.
+        }
+        return api.startLearning();
+      })
+      .catch(() => undefined);
+  }, [ready, api]);
+}
+
 export function App() {
   const styles = useStyles();
   const auth = useAuth();
@@ -167,6 +200,7 @@ export function App() {
   const theme = useThemePreference();
   const ready = auth.signedIn && !auth.mustChangePassword;
   const me = useMe(ready, location.pathname);
+  useDailyRefresh(ready && me !== null && !me.pipelinePaused);
   const [palette, setPalette] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const narrow = useNarrow();

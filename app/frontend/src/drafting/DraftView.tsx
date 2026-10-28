@@ -3,7 +3,7 @@
  * first, shown at once, never animated) and, for a blocking check, the confirmation that unlocks
  * insert. Uses Fluent tokens and fallback-safe Vanimo tokens, so it also looks right under
  * Microsoft's own themes in Outlook and Teams. */
-import { Checkbox, makeStyles, mergeClasses, shorthands, Textarea, tokens, useAnnounce } from "@fluentui/react-components";
+import { Checkbox, makeStyles, mergeClasses, shorthands, Textarea, tokens, Tooltip, useAnnounce } from "@fluentui/react-components";
 import {
   Compose16Regular,
   Info16Regular,
@@ -152,6 +152,11 @@ export function draftErrorText(err: unknown): string {
   switch (err.code) {
     case "review_pending":
       return "Finish the “Choose what Vanimo learns from” review first (My data → Set up).";
+    case "learning_required":
+      if (err.body.running === true) return "Vanimo is still learning your style. Try again in a minute.";
+      if (err.body.outdated === true)
+        return "Vanimo now learns who you're formal, friendly or casual with. Open Vanimo and learn again first (about a minute).";
+      return "Vanimo needs to learn your style first. Open Vanimo and choose “Learn my style” (about a minute).";
     case "conversation_excluded":
       if (err.body.by === "organisation") return "Your organisation excludes this conversation, so Vanimo can't draft in it.";
       if (err.body.by === "unverifiable" && Array.isArray(err.body.reasons) && err.body.reasons.includes("meeting_unknown"))
@@ -209,6 +214,18 @@ export function draftErrorText(err: unknown): string {
   }
 }
 
+const TONE_LABEL = { formal: "Formal", friendly: "Friendly", casual: "Casual" } as const;
+
+/** Why this tone, in a sentence (F15). */
+function toneNote(draft: Draft): string {
+  const basis = draft.audience.toneBasis;
+  if (basis === "learned" || !basis) return "The tone you use with them, as Vanimo learned it (change it on Your style).";
+  if (basis === "your_messages" || basis === "their_messages")
+    return "New here: Vanimo read this conversation to choose the tone, and will remember it.";
+  if (basis === "directory") return "New here: Vanimo went by your directory to choose the tone, and will remember it.";
+  return "New here, with nothing to go by: Vanimo starts formal, and will remember it.";
+}
+
 export function DraftView({
   draft,
   text,
@@ -242,6 +259,11 @@ export function DraftView({
           <Pill tone="accent" icon={<People16Regular />} wrap>
             Writing to: {draft.audience.label}
           </Pill>
+          {draft.audience.tone && (
+            <Tooltip content={toneNote(draft)} relationship="description" withArrow>
+              <Pill tabIndex={0}>{TONE_LABEL[draft.audience.tone]} tone</Pill>
+            </Tooltip>
+          )}
           {!offline && <Pill>{draft.tier === "premium" ? "Higher quality" : "Standard"}</Pill>}
           {draft.oneOff && <Pill tone="warning">One-off, not saved</Pill>}
         </div>

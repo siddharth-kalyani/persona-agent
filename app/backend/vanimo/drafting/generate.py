@@ -156,7 +156,10 @@ class OfflineGenerator:
     async def body(self, ctx: LiveContext, pack: PersonaPack, prompt: Prompt, route: Route) -> Body:
         start = time.perf_counter()
         card = pack.card
-        formal = float(card.get("formality", 0.5)) + 0.15 * pack.settings.formality >= 0.6
+        formal = ctx.audience.tone == "formal" or (
+            ctx.audience.tone == "friendly"
+            and float(card.get("formality", 0.5)) + 0.15 * pack.settings.formality >= 0.6
+        )
         kindly = "kindly" in card.get("keep_list", []) and (
             formal or ctx.audience.relationship in ("external", "manager")
         )

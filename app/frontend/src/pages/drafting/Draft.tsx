@@ -9,7 +9,6 @@ import {
   Button,
   Field,
   Input,
-  Link,
   makeStyles,
   Menu,
   MenuItem,
@@ -47,7 +46,6 @@ import {
   Warning16Regular,
 } from "@fluentui/react-icons";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   ApiError,
   type ChatView,
@@ -89,6 +87,8 @@ import {
 } from "../../ui";
 import { AUDIENCE } from "../commitments/Commitments";
 import { errorText } from "../Home";
+import { LearnFirst } from "../learning/LearnFirst";
+import { TONE_INFO } from "../learning/tone";
 import { newChatLink } from "../TeamsPrefill";
 
 const useStyles = makeStyles({
@@ -227,7 +227,6 @@ const SURFACES: Record<string, { icon: ReactElement; tone: Tone; label: string }
 export function Draft() {
   const styles = useStyles();
   const api = useApi();
-  const navigate = useNavigate();
   const [status, setStatus] = useState<DraftingStatus | null>(null);
   const [threads, setThreads] = useState<DraftThread[]>([]);
   const [recent, setRecent] = useState<DraftSummary[]>([]);
@@ -255,6 +254,7 @@ export function Draft() {
   const [prefill, setPrefill] = useState(false);
   const [list, setList] = useState<"email" | "chat">("email");
   const [allRecent, setAllRecent] = useState(false);
+  const [showRecent, setShowRecent] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -427,6 +427,14 @@ export function Draft() {
       <PageSkeleton label="Loading…" />
     );
 
+  // Nothing to draft with yet (F15): the one step that's missing, done right here.
+  if (!status.learned)
+    return (
+      <Page title="Draft" description="Reply or write in your voice. Vanimo never sends: you do.">
+        <LearnFirst state={status} onLearned={() => void refresh()} />
+      </Page>
+    );
+
   const exclusion = (by: string | null, unverifiable: string) =>
     by === "unverifiable" ? unverifiable : `excluded by ${by === "organisation" ? "your organisation" : "you"}`;
   const drafting = target?.kind === "new" || (target?.kind === "chat" && chatNew);
@@ -451,22 +459,6 @@ export function Draft() {
         />
       }
     >
-      {!status.reviewDone && (
-        <MessageBar intent="warning">
-          <MessageBarBody>Vanimo can't draft until you finish choosing what it learns from.</MessageBarBody>
-          <MessageBarActions>
-            <Button onClick={() => navigate("/setup")}>Go to setup</Button>
-          </MessageBarActions>
-        </MessageBar>
-      )}
-      {status.reviewDone && status.learnedItems === 0 && (
-        <MessageBar intent="info">
-          <MessageBarBody>
-            Your style isn't learned yet, so drafts use a neutral style. <Link onClick={() => navigate("/learning")}>Start learning</Link>
-          </MessageBarBody>
-        </MessageBar>
-      )}
-
       <div className={styles.layout}>
         <nav className={styles.listPane} aria-label="Conversations">
           <div className={styles.listTools}>
@@ -766,7 +758,14 @@ export function Draft() {
         </div>
       </div>
 
-      {recent.length > 0 && (
+      {recent.length > 0 && !showRecent && (
+        <div className={styles.more}>
+          <Button appearance="subtle" size="small" icon={<ChevronDown16Regular />} onClick={() => setShowRecent(true)}>
+            Show recent drafts ({recent.length})
+          </Button>
+        </div>
+      )}
+      {recent.length > 0 && showRecent && (
         <Section title="Recent drafts" count={recent.length} description="What was drafted, never the text.">
           <List bordered label="Recent drafts">
             {(allRecent ? recent : recent.slice(0, 5)).map((r) => {
@@ -775,7 +774,9 @@ export function Draft() {
                 <ListRow
                   key={r.id}
                   leading={<IconTile icon={surface.icon} tone={surface.tone} size={32} />}
-                  title={`${r.mode === "reply" ? "Reply" : "New message"} to ${AUDIENCE[r.relationship] ?? r.relationship}`}
+                  title={`${r.mode === "reply" ? "Reply" : "New message"} to ${AUDIENCE[r.relationship] ?? r.relationship}${
+                    r.tone ? ` · ${TONE_INFO[r.tone].label.toLowerCase()}` : ""
+                  }`}
                   meta={
                     <>
                       <span className={styles.metaIcons}>

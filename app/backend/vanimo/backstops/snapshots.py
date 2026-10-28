@@ -32,7 +32,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from vanimo.backstops import Backstops
-from vanimo.controls.jobs import COMMITMENT_FIELDS, L1_FIELDS, MEMORY_FIELDS
+from vanimo.controls.jobs import COMMITMENT_FIELDS, L1_FIELDS, MEMORY_FIELDS, PHRASES_FIELD
 from vanimo.controls.store import lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.logs import get_logger
@@ -44,7 +44,7 @@ log = get_logger("vanimo.backstops")
 
 # Every table holding L1 text, with its encrypted fields and their vault purposes.
 SNAPSHOT_FIELDS: dict[str, list[tuple[str, str]]] = {
-    "l1_items": L1_FIELDS,
+    "l1_items": [*L1_FIELDS, PHRASES_FIELD],
     "commitments": COMMITMENT_FIELDS,
     **MEMORY_FIELDS,
     "drafts": [("text_enc", "draft_text")],

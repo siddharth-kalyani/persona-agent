@@ -50,7 +50,15 @@ def _owner_dump(database: dict[str, str]) -> str:
     url = database["owner"].replace("postgresql+psycopg://", "postgresql://")
     with psycopg.connect(url) as conn:
         rows = []
-        for table in ("l1_items", "l1_tokens", "style_cards", "learning_runs", "eval_runs", "persona_settings"):
+        for table in (
+            "l1_items",
+            "l1_tokens",
+            "style_cards",
+            "learning_runs",
+            "eval_runs",
+            "persona_settings",
+            "conversation_tones",
+        ):
             rows += [str(r) for r in conn.execute(f"select * from vanimo.{table}").fetchall()]  # noqa: S608
     return "\n".join(rows)
 
@@ -92,16 +100,43 @@ async def test_learn_store_persona_and_purges(
     for value in [*PLANTED, "Falcon", "Meera Iyer", "Best regards"]:
         assert value not in dump, value
 
-    # Persona Snapshot: formal with clients, casual with peers, Hinglish with the team.
+    # Persona Snapshot (F15): tone groups from how the user writes, not from job titles.
     persona = (await client.get("/api/persona", headers=h)).json()
     assert persona["learned_items"] == body["stored"]["total"]
-    by_rel = {a["relationship"]: a["card"] for a in persona["audiences"]}
-    assert by_rel["external"]["formality"] > by_rel["peer"]["formality"]
-    assert any(g.startswith("Dear") for g, _ in by_rel["external"]["greetings"])
-    assert any("{me_full}" in s for s, _ in by_rel["external"]["sign_offs"])
+    tone_of = {(c["bucket"], c["label"]): c for c in persona["conversations"]}
+    assert tone_of[("email", "Karan Malhotra")]["tone"] == "formal"  # a client: Dear …, Kindly, Best regards
+    assert tone_of[("email", "Meera Iyer")]["tone"] == "friendly"  # the manager: Hi Meera … Thanks
+    assert tone_of[("email", "Arjun Mehta")]["tone"] == "casual"  # a peer and friend: Hey Arjun … Cheers
+    assert tone_of[("dm", "Rahul Verma")]["tone"] == "casual"  # Hinglish in chat with a report
+    assert tone_of[("dm", "Vikram Shah")]["tone"] == "casual"  # "thanks yaar"
+    assert tone_of[("email", "Karan Malhotra")]["basis"] == "your_messages" and "Karan" not in str(
+        _owner_dump(database)
+    )
+    cards = persona["tone_bucket_cards"]
+    assert cards["formal|email"]["greetings"][0][0] == "Dear {first},"
+    assert any("{me_full}" in s for s, _ in cards["formal|email"]["sign_offs"])
+    assert cards["friendly|email"]["sign_offs"][0][0] == "Thanks,\n{me}"
+    assert cards["casual|dm"]["greetings"][0][0] == "(none)"  # no greeting in a casual chat
     assert "pfa" in persona["overall"]["keep_list"] or "kindly" in persona["overall"]["keep_list"]
-    assert persona["by"]["language"].get("hinglish", 0) >= 3
+    formal_words = [p["phrase"] for ps in persona["vocabulary"]["tones"]["formal"].values() for p in ps]
+    assert "kindly revert" in formal_words  # used with three different clients
+    assert all(p["conversations"] >= 3 for ps in persona["vocabulary"]["tones"]["formal"].values() for p in ps)
+    assert persona["by"]["language"].get("hinglish", 0) >= 3 and persona["by"]["bucket"]["dm"] >= 5
     assert persona["evaluation"]["metrics"]["n_eval"] >= 1
+
+    # The user's own choice of tone wins, moves that conversation's messages, and survives learning again.
+    meera = tone_of[("email", "Meera Iyer")]
+    chosen = await client.put(
+        "/api/persona/tones", json={"bucket": "email", "key": meera["key"], "tone": "formal"}, headers=h
+    )
+    assert chosen.status_code == 204
+    after_choice = {
+        (c["bucket"], c["label"]): c for c in (await client.get("/api/persona", headers=h)).json()["conversations"]
+    }
+    assert after_choice[("email", "Meera Iyer")]["tone"] == "formal"
+    assert after_choice[("email", "Meera Iyer")]["judged"] == "friendly"
+    bad = await client.put("/api/persona/tones", json={"bucket": "dm", "key": "0" * 64, "tone": "casual"}, headers=h)
+    assert bad.status_code == 404
 
     saved = await client.put(
         "/api/persona/settings",
@@ -145,6 +180,10 @@ async def test_learn_store_persona_and_purges(
             assert e["status"] == "excluded" and e["storedId"] is None
     after = (await client.get("/api/learning", headers=h)).json()
     assert after["stored"]["total"] == body["stored"]["total"] - purge["counts"]["l1_items_deleted"]
+    # His tone went with him (F15); everyone else's stayed.
+    labels = {(c["bucket"], c["label"]) for c in (await client.get("/api/persona", headers=h)).json()["conversations"]}
+    assert ("email", "John Miller") not in labels and ("email", "Karan Malhotra") in labels
+    assert purge["counts"]["tones_deleted"] >= 1
 
     # A never-send word added after learning disappears from stored history too.
     assert any("Monsoon" in i["display"] for i in await _items(client, h))
@@ -152,16 +191,22 @@ async def test_learn_store_persona_and_purges(
     await _settle(app_state)
     assert not any("Monsoon" in i["display"] or "Monsoon" in i["stored"] for i in await _items(client, h))
 
-    # Learning again respects the new rules (John stays out) — and a second run can't overlap.
+    # Learning again respects the new rules (John stays out) and the user's choices — and runs can't overlap.
     again = await _learn(client, h)
-    assert again["stored"]["total"] == after["stored"]["total"]
+    assert again["stored"]["total"] == after["stored"]["total"] and again["learned"]
+    relearned = {
+        (c["bucket"], c["label"]): c for c in (await client.get("/api/persona", headers=h)).json()["conversations"]
+    }
+    assert relearned[("email", "Meera Iyer")]["override"] == "formal"
+    assert ("email", "John Miller") not in relearned
 
-    # Delete everything learned: receipt, nothing left.
+    # Delete everything learned: receipt, nothing left, and drafting waits for learning again.
     deleted = await client.delete("/api/learning", headers=h)
     assert deleted.status_code == 200 and deleted.json()["status"] == "done"
     assert deleted.json()["counts"]["l1_items_deleted"] == again["stored"]["total"]
     status = (await client.get("/api/learning", headers=h)).json()
-    assert status["stored"]["total"] == 0 and status["styleCards"] == 0
+    assert status["stored"]["total"] == 0 and status["styleCards"] == 0 and not status["learned"]
+    assert (await client.get("/api/persona", headers=h)).json()["conversations"] == []
 
 
 async def test_admin_client_exclusion_purges_learned_data(

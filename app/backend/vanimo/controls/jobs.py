@@ -83,6 +83,8 @@ async def scrub_index(engine: AsyncEngine, vault: Vault, ref: UserRef) -> int:
 
 SAMPLE_ORG_DOMAINS = frozenset({SAMPLE_DOMAIN})
 L1_FIELDS = [("subject_enc", "l1_subject"), ("text_enc", "l1_text"), ("context_enc", "l1_context")]
+# The user's own short phrases per learned item (F15 vocabulary): L1 too, a JSON list of [situation, phrase].
+PHRASES_FIELD = ("phrases_enc", "l1_phrases")
 COMMITMENT_FIELDS = [
     ("text_enc", "commitment_text"),
     ("what_enc", "commitment_what"),
@@ -151,6 +153,23 @@ async def scrub_learning(engine: AsyncEngine, vault: Vault, ref: UserRef, rebuil
                 },
             )
             changed_items += 1
+            if row.source_kind not in rebuild_sources:
+                rebuild_sources.append(row.source_kind)
+        # A phrase holding a never-send word would only be a placeholder in the vocabulary: it goes.
+        rows = (
+            await conn.execute(
+                text("select id, source_kind, phrases_enc from vanimo.l1_items where phrases_enc is not null")
+            )
+        ).all()
+        for row in rows:
+            phrases = json.loads(vault.decrypt_user(t, u, row.phrases_enc, PHRASES_FIELD[1]) or "[]")
+            kept = [ph for ph in phrases if not matcher.count(ph[1])]
+            if len(kept) == len(phrases):
+                continue
+            await conn.execute(
+                text("update vanimo.l1_items set phrases_enc = :p where id = :id"),
+                {"p": vault.encrypt_user(t, u, json.dumps(kept) if kept else None, PHRASES_FIELD[1]), "id": row.id},
+            )
             if row.source_kind not in rebuild_sources:
                 rebuild_sources.append(row.source_kind)
         for row in (await conn.execute(text("select token, value_enc from vanimo.l1_tokens"))).all():
@@ -246,6 +265,21 @@ async def purge_excluded_learning(
                     rebuild_sources.append(r.source_kind)
         if doomed:
             await conn.execute(text("delete from vanimo.l1_items where id = any(:ids)"), {"ids": doomed})
+        # Conversation tones (F15): a person or chat now excluded takes its tone, and the user's choice for it.
+        tone_rows = (
+            await conn.execute(text("select id, source_kind, chat_hash, people from vanimo.conversation_tones"))
+        ).all()
+        doomed_tones = [
+            r.id
+            for r in tone_rows
+            if (sample_engine if r.source_kind == "sample" else ex_engine)
+            .lineage([(p["p"], list(p["d"])) for p in r.people], chat_hash=r.chat_hash)
+            .excluded
+        ]
+        if doomed_tones:
+            await conn.execute(
+                text("delete from vanimo.conversation_tones where id = any(:ids)"), {"ids": doomed_tones}
+            )
         promises = (
             await conn.execute(
                 text(
@@ -288,6 +322,7 @@ async def purge_excluded_learning(
         rules_after = (await conn.execute(text("select count(*) from vanimo.style_rules"))).scalar_one()
     return {
         "l1_items_deleted": len(doomed),
+        "tones_deleted": len(doomed_tones),
         "tokens_deleted": tokens_deleted,
         "drafts_deleted": len(doomed_drafts),
         "commitments_deleted": len(doomed_promises),
@@ -376,6 +411,7 @@ async def delete_learning(engine: AsyncEngine, ref: UserRef) -> dict[str, int]:
             "l1_items",
             "l1_tokens",
             "style_cards",
+            "conversation_tones",
             "eval_runs",
             "drafts",
             "style_rules",

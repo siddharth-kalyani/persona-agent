@@ -2,7 +2,8 @@
 
 * /api/learning      — start a backfill (gate-checked), see progress and what was stored, and
                        delete everything learned (with a purge receipt).
-* /api/persona       — the Persona Snapshot and the basic studio settings.
+* /api/persona       — the Persona Snapshot, the basic studio settings, and the tone of each
+                       conversation (the user may change it: F15 tone groups).
 * /api/sample/...    — the synthetic mailbox, chats and meetings as Outlook/Teams would show
                        them, with what Vanimo did with each item. Sample workspace only.
 """
@@ -14,8 +15,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from vanimo import audit
@@ -25,8 +26,8 @@ from vanimo.controls.jobs import run_job
 from vanimo.controls.store import add_purge_job, hasher_for, load_engine
 from vanimo.db.session import UserRef, user_tx
 from vanimo.gates import onboarding_state, require_pipeline_active
-from vanimo.learning import backfill
-from vanimo.learning.persona import PersonaSettings, save_settings, snapshot
+from vanimo.learning import backfill, tone_store, tones, vocab
+from vanimo.learning.persona import PersonaSettings, rebuild, save_settings, snapshot
 from vanimo.redaction.pipeline import rehydrate
 from vanimo.sources.base import WorkspaceSource
 from vanimo.state import AppState
@@ -60,6 +61,10 @@ class LearningOut(BaseModel):
     run: RunOut | None
     stored: dict[str, int]
     styleCards: int
+    # F15: whether drafting may start (a finished run of this version whose result is still stored), and
+    # whether the last finished run predates tone groups (learn again).
+    learned: bool = False
+    outdated: bool = False
 
 
 async def _learning(state: AppState, user: UserRef, kind: str) -> LearningOut:
@@ -81,8 +86,12 @@ async def _learning(state: AppState, user: UserRef, kind: str) -> LearningOut:
             )
         ).all()
         cards = (
-            await conn.execute(text("select count(*) from vanimo.style_cards where source_kind = :k"), {"k": kind})
+            await conn.execute(
+                text("select count(*) from vanimo.style_cards where source_kind = :k and slice not like '@%'"),
+                {"k": kind},
+            )
         ).scalar_one()
+        learning = await backfill.learning_state(conn, kind)
     counts = {r.channel: r.n for r in stored}
     return LearningOut(
         onboardingState=onboarding,
@@ -100,6 +109,8 @@ async def _learning(state: AppState, user: UserRef, kind: str) -> LearningOut:
         else None,
         stored={"email": counts.get("email", 0), "chat": counts.get("chat", 0), "total": sum(counts.values())},
         styleCards=cards,
+        learned=learning.learned,
+        outdated=learning.outdated,
     )
 
 
@@ -134,6 +145,8 @@ async def start_learning(
             run_id=run_id,
             extractor=extractor_for(state),
             tz=state.settings.cell_config.zone,
+            tone_judge=tone_judge_for(state),
+            vocab_extractor=vocab_for(state),
         )
     )
     async with user_tx(state.engine, user) as conn:
@@ -148,6 +161,17 @@ async def start_learning(
     if source.kind == "sample":
         await asyncio.gather(task, return_exceptions=True)  # the outcome is on the run row
     return await _learning(state, user, source.kind)
+
+
+def tone_judge_for(state: AppState) -> tones.ToneJudge:
+    """Claude judges tones and reads vocabulary when the drafter is Bedrock; the offline rules otherwise."""
+    return tones.BedrockJudge(state.llm, state.router) if state.settings.drafter == "bedrock" else tones.OfflineJudge()
+
+
+def vocab_for(state: AppState) -> vocab.Extractor:
+    if state.settings.drafter == "bedrock":
+        return vocab.BedrockExtractor(state.llm, state.router)
+    return vocab.OfflineExtractor()
 
 
 class PurgeOut(BaseModel):
@@ -185,6 +209,9 @@ class StoredItemOut(BaseModel):
     intent: str
     language: str
     wordCount: int
+    bucket: str
+    tone: str
+    situations: list[str]
     heldOut: bool
     suspicious: bool
     subject: str | None
@@ -226,7 +253,7 @@ async def stored_items(
             await conn.execute(
                 text(
                     "select id, channel, sent_at, relationship, intent, language, word_count, held_out, suspicious, "  # noqa: S608 - fixed clauses, values bound
-                    f"subject_enc, text_enc, context_enc from vanimo.l1_items where {where} "
+                    f"bucket, tone, situations, subject_enc, text_enc, context_enc from vanimo.l1_items where {where} "
                     "order by sent_at desc limit :lim offset :off"
                 ),
                 params,
@@ -247,6 +274,9 @@ async def stored_items(
                 intent=r.intent,
                 language=r.language,
                 wordCount=r.word_count,
+                bucket=r.bucket,
+                tone=r.tone,
+                situations=list(r.situations or ()),
                 heldOut=r.held_out,
                 suspicious=r.suspicious,
                 subject=rehydrate(subj, tokens) if subj else None,
@@ -263,6 +293,43 @@ async def stored_items(
 @router.get("/persona")
 async def get_persona(user: CurrentUser, source: UserSource, state: State) -> dict[str, Any]:
     return await snapshot(state.engine, state.vault, user, source.kind)
+
+
+class ToneIn(BaseModel):
+    bucket: Literal["email", "dm", "group"]
+    key: str = Field(pattern="^[0-9a-f]{64}$")
+    tone: Literal["formal", "friendly", "casual"] | None  # None: back to what Vanimo judged
+
+
+@router.put("/persona/tones", status_code=204)
+async def put_tone(body: ToneIn, user: CurrentUser, source: UserSource, state: State, request: Request) -> Response:
+    """The user's own choice of tone for one conversation. It wins over what was judged and survives learning
+    again; the learned messages of that conversation move to the chosen tone at once (cards rebuilt)."""
+    async with user_tx(state.engine, user) as conn:
+        if not await tone_store.set_override(conn, source.kind, body.bucket, body.key, body.tone):
+            raise HTTPException(404, detail={"error": "not_found"})
+        effective = (
+            body.tone
+            or (
+                await conn.execute(
+                    text(
+                        "select tone from vanimo.conversation_tones where source_kind = :k and bucket = :b "
+                        "and key_hash = :key"
+                    ),
+                    {"k": source.kind, "b": body.bucket, "key": body.key},
+                )
+            ).scalar_one()
+        )
+        # The conversation's own messages (a 1:1 chat or group: its partner; an email: written to that person).
+        await conn.execute(
+            text(
+                "update vanimo.l1_items set tone = :tone where source_kind = :k and bucket = :b and counterpart = :key"
+            ),
+            {"tone": effective, "k": source.kind, "b": body.bucket, "key": body.key},
+        )
+        await audit.record(conn, user, "persona.tone_changed", request_id=request.state.request_id)
+    await rebuild(state.engine, state.vault, user, source.kind)
+    return Response(status_code=204)
 
 
 @router.put("/persona/settings", response_model=PersonaSettings)

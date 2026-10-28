@@ -23,8 +23,8 @@ class Exemplar:
     id: str
     text: str  # L1 reply
     context: str | None  # L1 message it replied to
-    relationship: str
-    channel: str
+    tone: str
+    bucket: str
     vec: list[float] | None
 
 
@@ -37,15 +37,15 @@ class Draft:
 
 
 def nearest(
-    incoming: str, pool: Sequence[Exemplar], *, relationship: str, channel: str, k: int = 3
+    incoming: str, pool: Sequence[Exemplar], *, tone: str, bucket: str, k: int = 3
 ) -> list[tuple[float, Exemplar]]:
-    """Top-k past replies by similarity of what they replied to; same relationship and channel
-    preferred (a small bonus), never required."""
+    """Top-k past replies by similarity of what they replied to; the same tone and channel preferred (a
+    small bonus), never required."""
     q = embed(incoming)
     scored = []
     for ex in pool:
         v = ex.vec or embed(ex.context or "")
-        bonus = (0.15 if ex.relationship == relationship else 0) + (0.1 if ex.channel == channel else 0)
+        bonus = (0.15 if ex.tone == tone else 0) + (0.1 if ex.bucket == bucket else 0)
         scored.append((cosine(q, v) + bonus, ex))
     scored.sort(key=lambda s: -s[0])
     return scored[:k]
@@ -63,15 +63,15 @@ class OfflineDrafter:
         self,
         incoming: str,
         *,
-        relationship: str,
-        channel: str,
+        tone: str,
+        bucket: str,
         cards: dict[str, dict[str, Any]],
         pool: Sequence[Exemplar],
         language: str = "*",
     ) -> Draft:
-        found = style.lookup(cards, relationship, channel, language)
+        found = style.channel_card(cards, tone, bucket, language)
         card_key, card = found if found else (None, {})
-        best = nearest(incoming, pool, relationship=relationship, channel=channel)
+        best = nearest(incoming, pool, tone=tone, bucket=bucket)
         body = style.body_lines(best[0][1].text) if best else ""
         parts: list[str] = []
         if card and card["greetings"] and card["greetings"][0][0] != "(none)":

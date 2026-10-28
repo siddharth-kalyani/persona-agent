@@ -31,7 +31,7 @@ from vanimo.controls.scan import CALENDAR_AHEAD, CALENDAR_BACK, meeting_links
 from vanimo.controls.store import hasher_for, load_engine, load_matcher, lock_user_controls
 from vanimo.db.session import UserRef, user_tx
 from vanimo.gates import require_review_done
-from vanimo.learning import labels
+from vanimo.learning import labels, tone_store, tones, vocab
 from vanimo.learning.embed import embed
 from vanimo.logs import get_logger
 from vanimo.redaction.parse import strip_signature_noise
@@ -45,6 +45,12 @@ MAX_ATTEMPTS = 3
 CONTEXT_MESSAGES = 3  # chat: at most this many messages before the user's reply
 HELD_OUT_PERCENT = 15  # deterministic eval split by item hash
 HEARTBEAT_EVERY = 50  # items between heartbeats
+# What drafting needs from a finished run. 2 (F15): tone groups, buckets and the vocabulary; an older run
+# has none of them, so the user is asked to learn again before drafting.
+LEARNING_VERSION = 2
+MAX_AI_CONVERSATIONS = 60  # the most recent conversations judged by the model; the rest by the rules
+MAX_AI_VOCAB_MESSAGES = 400  # the most recent messages read by the model for vocabulary; the rest by the rules
+MAX_EMAIL_PARTNERS = 10  # tone partners per email (a large distribution list adds no one beyond these)
 
 
 class LearningRunning(Exception):
@@ -79,12 +85,36 @@ class Item:
     # The conversation or chat it came from (in memory only; a commitment found in it keeps it
     # encrypted, so a follow-up can be drafted in the same place).
     ref: str | None = None
+    # F15: email, a Teams 1:1 chat or a group; who it was written to (hash); the tone partners it counts for
+    # (an email: everyone on it; a chat: the person or the group); set after judging: tone and vocabulary.
+    bucket: str = "email"
+    counterpart: str | None = None
+    partners: tuple[str, ...] = ()
+    tone: str = "formal"
+    situations: tuple[str, ...] = ()
+    phrases: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass
+class Partner:
+    """One conversation partner while learning: a person (email or a 1:1 chat) or a group chat."""
+
+    bucket: str
+    key: str
+    people: list[tuple[str, list[str]]]
+    chat: str | None
+    hint: tones.Tone | None
+    last: datetime
+    mine: list[str] = field(default_factory=list)
+    theirs: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Collected:
     items: list[Item] = field(default_factory=list)
     counts: Counter[str] = field(default_factory=Counter)
+    partners: dict[tuple[str, str], Partner] = field(default_factory=dict)
+    tones: list[Any] = field(default_factory=list)  # tone_store.ToneRow, once judged
 
 
 async def controls_version(conn: AsyncConnection) -> int:
@@ -121,9 +151,12 @@ async def run_learning(
     run_id: str,
     extractor: Any = None,
     tz: Any = None,
+    tone_judge: tones.ToneJudge | None = None,
+    vocab_extractor: vocab.Extractor | None = None,
 ) -> None:
     """Runs to completion and records the outcome on the run row (never raises). `extractor` and
-    `tz`: how promises are found in what was learned (M5 commitments; offline rules by default)."""
+    `tz`: how promises are found in what was learned (M5 commitments; offline rules by default).
+    `tone_judge` and `vocab_extractor`: Claude or the offline rules (F15; the rules by default)."""
     from zoneinfo import ZoneInfo
 
     from vanimo.commitments import store as commitments
@@ -144,8 +177,17 @@ async def run_learning(
                 matcher = await load_matcher(conn, vault, ref)
             beat = _heartbeat(engine, ref, run_id)
             collected = await collect(source, ex_engine, matcher, hasher_for(vault, ref), self_email, beat=beat)
+            async with user_tx(engine, ref) as conn:
+                chosen = await tone_store.overrides(conn, kind)
+            await understand(
+                collected,
+                tone_judge or tones.OfflineJudge(),
+                vocab_extractor or vocab.OfflineExtractor(),
+                chosen,
+                beat=beat,
+            )
             try:
-                await persist(engine, vault, ref, kind, run_id, collected.items, version)
+                await persist(engine, vault, ref, kind, run_id, collected.items, version, collected.tones)
                 break
             except ControlsChanged:
                 log.info("learning.controls_changed", attempt=attempt)
@@ -170,6 +212,11 @@ async def run_learning(
             log.warning("learning.commitments_failed", error_type=type(exc).__name__)
             found = None
         counts = dict(collected.counts) | {"stored": len(collected.items), "style_cards": cards}
+        counts |= {
+            "version": LEARNING_VERSION,
+            "conversations": len(collected.tones),
+            "conversations_by_ai": sum(1 for r in collected.tones if r.judged.judged_by == "ai"),
+        }
         counts["commitments"] = found.stored if found else 0
         counts |= {f"eval_{k}": v for k, v in metrics.items() if isinstance(v, int | float)}
         await _finish(engine, ref, run_id, "done", counts, version)
@@ -286,6 +333,20 @@ async def collect(
         uniq = {a.email.lower(): a for a in people if a.email and a.email.lower() != me}
         return [(hasher("person", e), ex_engine.domain_hashes(a.domain)) for e, a in sorted(uniq.items())]
 
+    def partner(bucket: str, key: str, people: list[Address], chat: str | None, when: datetime) -> tuple[str, str]:
+        """The tone partner this message counts for, registered with its directory hint on first sight."""
+        found = out.partners.get((bucket, key))
+        if found is None:
+            rel = labels.relationship(
+                people,
+                manager=directory["manager"],
+                reports=directory["reports"],
+                org_domains=directory["org_domains"],
+            )
+            found = out.partners[(bucket, key)] = Partner(bucket, key, lineage(people), chat, tones.hint_for(rel), when)
+        found.last = max(found.last, when)
+        return bucket, key
+
     async def label_and_add(
         channel: str,
         item_id: str,
@@ -300,18 +361,23 @@ async def collect(
         hidden: bool = False,
         meeting: tuple[str | None, str | None] = (None, None),
         ref: str | None = None,
-    ) -> None:
+        bucket: str = "email",
+        counterpart: str | None = None,
+        # (bucket, key, people, chat, evidence): who this message counts for. `evidence`: it shows the user's
+        # tone with them (an email's To line; a chat), not only that they were copied.
+        partners: tuple[tuple[str, str, list[Address], str | None, bool], ...] = (),
+    ) -> Item | None:
         body = strip_signature_noise(body).strip()
         if not body:
             out.counts["empty"] += 1
-            return
+            return None
         try:
             red = await redactor.redact(body, hidden_seen=hidden)
         except BackstopUnavailable:
             raise  # the run fails and can be retried: items are never skipped for an outage
         except RedactionBlocked as e:
             out.counts[f"blocked_{e.reason}"] += 1
-            return
+            return None
         ctx = None
         if context:
             try:
@@ -329,31 +395,38 @@ async def collect(
             except RedactionBlocked:
                 out.counts["subject_blocked"] += 1
         ws = labels.words(red.text)
-        out.items.append(
-            Item(
-                channel=channel,
-                item_hash=hasher("item", f"{channel}:{item_id}"),
-                thread_hash=thread_hash,
-                people=lineage(audience + extra),
-                sent_at=sent_at,
-                subject=subj,
-                text=red,
-                context=ctx,
-                relationship=labels.relationship(
-                    [a for a in audience if a.email.lower() != me],
-                    manager=directory["manager"],
-                    reports=directory["reports"],
-                    org_domains=directory["org_domains"],
-                ),
-                intent=labels.intent(red.text),
-                language=labels.language(red.text),
-                word_count=len(ws),
-                meeting_hash=meeting[0],
-                series_hash=meeting[1],
-                ref=ref,
-            )
+        item = Item(
+            channel=channel,
+            item_hash=hasher("item", f"{channel}:{item_id}"),
+            thread_hash=thread_hash,
+            people=lineage(audience + extra),
+            sent_at=sent_at,
+            subject=subj,
+            text=red,
+            context=ctx,
+            relationship=labels.relationship(
+                [a for a in audience if a.email.lower() != me],
+                manager=directory["manager"],
+                reports=directory["reports"],
+                org_domains=directory["org_domains"],
+            ),
+            intent=labels.intent(red.text),
+            language=labels.language(red.text),
+            word_count=len(ws),
+            meeting_hash=meeting[0],
+            series_hash=meeting[1],
+            ref=ref,
+            bucket=bucket,
+            counterpart=counterpart,
+            partners=tuple(f"{b}:{k}" for b, k, _, _, _ in partners),
         )
+        out.items.append(item)
+        for b, k, people, chat, evidence in partners:
+            found = out.partners[partner(b, k, people, chat, sent_at)]
+            if evidence:
+                found.mine.append(red.text)
         out.counts[f"{channel}_learned"] += 1
+        return item
 
     # Emails, two-phase (§6.5 X2): sent headers and thread headers first, metadata only; text is
     # fetched only for the user's allowed messages and the one message each replied to.
@@ -391,7 +464,12 @@ async def collect(
                 continue
             ctx_msg = await source.message(ctx_header.id) if ctx_header else None
             h = allowed[mid]
-            await label_and_add(
+            # Tone partners: each person it went to (an email is written for the most formal of them); only the
+            # To line shows how the user writes to someone.
+            recipients = [a for a in h.recipients if a.email and a.email.lower() != me][:MAX_EMAIL_PARTNERS]
+            addressed = {a.email.lower() for a in h.to}
+            first = next((a for a in (*h.to, *h.cc) if a.email and a.email.lower() != me), None)
+            item = await label_and_add(
                 "email",
                 mid,
                 hasher("thread", conv),
@@ -403,7 +481,17 @@ async def collect(
                 ctx_msg.body if ctx_msg else None,
                 hidden=m.hidden or bool(ctx_msg and ctx_msg.hidden),
                 ref=conv,
+                bucket="email",
+                counterpart=hasher("person", first.email) if first else None,
+                partners=tuple(
+                    ("email", hasher("person", a.email), [a], None, a.email.lower() in addressed) for a in recipients
+                ),
             )
+            # Their side: the message replied to counts for its sender, if the user wrote back to them.
+            if item and item.context and ctx_header is not None:
+                theirs = out.partners.get(("email", hasher("person", ctx_header.sender.email)))
+                if theirs is not None:
+                    theirs.theirs.append(item.context.text)
 
     # Chats: the roster decides; context is the run of messages just before the user's reply.
     # A meeting chat is tied to its meeting by the join link; one whose meeting isn't in the
@@ -423,6 +511,19 @@ async def collect(
             out.counts["chat_excluded"] += 1
             continue
         chat_hash = hasher("chat", c.id)
+        # Tone partner: the other person of a 1:1 chat, or the group chat itself.
+        others = [a for a in c.members if a.email and a.email.lower() != me]
+        bucket = tones.bucket_for("chat", c.chat_type)
+        if bucket == "dm" and len(others) == 1:
+            spec: tuple[str, str, list[Address], str | None, bool] = (
+                "dm",
+                hasher("person", others[0].email),
+                others,
+                chat_hash,
+                True,
+            )
+        else:
+            bucket, spec = "group", ("group", chat_hash, others, chat_hash, True)
         msgs: list[ChatMessage] = sorted([m async for m in source.chat_messages(c.id)], key=lambda m: m.created_at)
         run: list[ChatMessage] = []
         for m in msgs:
@@ -435,7 +536,7 @@ async def collect(
                 continue
             await tick()
             ctx = run[-CONTEXT_MESSAGES:]
-            await label_and_add(
+            item = await label_and_add(
                 "chat",
                 f"{c.id}:{m.id}",  # chat message IDs are unique only within their chat
                 chat_hash,
@@ -447,10 +548,100 @@ async def collect(
                 "\n".join(x.text for x in ctx) or None,
                 meeting=meeting,
                 ref=c.id,
+                bucket=bucket,
+                counterpart=spec[1],
+                partners=(spec,),
             )
+            if item and item.context:
+                out.partners[(spec[0], spec[1])].theirs.append(item.context.text)
             run = []
     await beat()
     return out
+
+
+# --- understand (F15) ----------------------------------------------------------------------------
+async def understand(
+    collected: Collected,
+    judge: tones.ToneJudge,
+    extractor: vocab.Extractor,
+    overrides: dict[tuple[str, str], tones.Tone],
+    *,
+    beat: Callable[[], Awaitable[None]] = _no_beat,
+) -> None:
+    """Tone groups and vocabulary, from L1 only:
+    * every partner's tone: the model judges the MAX_AI_CONVERSATIONS most recent, the rules the rest;
+    * every message's tone: its partner's (an email: its most formal partner), the user's choice winning;
+    * every message's situations and phrases: the model for the most recent, the rules for the rest."""
+    rules = tones.OfflineJudge()
+    newest = sorted(collected.partners.values(), key=lambda p: p.last, reverse=True)
+    by_model = {(p.bucket, p.key) for p in newest[:MAX_AI_CONVERSATIONS]}
+    effective: dict[str, tones.Tone] = {}
+    # Emails first: a 1:1 chat of short, neutral messages borrows the user's clear email tone with the same
+    # person before the directory's hint.
+    clear: dict[str, tones.Tone] = {}
+    for p in sorted(newest, key=lambda p: p.bucket != "email"):
+        hint = clear.get(p.key, p.hint) if p.bucket == "dm" else p.hint
+        model = (p.bucket, p.key) in by_model
+        judged = await tones.decide(judge if model else rules, p.mine, p.theirs, hint)
+        collected.tones.append(tone_store.ToneRow(p.bucket, p.key, p.people, p.chat, judged))
+        effective[f"{p.bucket}:{p.key}"] = overrides.get((p.bucket, p.key), judged.tone)
+        if p.bucket == "email" and judged.basis in ("your_messages", "their_messages"):
+            clear[p.key] = effective[f"{p.bucket}:{p.key}"]
+        if judge.kind == "bedrock" and model:
+            await beat()  # each model call can be slow: keep the run alive (and stop if it was cancelled)
+    for it in collected.items:
+        it.tone = tones.most_formal([effective[k] for k in it.partners if k in effective]) or "formal"
+
+    newest = sorted(collected.items, key=lambda it: it.sent_at, reverse=True)
+    by_model, by_rules = newest[:MAX_AI_VOCAB_MESSAGES], newest[MAX_AI_VOCAB_MESSAGES:]
+    found = await extractor.extract([it.text.text for it in by_model])
+    found += [vocab.rules_extract(it.text.text) for it in by_rules]
+    for it, f in zip([*by_model, *by_rules], found, strict=True):
+        it.situations, it.phrases = f.situations, f.phrases
+    await beat()
+
+
+@dataclass(frozen=True)
+class LearningState:
+    learned: bool  # drafting may start: a finished run of this version, and what it stored is still there
+    running: bool
+    outdated: bool  # learned before tone groups (F15): learn again before drafting
+
+
+async def learning_state(conn: AsyncConnection, source_kind: str) -> LearningState:
+    """Drafting is allowed only once the user's style is learned (F15). Learning again keeps the earlier
+    result in use until it finishes; deleting what was learned asks for learning again."""
+    running = bool(
+        (
+            await conn.execute(
+                text(
+                    "select exists (select 1 from vanimo.learning_runs where source_kind = :k and status = 'running')"
+                ),
+                {"k": source_kind},
+            )
+        ).scalar_one()
+    )
+    done = (
+        await conn.execute(
+            text(
+                "select counts from vanimo.learning_runs where source_kind = :k and status = 'done' "
+                "order by finished_at desc nulls last limit 1"
+            ),
+            {"k": source_kind},
+        )
+    ).scalar_one_or_none()
+    if done is None:
+        return LearningState(False, running, False)
+    if int(done.get("version") or 1) < LEARNING_VERSION:
+        return LearningState(False, running, True)
+    if int(done.get("stored") or 0) == 0:
+        return LearningState(True, running, False)  # nothing to learn from yet: drafts use a neutral style
+    has_cards = (
+        await conn.execute(
+            text("select exists (select 1 from vanimo.style_cards where source_kind = :k)"), {"k": source_kind}
+        )
+    ).scalar_one()
+    return LearningState(bool(has_cards), running, False)
 
 
 # --- persist --------------------------------------------------------------------------------
@@ -459,7 +650,14 @@ def held_out(item_hash: str) -> bool:
 
 
 async def persist(
-    engine: AsyncEngine, vault: Vault, ref: UserRef, kind: str, run_id: str, items: list[Item], version: int
+    engine: AsyncEngine,
+    vault: Vault,
+    ref: UserRef,
+    kind: str,
+    run_id: str,
+    items: list[Item],
+    version: int,
+    tone_rows: list[tone_store.ToneRow] | None = None,
 ) -> None:
     t, u = ref.tenant_id, ref.user_id
     async with user_tx(engine, ref) as conn:
@@ -506,6 +704,12 @@ async def persist(
                     "vec": embed(it.context.text if it.context else it.subject.text if it.subject else ""),
                     "sus": it.text.suspicious or bool(it.context and it.context.suspicious),
                     "held": held_out(it.item_hash),
+                    "bucket": it.bucket,
+                    "tone": it.tone,
+                    "cp": it.counterpart,
+                    "sit": list(it.situations),
+                    # The user's own phrases (L1, like the text they came from).
+                    "phr": vault.encrypt_user(t, u, json.dumps(it.phrases) if it.phrases else None, "l1_phrases"),
                 }
             )
         if rows:
@@ -513,12 +717,14 @@ async def persist(
                 text(
                     "insert into vanimo.l1_items (tenant_id, owner_user_id, source_kind, run_id, channel, item_hash, "
                     "thread_hash, meeting_hash, series_hash, people, sent_at, subject_enc, text_enc, context_enc, "
-                    "relationship, intent, language, word_count, vec, suspicious, held_out) values (:t, :u, :k, :run, "
-                    ":ch, :ih, :th, :mh, :sh, cast(:people as jsonb), :at, :subj, :txt, :ctx, :rel, :intent, :lang, "
-                    ":wc, cast(:vec as real[]), :sus, :held)"
+                    "relationship, intent, language, word_count, vec, suspicious, held_out, bucket, tone, counterpart, "
+                    "situations, phrases_enc) values (:t, :u, :k, :run, :ch, :ih, :th, :mh, :sh, "
+                    "cast(:people as jsonb), :at, :subj, :txt, :ctx, :rel, :intent, :lang, :wc, cast(:vec as real[]), "
+                    ":sus, :held, :bucket, :tone, :cp, cast(:sit as text[]), :phr)"
                 ),
                 rows,
             )
+        await tone_store.replace(conn, ref, kind, tone_rows or [])
         if tokens:
             await conn.execute(
                 text(

@@ -526,11 +526,11 @@ def test_eval_baseline_matches_two_line_sign_offs() -> None:
     from vanimo.llm.offline import Exemplar, OfflineDrafter
 
     actual = "Hi ⟦PERSON_aaaaaaaa⟧,\n\nThe build is ready for UAT.\n\nThanks,\n⟦ME⟧"
-    ex = [style.Example(actual, "peer", "email", "english", "update", f"t{i}") for i in range(4)]
+    ex = [style.Example(actual, "friendly", "email", "english", "update", f"t{i}") for i in range(4)]
     cards = {k: c for k, (_, c) in style.build_cards(ex).items()}
     assert cards[style.slice_key()]["sign_offs"][0][0] == "Thanks,\n{me}"
-    pool = [Exemplar("x", actual, "is it ready?", "peer", "email", None)]
-    d = OfflineDrafter().draft("is it ready?", relationship="peer", channel="email", cards=cards, pool=pool)
+    pool = [Exemplar("x", actual, "is it ready?", "friendly", "email", None)]
+    d = OfflineDrafter().draft("is it ready?", tone="friendly", bucket="email", cards=cards, pool=pool)
     assert score(d.text, actual)["sign_off_match"] == 1.0
 
 
@@ -703,3 +703,77 @@ async def test_a_rule_added_while_drafting_wins(
     ).json()
     assert d["id"] is None and any(c["code"] == "controls_changed" for c in d["checks"])
     assert len((await client.get("/api/drafts", headers=h)).json()) == before
+
+
+# --- F15: the learning gate and tone groups ----------------------------------------------------------
+async def test_drafting_waits_for_learning(client: httpx.AsyncClient, scanned: dict, database: dict[str, str]) -> None:
+    h = scanned
+    await _review(client, h)
+    status = (await client.get("/api/drafting/status", headers=h)).json()
+    assert status["reviewDone"] and not status["learned"] and not status["learningRunning"]
+    conv = await _thread_id(client, h, "Q4 resource plan before Thursday")
+    resp = await _draft(client, h, mode="reply", conversationId=conv)
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "learning_required", "running": False, "outdated": False}
+
+    await _learn(client, h)
+    assert (await client.get("/api/drafting/status", headers=h)).json()["learned"]
+    assert (await _draft(client, h, mode="reply", conversationId=conv)).status_code == 200
+
+    # A run learned before tone groups (no version in its counts) asks for learning again.
+    url = database["owner"].replace("postgresql+psycopg://", "postgresql://")
+    with psycopg.connect(url) as conn:
+        conn.execute("update vanimo.learning_runs set counts = counts - 'version'")
+    status = (await client.get("/api/drafting/status", headers=h)).json()
+    assert not status["learned"] and status["learningOutdated"]
+    resp = await _draft(client, h, mode="reply", conversationId=conv)
+    assert resp.status_code == 409 and resp.json()["outdated"] is True
+
+
+async def test_drafts_follow_each_conversations_tone(client: httpx.AsyncClient, scanned: dict) -> None:
+    h = scanned
+    await _ready(client, h)
+    # The manager, by email: friendly, as the user writes to her ("Hi Meera, … Thanks").
+    conv = await _thread_id(client, h, "Q4 resource plan before Thursday")
+    d = (await _draft(client, h, mode="reply", conversationId=conv)).json()
+    assert (d["audience"]["tone"], d["audience"]["bucket"], d["audience"]["toneBasis"]) == (
+        "friendly",
+        "email",
+        "learned",
+    )
+    assert d["text"].startswith("Hi Meera,")
+    # A client, by email: formal ("Dear …, Best regards").
+    karan = [{"email": "karan.malhotra@bluefinbank.example", "name": "Karan Malhotra"}]
+    k = (
+        await _draft(client, h, mode="new", to=karan, subject="UAT", instruction="ask him to confirm the UAT date")
+    ).json()
+    assert k["audience"]["tone"] == "formal" and k["text"].startswith("Dear Karan,")
+    # Rahul in a Teams 1:1 chat: casual (Hinglish), no greeting line or sign-off added by Vanimo.
+    chats = (await client.get("/api/drafting/chats", headers=h)).json()
+    rahul = next(c for c in chats if c["chatType"] == "oneOnOne" and "Rahul" in c["label"])
+    c = (await _draft(client, h, mode="reply", channel="chat", conversationId=rahul["chatId"])).json()
+    assert (c["audience"]["tone"], c["audience"]["bucket"]) == ("casual", "dm")
+    # Someone Vanimo has never seen: judged now (a colleague, by the directory: friendly), then remembered.
+    farah = [{"email": "farah.khan@kestrel.example", "name": "Farah Khan"}]
+    first = (await _draft(client, h, mode="new", to=farah, instruction="ask her for the deck")).json()
+    assert (first["audience"]["tone"], first["audience"]["toneBasis"]) == ("friendly", "directory")
+    again = (await _draft(client, h, mode="new", to=farah, instruction="thank her for the deck")).json()
+    assert again["audience"]["toneBasis"] == "learned"
+    listed = (await client.get("/api/drafts", headers=h)).json()
+    assert {x["tone"] for x in listed} >= {"friendly", "formal", "casual"}
+
+
+async def test_the_prompt_carries_tone_vocabulary_and_examples(
+    client: httpx.AsyncClient, scanned: dict, app_state: AppState
+) -> None:
+    h = scanned
+    await _ready(client, h)
+    fake = await _bedrock(app_state)
+    karan = [{"email": "karan.malhotra@bluefinbank.example", "name": "Karan Malhotra"}]
+    await _draft(client, h, mode="new", to=karan, instruction="ask him to revert on the migration plan")
+    prompt = _prompt(fake)
+    assert "people they are formal (respectful and professional) with" in prompt
+    assert "The writer is formal (respectful and professional) with them." in prompt
+    assert '"kindly revert"' in prompt  # the formal vocabulary, for a request
+    assert 'tone="formal" channel="email"' in prompt  # examples say where they come from
+    assert "Write in English" not in prompt and "Hinglish" in prompt  # the language follows the audience

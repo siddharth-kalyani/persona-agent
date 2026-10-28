@@ -42,6 +42,7 @@ from vanimo.drafting.service import (
     require_review,
 )
 from vanimo.gates import onboarding_state
+from vanimo.learning.backfill import learning_state
 from vanimo.redaction.parse import strip_signature_noise
 from vanimo.sources.base import Address, Chat
 
@@ -81,6 +82,10 @@ class StatusOut(BaseModel):
     reviewDone: bool
     learnedItems: int
     sourceKind: str
+    # F15: drafting starts only once the style is learned; a run learned before tone groups needs learning again.
+    learned: bool = False
+    learningRunning: bool = False
+    learningOutdated: bool = False
 
 
 @router.get("/drafting/status", response_model=StatusOut)
@@ -91,6 +96,7 @@ async def drafting_status(user: CurrentUser, source: UserSource, state: State) -
         learned = (
             await conn.execute(text("select count(*) from vanimo.l1_items where source_kind = :k"), {"k": source.kind})
         ).scalar_one()
+        learning = await learning_state(conn, source.kind)
     s = state.settings
     return StatusOut(
         generator=s.drafter,
@@ -101,6 +107,9 @@ async def drafting_status(user: CurrentUser, source: UserSource, state: State) -
         reviewDone=onboarding == "review_done",
         learnedItems=learned,
         sourceKind=source.kind,
+        learned=learning.learned,
+        learningRunning=learning.running,
+        learningOutdated=learning.outdated,
     )
 
 
@@ -354,6 +363,9 @@ class AudienceOut(BaseModel):
     cc: list[PersonOut]
     internal: int
     external: int
+    bucket: Literal["email", "dm", "group"] = "email"
+    tone: Literal["formal", "friendly", "casual"] = "formal"
+    toneBasis: str | None = None  # learned | your_messages | their_messages | directory | default
 
 
 class TimingOut(BaseModel):
@@ -426,6 +438,9 @@ def draft_out(result: DraftResult) -> DraftOut:
             cc=_people(a.cc),
             internal=a.internal,
             external=a.external,
+            bucket=result.bucket,  # type: ignore[arg-type]
+            tone=result.tone,  # type: ignore[arg-type]
+            toneBasis=result.tone_basis,
         ),
         styleSlice=result.card_key,
         learned=result.learned,
@@ -490,6 +505,8 @@ class DraftSummary(BaseModel):
     checks: list[str]
     outcome: str | None
     rating: str | None
+    channel: str = "email"
+    tone: str | None = None
 
 
 @router.get("/drafts", response_model=list[DraftSummary])
@@ -499,7 +516,7 @@ async def list_drafts(user: CurrentUser, source: UserSource, state: State) -> li
             await conn.execute(
                 text(
                     "select id, created_at, surface, mode, generator, tier, model_id, relationship, word_count, "
-                    "latency_ms, checks, outcome, rating from vanimo.drafts where source_kind = :k "
+                    "latency_ms, checks, outcome, rating, channel, tone from vanimo.drafts where source_kind = :k "
                     "order by created_at desc limit 20"
                 ),
                 {"k": source.kind},
@@ -520,6 +537,8 @@ async def list_drafts(user: CurrentUser, source: UserSource, state: State) -> li
             checks=[c["code"] for c in r.checks],
             outcome=r.outcome,
             rating=r.rating,
+            channel=r.channel,
+            tone=r.tone,
         )
         for r in rows
     ]

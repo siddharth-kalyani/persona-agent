@@ -1,8 +1,15 @@
 """Style cards (architecture §9.2): how the user writes, per slice, computed from L1 only.
 
-A slice is relationship | channel | language | intent, with "*" for "any". Cards exist at five
-levels (all → relationship → +channel → +language → +intent); lookup backs off to the most
-specific card with enough examples, so a sparse slice borrows from its parent.
+A slice is tone | bucket | language | intent, with "*" for "any" (F15: tone groups replace relationships;
+the bucket is email, a Teams 1:1 chat or a Teams group). Cards exist at five levels: all → a tone, or a
+bucket → tone + bucket → +language → +intent. Two lookups back off differently:
+
+* `channel_card`: greeting, sign-off and length are habits of the channel, so it backs off only within the
+  bucket (a chat never gets "Dear …, Best regards" from email);
+* `voice_card`: register, phrases and the tone's vocabulary are shared by every channel of a tone.
+
+A person card ("@<hash>|<bucket>") keeps how the user greets one person in one channel ("Bhai" in chat,
+"Hi Rahul," in email), from at least MIN_PERSON messages.
 
 Everything here is deterministic and model-free. Names never appear in a card: greetings and
 sign-offs keep only the *form* ("Hi {first},", "Best regards,\\n{me_full}"), and phrases
@@ -19,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any
 
 MIN_EXAMPLES = 3
+MIN_PERSON = 2
 TOP_FORMS = 3
 TOP_PHRASES = 8
 
@@ -70,11 +78,12 @@ _STOP = frozenset(
 @dataclass(frozen=True)
 class Example:
     text: str  # L1
-    relationship: str
-    channel: str
+    tone: str
+    bucket: str
     language: str
     intent: str
     thread: str
+    counterpart: str | None = None  # who it was written to (a hash), for the person cards
 
 
 # Words a greeting or sign-off may keep; any other capitalised word there is taken to be a name
@@ -226,44 +235,84 @@ def card(examples: Sequence[Example]) -> dict[str, Any]:
     }
 
 
-def slice_key(rel: str = "*", channel: str = "*", language: str = "*", intent: str = "*") -> str:
-    return f"{rel}|{channel}|{language}|{intent}"
+def slice_key(tone: str = "*", bucket: str = "*", language: str = "*", intent: str = "*") -> str:
+    return f"{tone}|{bucket}|{language}|{intent}"
+
+
+def person_key(counterpart: str, bucket: str) -> str:
+    return f"@{counterpart}|{bucket}"
+
+
+def is_person_key(key: str) -> bool:
+    return key.startswith("@")
 
 
 def slices(ex: Example) -> list[tuple[int, str]]:
     return [
         (0, slice_key()),
-        (1, slice_key(ex.relationship)),
-        (2, slice_key(ex.relationship, ex.channel)),
-        (3, slice_key(ex.relationship, ex.channel, ex.language)),
-        (4, slice_key(ex.relationship, ex.channel, ex.language, ex.intent)),
+        (1, slice_key(ex.tone)),
+        (1, slice_key(bucket=ex.bucket)),
+        (2, slice_key(ex.tone, ex.bucket)),
+        (3, slice_key(ex.tone, ex.bucket, ex.language)),
+        (4, slice_key(ex.tone, ex.bucket, ex.language, ex.intent)),
     ]
 
 
+def person_card(examples: Sequence[Example]) -> dict[str, Any]:
+    """How the user opens and closes messages to one person in one channel. Forms only, never a name."""
+    texts = [e.text for e in examples]
+    return {
+        "n": len(examples),
+        "greetings": _dist(greeting_of(t) for t in texts),
+        "sign_offs": _dist(sign_off_of(t) for t in texts),
+    }
+
+
 def build_cards(examples: Sequence[Example]) -> dict[str, tuple[int, dict[str, Any]]]:
-    """slice key → (level, card). Level 0 always exists; others need MIN_EXAMPLES."""
+    """slice key → (level, card). Level 0 always exists; others need MIN_EXAMPLES; person cards (level 4)
+    need MIN_PERSON messages to that person in that channel (emails and 1:1 chats: a group isn't a person)."""
     groups: dict[str, tuple[int, list[Example]]] = {}
+    people: dict[str, list[Example]] = {}
     for ex in examples:
         for level, key in slices(ex):
             groups.setdefault(key, (level, []))[1].append(ex)
-    return {
+        if ex.counterpart and ex.bucket in ("email", "dm"):
+            people.setdefault(person_key(ex.counterpart, ex.bucket), []).append(ex)
+    out = {
         key: (level, card(group))
         for key, (level, group) in groups.items()
         if group and (level == 0 or len(group) >= MIN_EXAMPLES)
     }
+    out |= {key: (4, person_card(group)) for key, group in people.items() if len(group) >= MIN_PERSON}
+    return out
 
 
-def lookup(
-    cards: dict[str, dict[str, Any]], rel: str, channel: str, language: str = "*", intent: str = "*"
-) -> tuple[str, dict[str, Any]] | None:
-    """Most specific card with enough examples (back-off)."""
-    for key in (
-        slice_key(rel, channel, language, intent),
-        slice_key(rel, channel, language),
-        slice_key(rel, channel),
-        slice_key(rel),
-        slice_key(),
-    ):
-        if key in cards and (cards[key]["n"] >= MIN_EXAMPLES or key == slice_key()):
+def _first(cards: dict[str, dict[str, Any]], keys: Iterable[str]) -> tuple[str, dict[str, Any]] | None:
+    for key in keys:
+        if key in cards and cards[key]["n"] >= MIN_EXAMPLES:
             return key, cards[key]
     return None
+
+
+def channel_card(
+    cards: dict[str, dict[str, Any]], tone: str, bucket: str, language: str = "*", intent: str = "*"
+) -> tuple[str, dict[str, Any]] | None:
+    """Greeting, sign-off and length: the most specific card with enough examples, within this bucket only."""
+    return _first(
+        cards,
+        (
+            slice_key(tone, bucket, language, intent),
+            slice_key(tone, bucket, language),
+            slice_key(tone, bucket),
+            slice_key(bucket=bucket),
+        ),
+    )
+
+
+def voice_card(cards: dict[str, dict[str, Any]], tone: str) -> tuple[str, dict[str, Any]] | None:
+    """Register, phrases and the tone's vocabulary: shared by every channel of the tone, else the user overall."""
+    found = _first(cards, (slice_key(tone),))
+    if found:
+        return found
+    overall = cards.get(slice_key())
+    return (slice_key(), overall) if overall else None

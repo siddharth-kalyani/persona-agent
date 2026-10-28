@@ -36,7 +36,7 @@ const ME: Me = {
 }; // prettier-ignore
 const STATUS: DraftingStatus = {
   generator: "bedrock", label: "Claude", defaultModel: "haiku", premiumModel: "sonnet", premiumLeftToday: 3,
-  reviewDone: true, learnedItems: 10, sourceKind: "graph",
+  reviewDone: true, learnedItems: 10, sourceKind: "graph", learned: true, learningRunning: false, learningOutdated: false,
 }; // prettier-ignore
 const DRAFT: Draft = {
   id: "d1", text: "Hi Meera,\n\nWill do.\n\nThanks,\nMe", generator: "bedrock", label: "Claude", modelId: "haiku",

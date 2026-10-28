@@ -186,7 +186,16 @@ export interface LearningStatus {
   run: LearningRun | null;
   stored: { email: number; chat: number; total: number };
   styleCards: number;
+  /** Drafting may start: a finished run whose result is still stored (F15). */
+  learned: boolean;
+  /** The last finished run predates tone groups: learn again before drafting. */
+  outdated: boolean;
 }
+
+/** Tone groups (F15): how you write to someone, learned from your own messages. */
+export type ToneGroup = "formal" | "friendly" | "casual";
+/** Where a conversation happens: email, a Teams 1:1 chat or a Teams group chat. */
+export type Bucket = "email" | "dm" | "group";
 
 export interface StoredItem {
   id: string;
@@ -196,6 +205,9 @@ export interface StoredItem {
   intent: string;
   language: string;
   wordCount: number;
+  bucket: Bucket;
+  tone: ToneGroup;
+  situations: string[];
   heldOut: boolean;
   suspicious: boolean;
   subject: string | null;
@@ -234,12 +246,53 @@ export interface PersonaSettings {
   phrases_dont: string[];
 }
 
+/** One conversation partner and its tone: a person (email or a Teams 1:1 chat) or a group chat. */
+export interface ToneConversation {
+  /** Opaque: what PUT /api/persona/tones names it by. */
+  key: string;
+  bucket: Bucket;
+  /** Your choice if you made one, else what Vanimo judged. */
+  tone: ToneGroup;
+  judged: ToneGroup;
+  override: ToneGroup | null;
+  basis: "your_messages" | "their_messages" | "directory" | "default";
+  judgedBy: "ai" | "rules";
+  mine: number;
+  theirs: number;
+  label: string | null;
+  email: string | null;
+  members: number | null;
+  learned: number;
+  updatedAt: string;
+}
+
+export interface VocabularyPhrase {
+  phrase: string;
+  uses: number;
+  conversations: number;
+  channels: Bucket[];
+}
+
 export interface PersonaSnapshot {
   source: "graph" | "sample";
   learned_items: number;
-  by: { channel: Record<string, number>; relationship: Record<string, number>; language: Record<string, number> };
+  by: {
+    channel: Record<string, number>;
+    bucket: Record<string, number>;
+    tone: Record<string, number>;
+    language: Record<string, number>;
+  };
   overall: StyleCard | null;
-  audiences: { relationship: string; card: StyleCard }[];
+  tone_cards: Partial<Record<ToneGroup, StyleCard>>;
+  bucket_cards: Partial<Record<Bucket, StyleCard>>;
+  /** Keyed "tone|bucket". */
+  tone_bucket_cards: Record<string, StyleCard>;
+  conversations: ToneConversation[];
+  vocabulary: {
+    tones: Partial<Record<ToneGroup, Record<string, VocabularyPhrase[]>>>;
+    spellings: { use: string; instead_of: string; share: number; uses: number }[];
+    labels: Record<string, string>;
+  };
   cards: number;
   settings: PersonaSettings;
   evaluation: { metrics: Record<string, number | string>; at: string } | null;
@@ -328,6 +381,10 @@ export interface DraftingStatus {
   reviewDone: boolean;
   learnedItems: number;
   sourceKind: "graph" | "sample";
+  /** Drafting waits for this (F15). */
+  learned: boolean;
+  learningRunning: boolean;
+  learningOutdated: boolean;
 }
 
 export interface DraftThread {
@@ -380,6 +437,10 @@ export interface Draft {
     cc: PersonRef[];
     internal: number;
     external: number;
+    bucket?: Bucket;
+    tone?: ToneGroup;
+    /** learned, or how a new conversation's tone was judged just now. */
+    toneBasis?: string | null;
   };
   styleSlice: string | null;
   learned: boolean;
@@ -408,6 +469,8 @@ export interface DraftSummary {
   checks: string[];
   outcome: string | null;
   rating: string | null;
+  channel?: "email" | "chat";
+  tone?: ToneGroup | null;
 }
 
 export type DraftOutcome = "inserted" | "copied" | "opened_reply" | "opened_chat" | "discarded";
@@ -776,6 +839,8 @@ export class Api {
     return this.request<{ items: StoredItem[]; total: number }>("GET", `/api/learning/items?${q.toString()}`);
   };
   persona = () => this.request<PersonaSnapshot>("GET", "/api/persona");
+  setTone = (bucket: Bucket, key: string, tone: ToneGroup | null) =>
+    this.request<void>("PUT", "/api/persona/tones", { bucket, key, tone });
   savePersonaSettings = (settings: PersonaSettings) =>
     this.request<PersonaSettings>("PUT", "/api/persona/settings", settings);
   sampleWorkspace = () => this.request<SampleWorkspace>("GET", "/api/sample/workspace");

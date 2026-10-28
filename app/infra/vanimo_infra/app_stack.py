@@ -27,7 +27,8 @@ from vanimo_infra.data_stack import DataStack
 
 API_PORT = 8000
 
-# Main web app: same-origin API, Entra sign-in redirects only, no framing (the Teams dialog and tab use /teams.html, M5).
+# Main web app: same-origin API, Entra sign-in redirects only, no framing (the Teams dialog and tab use
+# /teams.html, M5).
 WEB_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
     "connect-src 'self' https://login.microsoftonline.com; frame-src 'self' https://login.microsoftonline.com; "

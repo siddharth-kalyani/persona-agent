@@ -1,0 +1,10 @@
+# Build the images on the instance instead of pulling them from ECR (the F13 hand-deploy path):
+#
+#   sudo docker compose -f compose.yml -f compose.build.yml up -d --build
+#
+# Only the api service builds vanimo-api; migrate runs the same image.
+services:
+  api:
+    build: { context: ../../backend }
+  web:
+    build: { context: ../../frontend }

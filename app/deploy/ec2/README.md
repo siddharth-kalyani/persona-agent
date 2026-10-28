@@ -19,6 +19,9 @@ The production cell (`app/infra`) is unchanged and still comes before any real m
 | `aws/bucket-policy.json`, `aws/bucket-lifecycle.json` | L1 snapshot bucket: TLS only, SSE-S3 writes only, readable by Macie alone, 3-day expiry |
 | `aws/macie-*.json` | Macie custom data identifiers (Aadhaar, PAN, GSTIN, IFSC, UPI, voter ID) |
 | `aws/app-policy.json` | The instance role's permissions: Claude, Comprehend, the guardrail, snapshot writes, Macie findings |
+| `compose.build.yml` | Builds the images on the instance instead of pulling them (the hand-deploy path, E17) |
+| `deploy.sh` | One release on the instance: pull, migrate, start, health check, roll back on failure (F14) |
+| `aws/cicd/*.json` | Automatic deploys (section I): GitHub's trust and deploy policies, the instance's ECR pull policy, the ECR lifecycle (`uv run python -m vanimo_infra.cicd` in `app/infra`) |
 
 Placeholders `<ACCOUNT_ID>`, `<BUCKET_NAME>`, `<GUARDRAIL_ID>` are filled in by the `sed` commands below.
 Everything is in **Asia Pacific (Mumbai) `ap-south-1`**.
@@ -136,10 +139,11 @@ Everything is in **Asia Pacific (Mumbai) `ap-south-1`**.
     nano .env   # fill VANIMO_GUARDRAIL_ID and VANIMO_L1_SNAPSHOT_BUCKET (version stays 1)
     ```
 
-17. **Start** (the first build takes several minutes):
+17. **Start** (the first build takes several minutes). Once automatic deploys run (section I), GitHub
+    builds the images and this step is `deploy.sh`'s job instead:
 
     ```bash
-    docker compose up -d --build
+    docker compose -f compose.yml -f compose.build.yml up -d --build
     docker compose ps            # postgres, api, web "healthy"/"running"; migrate "exited (0)"
     docker compose logs api | tail -50
     ```
@@ -177,9 +181,70 @@ Everything is in **Asia Pacific (Mumbai) `ap-south-1`**.
 
 - **Costs:** about $36–51/month running all the time (`docs/03` §0.1). Stopping the instance when not in
   use saves most of the EC2 cost; the Elastic IP and the disk are still billed while it is stopped.
-- **Update:** new `git archive` → upload → presign → extract over `/opt/vanimo` → `docker compose up -d --build`.
+- **Update:** automatic once section I is done: merge into `main` and push. By hand (before section I): new
+  `git archive` → upload → presign → extract over the app folder →
+  `docker compose -f compose.yml -f compose.build.yml up -d --build`.
 - **Logs:** `docker compose logs -f api`. **Restart:** `docker compose restart api`.
 - **Data:** synthetic only, no backups. `docker compose down -v` deletes the database.
 - **Tear down:** terminate the instance, release the Elastic IP, then delete the guardrail, the
   snapshot and deploy buckets, the Macie job and identifiers (and disable Macie), the role and the
   policy, and the budget if you no longer want it.
+
+## I. Automatic deploys from GitHub (F14)
+
+Once this section is done, **every push to `main` ships itself**: GitHub runs the tests, builds the API and
+web images for the instance's Arm CPU, stores them in **ECR** (AWS's private image registry), then tells the
+instance through **SSM Run Command** to pull them and restart. `deploy.sh` on the instance runs the
+migrations, checks the new release's health and puts the previous release back if it fails. The workflow is
+`.github/workflows/deploy.yml`; until the GitHub variables in I7 exist, `main` only runs its tests.
+
+No AWS keys are stored in GitHub. GitHub gives each run a signed, short-lived **OIDC token**; IAM trusts
+GitHub's token issuer (I1) and swaps a token for the deploy role (I4) only when it says "repository
+`siddharth-kalyani/persona-agent`, branch `main`". The policies are in `aws/cicd/`, each permission
+explained in `app/infra/vanimo_infra/cicd.py`. Tag every resource with `Owner`, `Project` and `Name`.
+
+I1. **GitHub as an identity provider** (IAM → Identity providers → Add provider): **OpenID Connect**,
+    provider URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`. One per account;
+    if it already exists, reuse it.
+I2. **Two image repositories** (Elastic Container Registry → Private registry → Repositories → Create):
+    `vanimo-api` and `vanimo-web`, **tag immutability: Immutable** (a release's tag can never be overwritten),
+    encryption AES-256. In each: Lifecycle policy → Create rule from `aws/cicd/ecr-lifecycle-policy.json`
+    (keeps the 15 most recent releases for rollbacks; storage is about $0.10 per GB-month).
+I3. **The deploy policy** (IAM → Policies → Create policy → JSON): paste `aws/cicd/github-deploy-policy.json`
+    with `<ACCOUNT_ID>`, `<INSTANCE_ID>` and `<DEPLOY_BUCKET>` filled in. Name: `persona-agent-dev-github-deploy`.
+I4. **The deploy role** (IAM → Roles → Create role → **Web identity**): identity provider
+    `token.actions.githubusercontent.com`, audience `sts.amazonaws.com`, GitHub organization
+    `siddharth-kalyani`, repository `persona-agent`, branch `main`; attach the policy from I3. Name:
+    `persona-agent-dev-github-deploy-role`. Then open its **Trust relationships** tab and compare with
+    `aws/cicd/github-trust-policy.json` (account ID filled in): only `main` of this repository may use it.
+I5. **Let the instance pull images**: IAM → Roles → the instance's role (`persona-agent-dev-ec2-role`) → Add
+    permissions → Create inline policy → JSON: `aws/cicd/instance-ecr-pull-policy.json` (account ID filled
+    in). Name: `persona-agent-dev-ecr-pull`. Then, on the instance (Session Manager, `sudo -i`), install
+    the ECR credential helper, which signs Docker in to ECR with the instance role:
+
+    ```bash
+    apt-get update && apt-get install -y amazon-ecr-credential-helper
+    mkdir -p /root/.docker
+    echo '{"credHelpers": {"<ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com": "ecr-login"}}' > /root/.docker/config.json
+    docker pull <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/vanimo-api:check   # "not found" = signed in fine
+    ```
+
+I6. **Deploy bucket** (optional tidy-up): S3 → the deploy bucket → Management → Lifecycle rule, prefix
+    `releases/`, expire current versions after 30 days. Each deploy uploads one small file there.
+I7. **Tell GitHub where to deploy** (GitHub → the repository → Settings → Secrets and variables → Actions →
+    **Variables** → New repository variable). None of these is a secret:
+
+    | Variable | Value |
+    |---|---|
+    | `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/persona-agent-dev-github-deploy-role` |
+    | `AWS_REGION` | `ap-south-1` |
+    | `DEPLOY_INSTANCE_ID` | the instance's ID (`i-…`) |
+    | `DEPLOY_BUCKET` | the deploy bucket's name |
+    | `DEPLOY_DIR` | `/opt/PersonaAgent` (the folder that holds `app/`) |
+
+I8. **First deploy**: GitHub → Actions → **deploy** → Run workflow (branch `main`). The first image build takes
+    15–25 minutes (GitHub's runners emulate the Arm CPU); later ones reuse the build cache. The run's summary
+    says which commit went out; the server's own output is in the "Deploy on the server" step.
+I9. **Going back**: revert the bad commit on `main` and push (the usual way: a new, tested release), or on the
+    instance: `sudo bash /opt/PersonaAgent/app/deploy/ec2/deploy.sh <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com
+    <an earlier commit SHA>`. `cat /opt/PersonaAgent/app/deploy/ec2/.deployed` shows what is running.

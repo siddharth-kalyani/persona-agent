@@ -1,7 +1,10 @@
-# Vanimo on one EC2 instance (F11 low-cost MVP; set up by hand, F13). Synthetic data only: password
-# sign-in and the sample workspace for everyone, no Entra or Graph.
+# Vanimo on one EC2 instance (F11 low-cost MVP; set up by hand, F13; deployed by GitHub Actions, F14).
+# Synthetic data only: password sign-in and the sample workspace for everyone, no Entra or Graph.
 #
-#   cd app/deploy/ec2 && sudo docker compose up -d --build
+#   Automatic (F14): deploy.sh sets VANIMO_API_IMAGE / VANIMO_WEB_IMAGE in .env to the release's images in
+#   ECR, then `docker compose pull && docker compose up -d`. Every other compose command then uses the
+#   deployed release too, e.g. `sudo docker compose logs -f api`.
+#   By hand, building on the instance (F13): sudo docker compose -f compose.yml -f compose.build.yml up -d --build
 #
 # Secrets and AWS resource IDs come from ./.env (copy .env.example; owned by root, chmod 600). The web
 # app is on 127.0.0.1:8080, reached through an SSM tunnel; with CloudFront in front (VANIMO_WEB_BIND=0.0.0.0)
@@ -39,10 +42,10 @@ services:
   # One-shot on every `up`: create roles + schema (idempotent), then apply migrations. Also where
   # owner-only tools run, e.g. `sudo docker compose run --rm migrate python -m vanimo.ops.local_user
   # --email you@example.com --role superadmin` (prints a one-time password to your terminal only).
-  # Runs the image the api service builds: two services building one image name race at export
-  # ("image already exists" with Docker's containerd image store).
+  # Runs the API's image. Built by hand, only the api service builds it: two services building one image
+  # name race at export ("image already exists" with Docker's containerd image store).
   migrate:
-    image: vanimo-api
+    image: ${VANIMO_API_IMAGE:-vanimo-api}
     command: ["sh", "-c", "python -m vanimo.ops.bootstrap_db && alembic upgrade head"]
     environment: *db-owner
     depends_on:
@@ -50,8 +53,7 @@ services:
     logging: *logging
 
   api:
-    build: { context: ../../backend }
-    image: vanimo-api
+    image: ${VANIMO_API_IMAGE:-vanimo-api}
     environment:
       VANIMO_ENV: dev
       VANIMO_CELL: in
@@ -80,8 +82,7 @@ services:
     logging: *logging
 
   web:
-    build: { context: ../../frontend }
-    image: vanimo-web
+    image: ${VANIMO_WEB_IMAGE:-vanimo-web}
     ports:
       - "${VANIMO_WEB_BIND:-127.0.0.1}:8080:8080"
     volumes:

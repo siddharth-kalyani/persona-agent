@@ -1,0 +1,144 @@
+name: deploy
+
+# Every push to main (a merged feature branch) ships to the EC2 instance (F14):
+#
+#   ci (the same tests as every branch) → images (API and web, built for the instance's Arm CPU, pushed
+#   to ECR, tagged with the commit) → deploy (the server is told through SSM Run Command to pull them and
+#   restart; it checks its own health and puts the previous release back if the new one fails).
+#
+# No AWS keys are stored in GitHub. Each job gets a short-lived OIDC token from GitHub, which AWS exchanges
+# for the deploy role only when it comes from this repository's main branch (the role's trust policy).
+# Setup, once: app/deploy/ec2/README.md, section I. Until the repository variables exist, main still runs
+# its tests and is simply not deployed.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # deploy main again without a new commit, e.g. right after the AWS setup
+
+permissions:
+  contents: read
+
+concurrency:
+  # One deploy at a time and never cancelled halfway: a newer push waits; only the latest waiting one runs.
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    needs: ci
+    if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # the OIDC token AWS exchanges for the deploy role
+    strategy:
+      matrix:
+        include:
+          - { repository: vanimo-api, context: app/backend }
+          - { repository: vanimo-web, context: app/frontend }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gh-${{ matrix.repository }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - id: built
+        name: Already built for this commit?
+        # Tags are immutable in ECR: re-running a deploy reuses the commit's images instead of failing.
+        run: |
+          if aws ecr describe-images --repository-name "${{ matrix.repository }}" \
+               --image-ids imageTag="${GITHUB_SHA}" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.built.outputs.found == 'false'
+        uses: docker/setup-qemu-action@v3 # GitHub's runners are x86; QEMU lets them build Arm images
+        with:
+          platforms: arm64
+      - if: steps.built.outputs.found == 'false'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.built.outputs.found == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/arm64 # the t4g (Graviton) instance
+          push: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ matrix.repository }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.repository }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.repository }}
+
+  deploy:
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      INSTANCE_ID: ${{ vars.DEPLOY_INSTANCE_ID }}
+      DEPLOY_BUCKET: ${{ vars.DEPLOY_BUCKET }}
+      DEPLOY_DIR: ${{ vars.DEPLOY_DIR || '/opt/PersonaAgent' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gh-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Upload this release's deploy files
+        # compose.yml, the Caddyfile and deploy.sh change with the code: the server gets the matching ones.
+        # A 15-minute presigned link lets the server fetch them without any S3 permission of its own.
+        run: |
+          tar -czf release.tgz app/deploy/ec2/compose.yml app/deploy/ec2/compose.build.yml \
+            app/deploy/ec2/Caddyfile app/deploy/ec2/deploy.sh
+          key="releases/${GITHUB_SHA}.tgz"
+          aws s3 cp release.tgz "s3://${DEPLOY_BUCKET}/${key}" --only-show-errors
+          url="$(aws s3 presign "s3://${DEPLOY_BUCKET}/${key}" --expires-in 900)"
+          echo "::add-mask::${url}"
+          echo "RELEASE_URL=${url}" >> "$GITHUB_ENV"
+      - name: Deploy on the server (SSM Run Command)
+        run: |
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+          params="$(jq -n \
+            --arg url "$RELEASE_URL" --arg dir "$DEPLOY_DIR" --arg registry "$registry" --arg tag "$GITHUB_SHA" \
+            '{commands: [
+                "set -eu",
+                "curl -fsS --retry 3 -o /tmp/vanimo-release.tgz \"\($url)\"",
+                "tar --no-same-owner -xzf /tmp/vanimo-release.tgz -C \"\($dir)\"",
+                "rm -f /tmp/vanimo-release.tgz",
+                "bash \"\($dir)/app/deploy/ec2/deploy.sh\" \"\($registry)\" \"\($tag)\""
+              ],
+              executionTimeout: ["1500"]}')"
+          command_id="$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy ${GITHUB_SHA::12} from GitHub Actions" \
+            --timeout-seconds 600 \
+            --parameters "$params" \
+            --query Command.CommandId --output text)"
+          echo "SSM command ${command_id}"
+          status=Pending
+          for _ in $(seq 1 160); do
+            sleep 10
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break ;; esac
+          done
+          echo "--- server output"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text || true
+          echo "--- server errors"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent --output text || true
+          echo "Deploy of ${GITHUB_SHA::12} to ${INSTANCE_ID}: ${status}" >> "$GITHUB_STEP_SUMMARY"
+          test "$status" = Success
